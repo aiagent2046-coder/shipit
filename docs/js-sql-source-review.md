@@ -32,7 +32,10 @@ No project code, model, database, helper function or saved task is executed.
 ## Limits
 
 At most 32 candidates, 400 KB per source, 8 MB aggregate source work, 80,000 AST
-nodes per analysis, depth 160 and expression depth 24. Receipts contain at most
+nodes per analysis, depth 160 and expression depth 24. Expanded source research
+counts each expression and name-occurrence inspection against a separate work
+budget, so repeated calls to a large helper cannot evade the AST limit. Exhaustion
+returns an unavailable result, never a fixed-fragment conclusion. Receipts contain at most
 32 fragment references and no copied source snippets. Duplicate archive paths,
 changed source, parser errors and multiple sinks on one reported line cannot
 produce a fixed-fragment conclusion. Detector coverage gaps remain visible.

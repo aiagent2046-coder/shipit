@@ -3,6 +3,7 @@ from copy import deepcopy
 import hashlib
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -119,3 +120,11 @@ def test_presentation_shows_refinement_and_limits():
     assert "original finding is retained" in text
     from app.report.evidence import security_agent_rows
     assert "JavaScript SQL source review" in json.dumps(security_agent_rows(agent))
+
+
+@pytest.mark.parametrize("fixture", json.loads(
+    (Path(__file__).parent / "fixtures/js-sql-review-records.json").read_text()
+), ids=lambda fixture: fixture["name"])
+def test_shared_ui_receipts_match_python_normalization(fixture):
+    record = fixture["review"]
+    assert normalize_review(record, record["source"]) == record

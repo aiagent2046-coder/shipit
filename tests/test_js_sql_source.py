@@ -140,3 +140,50 @@ def test_destructuring_assignment_cannot_replace_helper():
     code = ('export {}; function helper(x) {return x;}\n'
             '({helper} = input);\ndb.query("SELECT " + helper("safe"));')
     assert analyze(code)["verdict"] == "dynamic_sql_unresolved"
+
+
+@pytest.mark.parametrize("declaration", [
+    "class sql { static toString() {return input;} }",
+    "abstract class sql { static toString() {return input;} }",
+    "enum sql { injected }",
+    "namespace sql { export const injected = true; }",
+])
+def test_typescript_runtime_declarations_shadow_const(declaration):
+    code = f'const sql = "safe";\nfunction f(input) {{{declaration} db.query("SELECT " + sql);}}'
+    assert analyze(code)["verdict"] == "dynamic_sql_unresolved"
+
+
+def test_named_class_expression_shadows_const_inside_method():
+    code = ('const sql = "safe";\nconst wrapper = class sql {'
+            'static toString() {return input;} method() {db.query("SELECT " + sql);}};')
+    assert analyze(code)["verdict"] == "dynamic_sql_unresolved"
+
+
+def test_class_declaration_shadows_helper():
+    code = ('export {}; function helper(x) {return x;}\n'
+            'function f(input) {class helper {} db.query("SELECT " + helper("safe"));}')
+    assert analyze(code)["verdict"] == "dynamic_sql_unresolved"
+
+
+def test_erased_type_alias_does_not_shadow_value():
+    code = 'type sql = string; const sql = "safe";\ndb.query("SELECT " + sql);'
+    assert analyze(code)["verdict"] == "fixed_sql_fragments"
+
+
+
+def test_shared_work_budget_discards_partial_proof(monkeypatch):
+    monkeypatch.setattr(source, "MAX_WORK", 2)
+    result = analyze('db.query("SELECT " + "fixed")')
+    assert result["verdict"] == "unavailable"
+    assert result["reason"] == "work_limit"
+    assert result["fragments"] == []
+
+
+def test_repeated_helper_expansion_is_bounded_without_time_assertions():
+    code = ('export function f(x) {return `' + '${x}' * 5000 + '`;}\n'
+            'db.query(`SELECT ' + '${f(1)}' * 2000 + '`);')
+    assert len(code.encode()) < source.MAX_FILE_BYTES
+    result = analyze(code)
+    assert result["verdict"] == "unavailable"
+    assert result["reason"] == "work_limit"
+    assert result["fragments"] == []

@@ -12,6 +12,11 @@ MAX_FILE_BYTES = 400_000
 MAX_NODES = 80_000
 MAX_DEPTH = 160
 MAX_EXPRESSION_DEPTH = 24
+MAX_WORK = 80_000
+
+
+class _WorkLimit(Exception):
+    """Repeated helper expansion exhausted the shared per-query work budget."""
 
 
 def _text(node):
@@ -77,9 +82,19 @@ def analyze_source(raw: bytes, path: str, line: int, sink_method: str | None = N
     arguments = _children(sink.child_by_field_name("arguments"))
     result["parameter_argument"] = "present" if len(arguments) > 1 else "absent"
     fragments = []
+    work_remaining = MAX_WORK
+
+    def spend(amount=1):
+        nonlocal work_remaining
+        work_remaining -= amount
+        if work_remaining < 0:
+            raise _WorkLimit
     identifiers = {}
     for node in nodes:
-        if node.type in {"identifier", "shorthand_property_identifier_pattern"}:
+        if node.type in {"identifier", "shorthand_property_identifier_pattern"} or (
+            node.type == "type_identifier"
+            and node.parent.type in {"class", "class_declaration", "abstract_class_declaration"}
+        ):
             identifiers.setdefault(_text(node), []).append(node)
     # Dynamic lexical environments invalidate static name resolution.
     dynamic_scope = any("\\" in name or name in {"eval", "Function", "globalThis", "window", "global", "self"}
@@ -96,6 +111,7 @@ def analyze_source(raw: bytes, path: str, line: int, sink_method: str | None = N
         return node.type in {"string", "number", "true", "false", "null"}
 
     def fixed(node, params=frozenset(), depth=0, const_allowed=True, helper_allowed=True):
+        spend()
         if node is None or depth > MAX_EXPRESSION_DEPTH:
             return False
         kind = node.type
@@ -134,6 +150,7 @@ def analyze_source(raw: bytes, path: str, line: int, sink_method: str | None = N
         if kind == "identifier" and const_allowed and not dynamic_scope:
             name = _text(node)
             occurrences = identifiers.get(name, [])
+            spend(len(occurrences))
             declarations = [n.parent for n in occurrences if n.parent.type == "variable_declarator"
                             and _same(n.parent.child_by_field_name("name"), n)]
             if len(declarations) != 1:
@@ -150,6 +167,7 @@ def analyze_source(raw: bytes, path: str, line: int, sink_method: str | None = N
             allowed = {"template_substitution", "binary_expression", "arguments", "return_statement",
                        "parenthesized_expression"}
             for occurrence in occurrences:
+                spend()
                 parent = occurrence.parent
                 if _same(parent, declaration):
                     continue
@@ -167,9 +185,11 @@ def analyze_source(raw: bytes, path: str, line: int, sink_method: str | None = N
             if func is None or func.type != "identifier" or args_node is None:
                 return False
             args = _children(args_node)
+            spend(len(args))
             if not all(literal(arg) for arg in args):
                 return False
             occurrences = identifiers.get(_text(func), [])
+            spend(len(occurrences))
             declarations = [n.parent for n in occurrences if n.parent.type == "function_declaration"
                             and _same(n.parent.child_by_field_name("name"), n)]
             if len(declarations) != 1:
@@ -183,6 +203,7 @@ def analyze_source(raw: bytes, path: str, line: int, sink_method: str | None = N
             if not any(n.type in {"import_statement", "export_statement"} for n in parent.named_children):
                 return False
             for occurrence in occurrences:
+                spend()
                 owner = occurrence.parent
                 if _same(owner, declaration):
                     continue
@@ -212,7 +233,11 @@ def analyze_source(raw: bytes, path: str, line: int, sink_method: str | None = N
             return ok
         return False
 
-    proven = bool(arguments) and fixed(arguments[0])
+    try:
+        proven = bool(arguments) and fixed(arguments[0])
+    except _WorkLimit:
+        result["fragments"] = []
+        return unavailable("work_limit")
     result.update(verdict="fixed_sql_fragments" if proven else "dynamic_sql_unresolved",
                   reason="proven_fixed" if proven else "unresolved_expression")
     if not proven:

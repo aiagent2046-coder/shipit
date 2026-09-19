@@ -17,7 +17,7 @@ EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs")
 RULE_ID = "sql-injection-string-built-query"
 STATES = {"fixed_sql_fragments", "dynamic_sql_unresolved", "unavailable"}
 REASONS = {"proven_fixed", "unresolved_expression", "invalid_utf8", "unsupported_file", "file_limit",
-           "parse_error", "node_limit", "depth_limit", "sink_not_found", "ambiguous_sink",
+           "parse_error", "node_limit", "depth_limit", "work_limit", "sink_not_found", "ambiguous_sink",
            "source_unavailable", "source_limit", "source_changed", "researcher_unavailable"}
 FRAGMENTS = {"fixed_literal": "literal", "fixed_helper": "single_return_literal_args",
              "fixed_const": "stable_const", "unknown": "unresolved_expression"}
