@@ -212,9 +212,101 @@ export function acquisitionRows(value: unknown, trace: unknown): [string, string
   return rows;
 }
 
+export interface SyntheticContract {
+  version: 1; scope: "synthetic_recipe"; contract_id: string; contract_revision: 1;
+  status: "passed" | "failed" | "unavailable"; reason: string; evidence_sha256: string;
+  synthetic_recipe_verified: boolean; runtime_verified: false; customer_project_verified: false; automatic_patch: false;
+  source: { archive_sha256: string; source_sha256: string; observation_id: string; engine_version: string; catalog_sha256: string };
+  reused: boolean;
+  proof: null | { fixture_sha256: string; schema_sha256: string; psycopg_version: string; postgresql_version: number;
+    executions: 27; cases_per_stage: 9; before_row_ids: number[]; after_row_ids: number[]; mutation_row_ids: number[];
+    rollback_completed: true; temporary_table_absent: true };
+}
+
+// Mirror the pure Python saved-record boundary. This validates a saved synthetic
+// recipe record; it does not authenticate JSON or verify the customer project.
+export function normalizeSyntheticContract(value: unknown, observation: unknown, agentSource: unknown,
+  catalog: unknown): SyntheticContract | null {
+  const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+  const keys = (v: unknown, required: string[]): v is Record<string, unknown> => obj(v)
+    && required.every(k => Object.hasOwn(v, k)) && Object.keys(v).length === required.length;
+  const integer = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) > 0 && Number(v) <= 2 ** 31 - 1;
+  const sha = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}(?![\s\S])/.test(v);
+  const exactRows = (v: unknown, expected: number[]) => Array.isArray(v) && v.length === expected.length
+    && v.every((id, index) => id === expected[index]);
+  if (!keys(value, ["version", "scope", "contract_id", "contract_revision", "status", "reason", "evidence_sha256",
+    "synthetic_recipe_verified", "runtime_verified", "customer_project_verified", "automatic_patch", "proof", "source", "reused"])
+    || value.version !== 1 || value.scope !== "synthetic_recipe" || value.contract_revision !== 1
+    || value.contract_id !== "sql-value-parameterization-python-psycopg3" || !sha(value.evidence_sha256)
+    || value.runtime_verified !== false || value.customer_project_verified !== false || value.automatic_patch !== false
+    || typeof value.reused !== "boolean" || !obj(observation) || !obj(agentSource) || !obj(catalog)) return null;
+  const passed = value.status === "passed";
+  const unavailableReasons = ["database_not_configured", "invalid_database_target", "ambient_libpq_options", "execution_unavailable",
+    "execution_timeout", "output_limit", "invalid_contract_result", "unsupported_runtime", "budget_exhausted"];
+  if (value.synthetic_recipe_verified !== passed || (passed ? value.reason !== "synthetic_contract_passed"
+    : value.status === "failed" ? value.reason !== "synthetic_contract_failed"
+      : value.status !== "unavailable" || typeof value.reason !== "string" || !unavailableReasons.includes(value.reason))) return null;
+  if (observation.pattern_id !== "python-sql-string-assembly" || !integer(observation.pattern_revision)
+    || observation.rule_id !== "sql-injection-string-built-query" || typeof observation.file !== "string"
+    || !observation.file.toLowerCase().endsWith(".py") || !integer(observation.line) || !sha(observation.id)
+    || !obj(observation.recipe) || observation.recipe.id !== value.contract_id || observation.recipe.status !== "manual_guidance"
+    || observation.recipe.automatic_apply !== false || !obj(observation.evidence)) return null;
+  if (passed ? observation.state !== "synthetic_recipe_verified" || observation.next_action !== "review_project_runtime_contract"
+    : observation.state !== "source_evidence_collected" || observation.next_action !== "review_runtime_contract") return null;
+  const gaps = ["runtime_behavior_contract", "intended_value_type", "caller_authorization", "route_reachability"];
+  const missing = observation.missing_evidence;
+  if (!Array.isArray(missing) || !missing.every(item => typeof item === "string") || !gaps.every(gap => missing.includes(gap))) return null;
+  const trace = observation.evidence.sql_observation;
+  if (!obj(trace) || trace.file !== observation.file || trace.sink_line !== observation.line
+    || trace.driver_status !== "source_resolved" || trace.sink_method !== "execute") return null;
+  const acquisition = normalizeAcquisition(observation.acquisition, trace);
+  if (acquisition?.status !== "completed") return null;
+  const slots = acquisition.facts.find(fact => fact.id === "sql_value_position")?.slots;
+  const constraints = acquisition.facts.find(fact => fact.id === "value_constraints")?.constraints;
+  if (slots?.length !== 1 || !constraints?.length || constraints.some(item => item.slot !== 0 || item.type !== "str")) return null;
+  const source = value.source;
+  if (!keys(source, ["archive_sha256", "source_sha256", "observation_id", "engine_version", "catalog_sha256"])
+    || !sha(source.archive_sha256) || source.archive_sha256 !== agentSource.archive_sha256
+    || !sha(source.source_sha256) || source.source_sha256 !== trace.source_sha256
+    || !sha(source.observation_id) || source.observation_id !== observation.id
+    || !sha(source.catalog_sha256) || source.catalog_sha256 !== catalog.sha256
+    || typeof source.engine_version !== "string" || !source.engine_version.length || [...source.engine_version].length > 128
+    || source.engine_version !== agentSource.engine_version) return null;
+  const proof = value.proof;
+  if (passed) {
+    if (!keys(proof, ["fixture_sha256", "schema_sha256", "psycopg_version", "postgresql_version", "executions", "cases_per_stage",
+      "before_row_ids", "after_row_ids", "mutation_row_ids", "rollback_completed", "temporary_table_absent"])
+      || proof.fixture_sha256 !== "8c856f7ededaa7fc4bf8c8cbb56819a30eb3f9553209e222e13ad7e4926b9517"
+      || proof.schema_sha256 !== "9ca4174618e52ccbafebba9d1b5b6151f6ecdd1d5c67ba9f3b7f4706e2ff91a2"
+      || typeof proof.psycopg_version !== "string" || proof.psycopg_version.length > 64
+      || !/^3\.[0-9]+\.[0-9]+(?![\s\S])/.test(proof.psycopg_version) || !integer(proof.postgresql_version) || proof.postgresql_version < 100000
+      || proof.executions !== 27 || proof.cases_per_stage !== 9 || proof.rollback_completed !== true
+      || proof.temporary_table_absent !== true || !exactRows(proof.before_row_ids, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+      || !exactRows(proof.after_row_ids, [9]) || !exactRows(proof.mutation_row_ids, [1, 2, 3, 4, 5, 6, 7, 8, 9])) return null;
+  } else if (proof !== null) return null;
+  return structuredClone(value) as unknown as SyntheticContract;
+}
+
+export function syntheticContractRows(record: SyntheticContract): [string, string][] {
+  const rows: [string, string][] = [
+    ["Synthetic recipe contract", `Saved synthetic evidence: ${record.status}; ${record.reason.replaceAll("_", " ")}. Scope: synthetic recipe.`],
+    ["Synthetic evidence SHA-256", record.evidence_sha256],
+  ];
+  if (record.proof) rows.push(
+    ["Before / after / mutation", "9 / 1 / 9 rows in the attack control; 27 executions across 9 cases."],
+    ["Fixture cleanup", "Transaction rollback and temporary table removal confirmed."],
+    ["Synthetic runtime", `PostgreSQL ${record.proof.postgresql_version}; Psycopg ${record.proof.psycopg_version}.`],
+  );
+  rows.push(
+    ["Synthetic execution", record.reused ? "Reused within this investigation." : "One bounded attempt; no automatic retry."],
+    ["Customer project verification", "Customer project runtime tests not run. No automatic patch applied."],
+  );
+  return rows;
+}
+
 export function patternReview(value: unknown): PatternReviewView | null {
   // Older/future records must not acquire a review or a stronger verdict.
-  if (!object(value) || value.version !== 1 || value.mode !== "deterministic_static"
+  if (!object(value) || value.version !== 1 || !["deterministic_static", "deterministic_evidence"].includes(String(value.mode))
     || !(value.status === "completed" || value.status === "partial" || value.status === "unavailable")
     || value.automatic_patch !== false || value.runtime_verified !== false
     || !Array.isArray(value.plan) || !Array.isArray(value.observations) || !object(value.budget)) return null;
@@ -222,9 +314,10 @@ export function patternReview(value: unknown): PatternReviewView | null {
   const source = object(value.source) ? value.source : {};
   const budget = value.budget;
   const knownStops = ["agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
-    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete"];
+    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete", "synthetic_verification_incomplete", "synthetic_evidence_invalid"];
   const stop = typeof value.stop_reason === "string" && (knownStops.includes(value.stop_reason)
     || /^agent_error: [A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value.stop_reason)) ? value.stop_reason : "Stop reason not recorded";
+  const hasSynthetic = value.observations.some(item => object(item) && "synthetic_contract" in item);
   const rows: Rows = [
     ["Pattern review", `${value.status}; ${value.observations.length} observations; ${stop}. `
       + "Completion describes bounded review, not project safety."],
@@ -235,7 +328,8 @@ export function patternReview(value: unknown): PatternReviewView | null {
     ["Review engine", text(source.engine_version)],
     ["Candidate review", `${number(budget.processed)} processed / ${number(budget.candidates_found)} found; `
       + `${number(budget.candidates_omitted)} omitted; limit ${number(budget.max_candidates)}.`],
-    ["Verification and changes", "Runtime tests not run. No automatic patch applied."],
+    ["Verification and changes", hasSynthetic ? "Customer project runtime tests not run. No automatic patch applied."
+      : "Runtime tests not run. No automatic patch applied."],
   ];
   for (const step of value.plan) {
     if (!object(step)) continue;
@@ -251,7 +345,8 @@ export function patternReview(value: unknown): PatternReviewView | null {
   for (const item of value.observations.slice(0, 128)) {
     if (!object(item) || typeof item.file !== "string" || !count(item.line) || item.line < 1
       || !((item.state === "needs_evidence" && item.next_action === "manual_review")
-        || (item.state === "source_evidence_collected" && item.next_action === "review_runtime_contract"))) continue;
+        || (item.state === "source_evidence_collected" && item.next_action === "review_runtime_contract")
+        || (item.state === "synthetic_recipe_verified" && item.next_action === "review_project_runtime_contract"))) continue;
     const missing = strings(item.missing_evidence);
     const recipe = item.recipe;
     if (!object(recipe) || recipe.automatic_apply !== false
@@ -259,19 +354,26 @@ export function patternReview(value: unknown): PatternReviewView | null {
     const evidence = object(item.evidence) ? item.evidence : {};
     const traceRows = item.rule_id === "sql-injection-string-built-query" ? sqlTraceRows(evidence.sql_observation, item.file, item.line) : [];
     const acquisition = traceRows.length ? normalizeAcquisition(item.acquisition, evidence.sql_observation) : null;
-    const collected = item.state === "source_evidence_collected";
+    const synthetic = normalizeSyntheticContract(item.synthetic_contract, item, source, catalog);
+    const verified = item.state === "synthetic_recipe_verified";
+    const collected = item.state === "source_evidence_collected" || verified;
+    if (verified && synthetic?.status !== "passed") continue;
     if (collected && acquisition?.status !== "completed") continue;
     const details: Rows = [
       ["Pattern", `${text(item.pattern_id)}; revision ${number(item.pattern_revision)}`],
       ["Candidate weakness classes", (strings(item.weaknesses).filter(v => /^CWE-[1-9][0-9]*$/.test(v)).join(", ") || "Not recorded")
         + " — candidate classes, not verified vulnerabilities."],
-      ["Review state", collected ? "Supported source evidence collected; runtime behavior and repair preconditions remain unverified."
+      ["Review state", verified ? "Saved synthetic recipe evidence passed; customer project runtime behavior and repair preconditions remain unverified."
+        : collected ? "Supported source evidence collected; runtime behavior and repair preconditions remain unverified."
         : "Needs evidence; the candidate and repair preconditions remain unverified."],
       ...traceRows,
       ...acquisitionRows(acquisition, evidence.sql_observation),
+      ...(synthetic ? syntheticContractRows(synthetic) : []),
+      ...("synthetic_contract" in item && !synthetic ? [["Synthetic evidence unavailable", "The saved synthetic evidence could not be validated. Customer project runtime behavior remains unverified."]] as Rows : []),
       ...("acquisition" in item && !acquisition ? [["Source investigation unavailable", "The saved evidence could not be validated. Do not treat missing source facts as established."]] as Rows : []),
       ["Missing evidence", missing.length ? missing.map(label).join("; ") : "Not recorded; prerequisites are not established."],
-      ["Next step", collected ? "Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair."
+      ["Next step", verified ? "Review the customer project runtime contract: confirm authorization, deployed reachability, intended value types and expected query behavior before choosing a repair."
+        : collected ? "Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair."
         : "Manual review: gather the missing evidence before choosing a repair."],
       ["Repair guidance", recipe.status === "manual_guidance" && recipe.automatic_apply === false
         ? `${text(recipe.id)} · manual guidance; check all prerequisites. No automatic patch applied.`

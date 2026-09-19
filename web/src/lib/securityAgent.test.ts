@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import reports from "../../../tests/fixtures/security-agent-reports.json";
 import { claimEvidenceRows, manifestRows, nonModelStatusNotices } from "./evidence";
-import { acquisitionRows, normalizeAcquisition, patternReview, sqlEvidenceRows } from "./securityAgent";
+import { acquisitionRows, normalizeAcquisition, normalizeSyntheticContract, syntheticContractRows, patternReview, sqlEvidenceRows } from "./securityAgent";
 import type { Finding, Score } from "./types";
 
 const browserSource = readFileSync("../browser/src/app.js", "utf8");
@@ -270,4 +270,120 @@ it("keeps the standalone browser acquisition contract aligned with web rendering
 it("retains the aggregate reason when evidence acquisition is incomplete", () => {
   const review = patternReview({ ...record, status: "partial", stop_reason: "evidence_collection_incomplete" })!;
   expect(Object.fromEntries(review.rows)["Pattern review"]).toContain("evidence_collection_incomplete");
+});
+
+function syntheticReview() {
+  const source = acquiredReview(sourceAcquisition());
+  const observation = { ...source.observations[0], state: "synthetic_recipe_verified", next_action: "review_project_runtime_contract",
+    missing_evidence: ["runtime_behavior_contract", "intended_value_type", "caller_authorization", "route_reachability"] };
+  const synthetic_contract = {
+    version: 1, scope: "synthetic_recipe", contract_id: "sql-value-parameterization-python-psycopg3", contract_revision: 1,
+    status: "passed", reason: "synthetic_contract_passed", evidence_sha256: "d".repeat(64), synthetic_recipe_verified: true,
+    runtime_verified: false, customer_project_verified: false, automatic_patch: false, reused: false,
+    source: { archive_sha256: source.source.archive_sha256, source_sha256: driverTrace.source_sha256,
+      observation_id: observation.id, engine_version: source.source.engine_version, catalog_sha256: source.catalog!.sha256 },
+    proof: { fixture_sha256: "8c856f7ededaa7fc4bf8c8cbb56819a30eb3f9553209e222e13ad7e4926b9517",
+      schema_sha256: "9ca4174618e52ccbafebba9d1b5b6151f6ecdd1d5c67ba9f3b7f4706e2ff91a2", psycopg_version: "3.3.5",
+      postgresql_version: 170011, executions: 27, cases_per_stage: 9, before_row_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      after_row_ids: [9], mutation_row_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9], rollback_completed: true, temporary_table_absent: true },
+  };
+  return { ...source, mode: "deterministic_evidence", observations: [{ ...observation, synthetic_contract }] };
+}
+
+const [browserNormalizeSynthetic, browserSyntheticRows] = runInNewContext(
+  `${browserContract}; [normalizeSyntheticContract, syntheticContractRows]`, { structuredClone });
+
+it("displays saved synthetic controls without upgrading customer project verification", () => {
+  const saved = syntheticReview(), before = JSON.stringify(saved), observation = saved.observations[0];
+  const normalized = normalizeSyntheticContract(observation.synthetic_contract, observation, saved.source, saved.catalog)!;
+  expect(normalized).toEqual(observation.synthetic_contract);
+  expect(browserNormalizeSynthetic(observation.synthetic_contract, observation, saved.source, saved.catalog)).toEqual(normalized);
+  expect(browserSyntheticRows(normalized)).toEqual(syntheticContractRows(normalized));
+  const review = patternReview(saved)!, rows = Object.fromEntries(review.observations[0].rows);
+  expect(rows["Synthetic recipe contract"]).toContain("Saved synthetic evidence: passed");
+  expect(rows["Before / after / mutation"]).toContain("9 / 1 / 9");
+  expect(rows["Fixture cleanup"]).toContain("rollback");
+  expect(rows["Review state"]).toContain("customer project runtime behavior and repair preconditions remain unverified");
+  expect(rows["Customer project verification"]).toContain("Customer project runtime tests not run");
+  expect(rows["Next step"]).toContain("Review the customer project runtime contract");
+  expect(rows["Missing evidence"]).toContain("runtime behavior contract");
+  expect(Object.fromEntries(review.rows)["Verification and changes"]).toContain("Customer project runtime tests not run");
+  expect(JSON.stringify(saved)).toBe(before);
+});
+
+type SyntheticReview = ReturnType<typeof syntheticReview>;
+it.each([
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.scope = "customer_project"; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.runtime_verified = true; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.customer_project_verified = true; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.automatic_patch = true; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.evidence_sha256 += "\n"; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.fixture_sha256 = "b".repeat(64); },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.schema_sha256 = "b".repeat(64); },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.before_row_ids = []; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.after_row_ids = [1]; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.mutation_row_ids = [9]; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.executions = 26; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.rollback_completed = false; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.temporary_table_absent = false; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.psycopg_version = "3.٣.٥"; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.proof.postgresql_version = 1; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.source.archive_sha256 = "b".repeat(64); },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.source.source_sha256 = "b".repeat(64); },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.source.observation_id = "b".repeat(64); },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.source.catalog_sha256 = "b".repeat(64); },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.source.engine_version += "-other"; },
+  (v: SyntheticReview) => { v.observations[0].synthetic_contract.reason = "private error text"; },
+  (v: SyntheticReview) => { v.observations[0].missing_evidence.pop(); },
+  (v: SyntheticReview) => { v.observations[0].acquisition = { ...sourceAcquisition(), status: "unsupported" }; },
+  (v: SyntheticReview) => { v.observations[0].evidence.sql_observation.sink_method = "executemany"; },
+  (v: SyntheticReview) => { v.observations[0].recipe = { ...v.observations[0].recipe, id: "another-recipe" }; },
+])("rejects inconsistent synthetic proof across both renderers %#", mutate => {
+  const saved = structuredClone(syntheticReview()); mutate(saved);
+  const observation = saved.observations[0];
+  expect(normalizeSyntheticContract(observation.synthetic_contract, observation, saved.source, saved.catalog)).toBeNull();
+  expect(browserNormalizeSynthetic(observation.synthetic_contract, observation, saved.source, saved.catalog)).toBeNull();
+  const review = patternReview(saved)!;
+  expect(review.observations).toHaveLength(0);
+  expect(JSON.stringify(review)).not.toContain("Saved synthetic evidence: passed");
+});
+
+it.each(["failed", "unavailable"])("keeps %s synthetic attempts distinct from passed recipe evidence", status => {
+  const saved = syntheticReview(), observation = saved.observations[0];
+  Object.assign(observation, { state: "source_evidence_collected", next_action: "review_runtime_contract" });
+  Object.assign(observation.synthetic_contract, { status, reason: status === "failed" ? "synthetic_contract_failed" : "execution_timeout",
+    synthetic_recipe_verified: false, proof: null });
+  const normalized = normalizeSyntheticContract(observation.synthetic_contract, observation, saved.source, saved.catalog)!;
+  expect(normalized).not.toBeNull();
+  expect(browserNormalizeSynthetic(observation.synthetic_contract, observation, saved.source, saved.catalog)).toEqual(normalized);
+  const rows = Object.fromEntries(patternReview(saved)!.observations[0].rows);
+  expect(rows["Synthetic recipe contract"]).toContain(`Saved synthetic evidence: ${status}`);
+  expect(rows["Before / after / mutation"]).toBeUndefined();
+  expect(rows["Review state"]).toContain("Supported source evidence collected");
+  expect(rows["Customer project verification"]).toContain("No automatic patch applied");
+});
+
+it("renders the synthetic state in the standalone browser and hides inconsistent proof", () => {
+  const markup = '<details id="security-agent-details"><summary id="security-agent-summary"></summary><div id="security-agent"></div></details>';
+  const renderSource = browserSource.slice(browserSource.indexOf("function renderSecurityAgent(agent)"),
+    browserSource.indexOf("function renderRuleCoverage(coverage)"));
+  const render = runInNewContext(`${browserContract}; ${renderSource}; renderSecurityAgent`, {
+    structuredClone,
+    byId: (id: string) => document.getElementById(id),
+    text: (value: unknown, fallback = "Not reported") => typeof value === "string" && value ? value : fallback,
+    node: (tag: string, content?: string) => { const el = document.createElement(tag); el.textContent = content ?? ""; return el; },
+    renderDefinitions: (container: HTMLElement, rows: [string, string][]) => {
+      for (const [key, value] of rows) { const el = document.createElement("p"); el.textContent = `${key}: ${value}`; container.append(el); }
+    },
+  });
+  document.body.innerHTML = markup;
+  const saved = syntheticReview(); render(saved);
+  expect(document.getElementById("security-agent-details")!.hidden).toBe(false);
+  expect(document.body.textContent).toContain("Saved synthetic evidence: passed");
+  expect(document.body.textContent).toContain("Customer project runtime tests not run");
+  expect(document.body.textContent).toContain("Review the customer project runtime contract");
+  saved.observations[0].synthetic_contract.proof.after_row_ids = [];
+  render(saved);
+  expect(document.body.textContent).not.toContain("Saved synthetic evidence: passed");
+  expect(document.body.textContent).toContain("1 records could not be displayed");
 });

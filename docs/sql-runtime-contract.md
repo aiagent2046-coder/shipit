@@ -1,5 +1,8 @@
 # Synthetic PostgreSQL value-binding contract
 
+The [agent integration](agent-synthetic-runtime.md) selects and executes this
+contract from completed source evidence and records its result in the report.
+
 `scripts/verify_sql_runtime_contract.py` exercises the proposed
 `sql-value-parameterization-python-psycopg3` recipe against PostgreSQL. It accepts
 no project archive, project path, SQL text or supplied expectations. Its table,

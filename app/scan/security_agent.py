@@ -15,6 +15,8 @@ from app.scan.pattern_catalog import catalog_manifest
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.evidence_acquisition import EvidenceBudget, acquire_sql_evidence
 from app.scan.source_snapshot import SourceSnapshot
+from app.scan.synthetic_record import (normalize_synthetic_contract, normalize_synthetic_summary,
+                                      supports_synthetic_contract, unavailable_summary)
 
 MAX_CANDIDATES = 128
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -139,8 +141,57 @@ def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: i
     }
 
 
+def _collect_synthetic_evidence(result, executor):
+    """One trusted zero-input experiment per investigation, shared across candidates.
+
+    No saved report is used as an execution plan and no customer material is
+    passed to the executor. Even a passed recipe leaves all project gaps intact.
+    """
+    result["mode"] = "deterministic_evidence"
+    runs = reused = 0
+    summary = None
+    for observation in result["observations"]:
+        if not supports_synthetic_contract(observation):
+            continue
+        observation["steps"].append({"action": "select_synthetic_contract", "result": "single_text_value_psycopg3"})
+        cached = summary is not None
+        if cached:
+            reused += 1
+        else:
+            runs += 1
+            try:
+                summary = normalize_synthetic_summary(executor())
+                if summary is None:
+                    summary = unavailable_summary("invalid_contract_result")
+            except Exception:
+                summary = unavailable_summary("execution_unavailable")
+        contract = {**deepcopy(summary), "reused": cached, "source": {
+            "archive_sha256": result["source"]["archive_sha256"],
+            "engine_version": result["source"]["engine_version"],
+            "source_sha256": observation["evidence"]["sql_observation"]["source_sha256"],
+            "observation_id": observation["id"], "catalog_sha256": result["catalog"]["sha256"],
+        }}
+        passed = summary["status"] == "passed"
+        if passed:
+            observation.update(state="synthetic_recipe_verified", next_action="review_project_runtime_contract")
+        observation["synthetic_contract"] = contract
+        observation["steps"].extend([
+            {"action": "verify_synthetic_recipe", "result": summary["status"]},
+            {"action": "replan_after_synthetic_contract", "result": observation["next_action"]},
+        ])
+        if normalize_synthetic_contract(contract, observation, result["source"], result["catalog"]) is None:
+            raise ValueError("Invalid synthetic evidence binding")
+        if not passed and result["status"] == "completed":
+            result.update(status="partial", stop_reason="synthetic_verification_incomplete")
+    result["budget"].update(synthetic_contract_runs=runs, max_synthetic_contract_runs=1,
+                            synthetic_contract_reuses=reused)
+    if runs:
+        result["limitations"] = [item for item in result["limitations"] if item != "runtime_tests_not_run"]
+        result["limitations"].extend(["synthetic_recipe_scope_only", "customer_project_runtime_not_verified"])
+
+
 def review_static_observations(static: dict, *, archive_sha256: str, engine_version: str,
-                              source_snapshot=None) -> dict:
+                              source_snapshot=None, synthetic_sql_executor=None) -> dict:
     """Re-plan supported source checks while retaining independent coverage gaps."""
     if not isinstance(archive_sha256, str) or not _SHA256.fullmatch(archive_sha256):
         raise ValueError("Invalid source snapshot identity")
@@ -201,17 +252,21 @@ def review_static_observations(static: dict, *, archive_sha256: str, engine_vers
         result["status"], result["stop_reason"] = "partial", "evidence_collection_incomplete"
     else:
         result["status"], result["stop_reason"] = "completed", "bounded_review_completed"
+    if synthetic_sql_executor is not None:
+        _collect_synthetic_evidence(result, synthetic_sql_executor)
     return result
 
 
-def attach_security_agent(static: dict, *, archive_sha256: str, engine_version: str, source_archive=None) -> None:
+def attach_security_agent(static: dict, *, archive_sha256: str, engine_version: str, source_archive=None,
+                          synthetic_sql_executor=None) -> None:
     """An unavailable coordinator never discards successful scanner findings."""
     snapshot = None
     try:
         if source_archive is not None and any(sql_observation(row) for row in static.get("findings", [])):
             snapshot = SourceSnapshot.from_archive(source_archive, archive_sha256=archive_sha256)
         result = review_static_observations(static, archive_sha256=archive_sha256,
-                                            engine_version=engine_version, source_snapshot=snapshot)
+                                            engine_version=engine_version, source_snapshot=snapshot,
+                                            synthetic_sql_executor=synthetic_sql_executor)
     except Exception as exc:  # Same isolation boundary as the detector stage.
         result = _base(archive_sha256, engine_version)
         result["stop_reason"] = f"agent_error: {type(exc).__name__}"
@@ -230,11 +285,30 @@ def attach_security_agent(static: dict, *, archive_sha256: str, engine_version: 
 def agent_record(value: object) -> dict | None:
     """Copy only versioned scanner records; legacy reports remain readable."""
     if (not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1
-            or value.get("mode") != "deterministic_static"
+            or value.get("mode") not in ("deterministic_static", "deterministic_evidence")
             or not isinstance(value.get("status"), str)
             or value["status"] not in {"completed", "partial", "unavailable"}
             or value.get("automatic_patch") is not False or value.get("runtime_verified") is not False
             or not isinstance(value.get("plan"), list) or not isinstance(value.get("observations"), list)
             or not isinstance(value.get("budget"), dict)):
         return None
-    return deepcopy(value)
+    result = deepcopy(value)
+    for observation in result["observations"]:
+        if not isinstance(observation, dict):
+            continue
+        if "synthetic_contract" not in observation and observation.get("state") != "synthetic_recipe_verified":
+            continue
+        contract = normalize_synthetic_contract(observation.get("synthetic_contract"), observation,
+                                                 result.get("source"), result.get("catalog"))
+        if contract is not None:
+            observation["synthetic_contract"] = contract
+            continue
+        observation.pop("synthetic_contract", None)
+        if observation.get("state") == "synthetic_recipe_verified":
+            observation.update(state="source_evidence_collected", next_action="review_runtime_contract")
+        if isinstance(observation.get("steps"), list):
+            observation["steps"] = [step for step in observation["steps"] if isinstance(step, dict)
+                and step.get("action") not in ("select_synthetic_contract", "verify_synthetic_recipe",
+                                               "replan_after_synthetic_contract")]
+        result.update(status="partial", stop_reason="synthetic_evidence_invalid")
+    return result

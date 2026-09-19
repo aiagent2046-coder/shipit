@@ -586,7 +586,7 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
              llm_skip_reason: str | None = None,
              llm_rubrics: tuple[str, ...] | None = None,
              depth: str = BASIS_FULL, llm_cost_cap: Decimal | None = None,
-             sca_client: "OsvClient | None" = None) -> dict:
+             sca_client: "OsvClient | None" = None, synthetic_sql_executor=None) -> dict:
     """Returns {"score", "findings", "llm": <stats | status>, "llm_usage", "sca"}.
 
     `llm` is a stats dict when the stage ran, and also a stats-shaped dict
@@ -631,7 +631,8 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
     model, the other about sending a customer's dependency list to a third
     party.
     """
-    static = run_static_scan(io.BytesIO(data))
+    static = run_static_scan(io.BytesIO(data), **({"synthetic_sql_executor": synthetic_sql_executor}
+                                               if synthetic_sql_executor is not None else {}))
     findings = static["findings"]
     llm_summary: object = vars(LLMScanStats(
         skipped_reason=llm_skip_reason or "no_providers_configured"))

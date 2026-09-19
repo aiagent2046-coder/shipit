@@ -126,3 +126,10 @@ application-specific database execution tests remain future work. The separate
 [synthetic PostgreSQL contract](sql-runtime-contract.md) checks a fixed text-value
 recipe before/after binding and detects a restored vulnerable mutation. Its
 success does not close any uploaded application's runtime prerequisites.
+
+## Synthetic runtime capability
+
+The agent can now select the trusted PostgreSQL text-value contract, execute it
+once per explicit native investigation and re-plan from its validated result.
+See [agent-synthetic-runtime.md](agent-synthetic-runtime.md) for invocation,
+limits, report states and the separate customer-project proof boundary.
