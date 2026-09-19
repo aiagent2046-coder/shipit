@@ -1,37 +1,19 @@
 import { expect, it } from "vitest";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import reports from "../../../tests/fixtures/deserialization-agent.json";
+import replayCases from "../../../tests/fixtures/deserialization-agent-replay.json";
 import { normalizeAcquisition, normalizeDeserializationObservation, patternReview } from "./securityAgent";
 
 const browserSource = readFileSync("../browser/src/app.js", "utf8");
 const contract = browserSource.slice(browserSource.indexOf("function normalizeAcquisition("),
   browserSource.indexOf("function renderSecurityAgent(agent)"));
 const [browserAcquisition, browserTrace] = runInNewContext(
-  `${contract}; [normalizeAcquisition, normalizeDeserializationObservation]`, { structuredClone });
+  `${contract}; [normalizeAcquisition, normalizeDeserializationObservation]`, { structuredClone, sha256 });
 
 function saved() {
-  const trace = { version: 1, method: "python_ast_import_resolved", file: "app.py", source_sha256: "a".repeat(64),
-    sink_line: 8, sink_span: [8, 11, 8, 31], sink_method: "loads", loader: "pickle.loads", input_control_status: "not_checked" };
-  const acquisition = { version: 2, status: "completed", stop_reason: "source_goal_reached",
-    source: { file: trace.file, source_sha256: trace.source_sha256, sink_span: [...trace.sink_span] },
-    facts: [
-      { id: "request_input_source", method: "fastapi_ast_binding", sources: [{ parameter: "body", channel: "body", span: [7, 14, 7, 25] }] },
-      { id: "local_input_flow", method: "python_ast_straight_line", locations: [[7, 14, 7, 25], [8, 24, 8, 28], [...trace.sink_span]] },
-    ], attempts: [
-      { action: "locate_source", result: "established", reason: "source_snapshot_matched", produced: [] as string[] },
-      { action: "trace_request_input", result: "established", reason: "request_flow_established", produced: ["request_input_source", "local_input_flow"] },
-    ], budget: { max_steps: 2, steps: 2, work_units: 100 },
-  };
-  return { version: 1, mode: "deterministic_static", status: "completed", stop_reason: "bounded_review_completed",
-    runtime_verified: false, automatic_patch: false, plan: [], budget: {}, observations: [{
-      id: "b".repeat(64), pattern_id: "python-unsafe-deserialization", pattern_revision: 2,
-      rule_id: "unsafe-deserialization", file: trace.file, line: trace.sink_line,
-      state: "source_evidence_collected", next_action: "review_runtime_contract",
-      recipe: { automatic_apply: false, status: "not_available" },
-      missing_evidence: ["input_trust_boundary", "loader_runtime_contract"],
-      evidence: { deserialization_observation: trace }, acquisition,
-    }] };
+  return structuredClone(reports[0].report.security_agent);
 }
 
 it("replays source evidence with identical strict browser and web validation", () => {
@@ -43,7 +25,7 @@ it("replays source evidence with identical strict browser and web validation", (
   expect(browserAcquisition(observation.acquisition, trace)).toEqual(observation.acquisition);
   const rows = Object.fromEntries(patternReview(value)!.observations[0].rows);
   expect(rows["Deserialization source SHA-256"]).toBe(trace.source_sha256);
-  expect(rows["Source fact: request input source"]).toContain("body parameter body");
+  expect(rows["Source fact: request input source"]).toContain("body parameter payload");
   expect(rows["Next step"]).toContain("input trust, loader options and expected object types");
   expect(rows["Missing evidence"]).toBe("input trust boundary; loader runtime contract");
   expect(rows["SQL source trace"]).toBeUndefined();
@@ -54,7 +36,7 @@ it("replays source evidence with identical strict browser and web validation", (
 it.each([
   { version: true }, { version: 2 }, { loader: "yaml.load" }, { method: "model_guess" },
   { source_sha256: "a".repeat(64) + "\n" }, { sink_line: true }, { sink_span: [8, 11, 8, 11] },
-  { sink_span: [7, 11, 8, 31] }, { driver_status: "source_resolved" }, { input_control_status: "verified" },
+  { sink_span: [6, 11, 8, 31] }, { driver_status: "source_resolved" }, { input_control_status: "verified" },
 ])("rejects forged deserialization traces consistently: %j", invalid => {
   const observation = saved().observations[0], trace = { ...observation.evidence.deserialization_observation, ...invalid };
   expect(normalizeDeserializationObservation(trace)).toBeNull();
@@ -73,7 +55,7 @@ it.each([
   ["multiple origins", (v: Saved) => { v.observations[0].acquisition.facts[0].sources!.push({ parameter: "other", channel: "body", span: [7, 27, 7, 38] }); }],
   ["flow without origin", (v: Saved) => { v.observations[0].acquisition.facts[1].locations!.shift(); }],
   ["flow without sink", (v: Saved) => { v.observations[0].acquisition.facts[1].locations!.pop(); }],
-  ["duplicate locations", (v: Saved) => { v.observations[0].acquisition.facts[1].locations!.splice(1, 0, [7, 14, 7, 25]); }],
+  ["duplicate locations", (v: Saved) => { v.observations[0].acquisition.facts[1].locations!.splice(1, 0, [...v.observations[0].acquisition.facts[1].locations![0]]); }],
   ["budget expansion", (v: Saved) => { v.observations[0].acquisition.budget.max_steps = 4; }],
   ["SQL action", (v: Saved) => { v.observations[0].acquisition.attempts[1].action = "inspect_sql_slots"; }],
   ["failed locate", (v: Saved) => { v.observations[0].acquisition.attempts[0].result = "unknown"; }],
@@ -83,7 +65,7 @@ it.each([
   const observation = value.observations[0], trace = observation.evidence.deserialization_observation;
   expect(normalizeAcquisition(observation.acquisition, trace)).toBeNull();
   expect(browserAcquisition(observation.acquisition, trace)).toBeNull();
-  expect(patternReview(value)!.observations).toEqual([]);
+  expectRevoked(value);
 });
 
 it("keeps budget exhaustion distinct from completed source evidence", () => {
@@ -93,13 +75,14 @@ it("keeps budget exhaustion distinct from completed source evidence", () => {
   Object.assign(observation, { state: "needs_evidence", next_action: "manual_review" });
   expect(normalizeAcquisition(record, observation.evidence.deserialization_observation)).toEqual(record);
   expect(browserAcquisition(record, observation.evidence.deserialization_observation)).toEqual(record);
-  expect(Object.fromEntries(patternReview(value)!.observations[0].rows)["Source investigation"]).toContain("partial; budget exhausted");
+  // Editing a completed saved run into a partial one also invalidates its receipt.
+  expectRevoked(value);
 });
 
 const renderSource = browserSource.slice(browserSource.indexOf("function renderSecurityAgent(agent)"),
   browserSource.indexOf("function renderRuleCoverage(coverage)"));
 const renderBrowser = runInNewContext(`${contract}; ${renderSource}; renderSecurityAgent`, {
-  structuredClone,
+  structuredClone, sha256,
   byId: (id: string) => document.getElementById(id),
   text: (value: unknown, fallback = "Not reported") => typeof value === "string" && value ? value : fallback,
   node: (tag: string, content?: string) => { const el = document.createElement(tag); el.textContent = content ?? ""; return el; },
@@ -112,14 +95,14 @@ it.each(["input_trust_boundary", "loader_runtime_contract"])("cannot erase the r
   const value = saved();
   document.body.innerHTML = '<details id="security-agent-details"><summary id="security-agent-summary"></summary><div id="security-agent"></div></details>';
   renderBrowser(value);
-  expect(document.body.textContent).toContain("body parameter body");
+  expect(document.body.textContent).toContain("body parameter payload");
   expect(document.body.textContent).toContain("Deserialization source SHA-256");
   expect(document.body.textContent).not.toContain("SQL driver");
   value.observations[0].missing_evidence = value.observations[0].missing_evidence.filter(key => key !== gap);
-  expect(patternReview(value)!.observations).toEqual([]);
+  expectRevoked(value);
   renderBrowser(value);
-  expect(document.body.textContent).not.toContain("body parameter body");
-  expect(document.body.textContent).toContain("1 records could not be displayed");
+  expect(document.body.textContent).not.toContain("body parameter payload");
+  expect(document.body.textContent).toContain("needs evidence");
 });
 
 
@@ -141,4 +124,79 @@ it.each(reports)("replays the real $name scanner report in web and standalone br
     expect(Object.fromEntries(review.observations[0].rows)["Source investigation"]).toContain("unsupported");
   }
   expect(JSON.stringify(report)).toBe(before);
+});
+
+function expectRevoked(value: unknown) {
+  const before = JSON.stringify(value), review = patternReview(value)!;
+  expect(review.status).toBe("partial");
+  expect(review.rows[0][1]).toContain("source_evidence_invalid");
+  expect(review.observations).toHaveLength(1);
+  const rows = Object.fromEntries(review.observations[0].rows);
+  expect(rows["Source fact: request input source"]).toBeUndefined();
+  expect(rows["Source fact: local input flow"]).toBeUndefined();
+  expect(rows["Source investigation"]).toBeUndefined();
+  expect(rows["Review state"]).toContain("Needs evidence");
+  expect(rows["Missing evidence"]).toBe("request input source; local input flow; input trust boundary; loader runtime contract");
+  expect(rows["Next step"]).toContain("Manual review");
+  document.body.innerHTML = '<details id="security-agent-details"><summary id="security-agent-summary"></summary><div id="security-agent"></div></details>';
+  renderBrowser(value);
+  expect(document.getElementById("security-agent-summary")!.textContent).toContain("partial");
+  expect(document.body.textContent).toContain("source evidence invalid");
+  expect(document.body.textContent).toContain("needs evidence");
+  expect(document.body.textContent).toContain(rows["Missing evidence"]);
+  expect(document.body.textContent).not.toContain("Source fact:");
+  expect(document.body.textContent).not.toContain("Source investigation:");
+  expect(document.body.textContent).not.toContain("records could not be displayed");
+  expect(JSON.stringify(value)).toBe(before);
+}
+
+it.each(replayCases)("matches native replay validation: $name", scenario => {
+  const value = saved();
+  for (const change of scenario.changes) {
+    let target: unknown = value;
+    for (const key of change.path.slice(0, -1)) target = (target as Record<string, unknown>)[key];
+    const record = target as Record<string, unknown>, key = change.path.at(-1)!;
+    if ("delete" in change) delete record[key];
+    else record[key] = structuredClone(change.value);
+  }
+  if (!scenario.valid) {
+    expectRevoked(value);
+    return;
+  }
+  const before = JSON.stringify(value), review = patternReview(value)!;
+  expect(review.status).toBe(scenario.status);
+  expect(review.observations).toHaveLength(1);
+  const rows = Object.fromEntries(review.observations[0].rows);
+  expect(rows["Source investigation"]).toContain(scenario.acquisition_status);
+  document.body.innerHTML = '<details id="security-agent-details"><summary id="security-agent-summary"></summary><div id="security-agent"></div></details>';
+  renderBrowser(value);
+  expect(document.body.textContent).toContain(rows["Source investigation"]);
+  expect(document.body.textContent).not.toContain("source evidence invalid");
+  if (scenario.acquisition_status === "completed") {
+    expect(rows["Source fact: request input source"]).toContain("body parameter данные");
+    expect(document.body.textContent).toContain("body parameter данные");
+    expect(document.body.textContent).toContain("src/загрузка_🔒.py");
+  } else {
+    expect(rows["Missing evidence"]).toContain("request input source; local input flow");
+    expect(rows["Source fact: request input source"]).toBeUndefined();
+  }
+  expect(JSON.stringify(value)).toBe(before);
+});
+
+it("preserves historical manual candidates without source receipts", () => {
+  const value = saved(), observation = value.observations[0] as Record<string, unknown>;
+  delete observation.acquisition;
+  delete observation.agent_chain;
+  observation.evidence = {};
+  observation.state = "needs_evidence";
+  observation.next_action = "manual_review";
+  observation.missing_evidence = ["input_trust_boundary", "loader_runtime_contract"];
+  const review = patternReview(value)!;
+  expect(review.status).toBe("completed");
+  expect(review.observations).toHaveLength(1);
+  document.body.innerHTML = '<details id="security-agent-details"><summary id="security-agent-summary"></summary><div id="security-agent"></div></details>';
+  renderBrowser(value);
+  expect(document.body.textContent).toContain("needs evidence");
+  expect(document.body.textContent).not.toContain("source evidence invalid");
+  expect(document.body.textContent).not.toContain("Source fact:");
 });

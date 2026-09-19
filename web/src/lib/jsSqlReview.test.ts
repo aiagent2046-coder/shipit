@@ -68,9 +68,9 @@ it("renders a hostile path as text in the ordinary browser with zero Python obse
   const node = (tag: string, text = "", className = "") => {
     const element = document.createElement(tag); element.textContent = text; element.className = className; return element;
   };
-  const render = runInNewContext(app.slice(app.indexOf("function jsSqlReview("), app.indexOf("function renderRuleCoverage("))
+  const render = runInNewContext(app.slice(app.indexOf("function normalizeAcquisition("), app.indexOf("function renderRuleCoverage("))
     + "; renderSecurityAgent", {
-    sha256,
+    sha256, structuredClone,
     byId: (id: string) => document.getElementById(id), node,
     text: (v: unknown, fallback = "") => typeof v === "string" ? v : fallback,
     renderDefinitions: (parent: HTMLElement, rows: [string, string][]) => {

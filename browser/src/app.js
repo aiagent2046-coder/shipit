@@ -543,6 +543,127 @@ function normalizeDeserializationObservation(value) {
         return null;
     return structuredClone(record);
 }
+"use strict";
+"use strict";
+// Mirror agent_chain.normalize_chain for source-evidence receipts. Hashes bind
+// saved facts to this run; they establish consistency, not authenticity.
+function validDeserializationChain(observation, source, catalog) {
+  const obj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  const keys = (v, names) => obj(v)
+    && Object.keys(v).length === names.length && names.every(key => Object.hasOwn(v, key));
+  const sha = (v) => typeof v === "string" && /^[a-f0-9]{64}(?![\s\S])/.test(v);
+  try {
+    // Python's ensure_ascii JSON, with bounded work for untrusted saved reports.
+    let remaining = 20000, characters = 1000000;
+    const canonical = (v, depth = 0) => {
+      if (--remaining < 0 || depth > 32)
+        throw new Error("Receipt limit");
+      if (typeof v === "string") {
+        characters -= v.length;
+        if (characters < 0)
+          throw new Error("Receipt limit");
+        return JSON.stringify(v).replace(/[\u007f-\uffff]/g, c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+      }
+      if (v === null || typeof v === "boolean" || typeof v === "number" && Number.isSafeInteger(v))
+        return JSON.stringify(v);
+      if (Array.isArray(v))
+        return "[" + v.map(item => canonical(item, depth + 1)).join(",") + "]";
+      if (!obj(v))
+        throw new Error("Invalid receipt value");
+      // Python orders keys by Unicode code point rather than UTF-16 code unit.
+      const order = (a, b) => {
+        const left = Array.from(a), right = Array.from(b);
+        for (let i = 0; i < Math.min(left.length, right.length); i++) {
+          const delta = left[i].codePointAt(0) - right[i].codePointAt(0);
+          if (delta)
+            return delta;
+        }
+        return left.length - right.length;
+      };
+      return "{" + Object.keys(v).sort(order).map(key => canonical(key, depth + 1) + ":" + canonical(v[key], depth + 1)).join(",") + "}";
+    };
+    const hash = (v) => Array.from(sha256(Uint8Array.from(canonical(v), c => c.charCodeAt(0))), byte => byte.toString(16).padStart(2, "0")).join("");
+    const chain = observation.agent_chain;
+    if (!keys(chain, ["version", "mode", "scope", "status", "max_tasks", "tasks"])
+      || chain.version !== 1 || chain.mode !== "in_process_queue" || chain.scope !== "source_evidence"
+      || chain.max_tasks !== 4 || !Array.isArray(chain.tasks) || chain.tasks.length !== 4
+      || !obj(source) || !obj(catalog) || !obj(observation.evidence))
+      return false;
+    const trace = observation.evidence.sql_observation || normalizeDeserializationObservation(observation.evidence.deserialization_observation);
+    if (!obj(trace))
+      return false;
+    const binding = { ...source, catalog_sha256: catalog.sha256 ?? null,
+      source_sha256: trace.source_sha256 ?? null, observation_id: observation.id ?? null };
+    const roles = ["detector", "researcher", "experimenter", "verifier"];
+    const goals = ["classify_static_deserialization_observation", "collect_missing_deserialization_source_facts",
+      "obtain_selected_synthetic_contract", "validate_evidence_and_identify_remaining_gaps"];
+    let previous = null;
+    const statuses = [];
+    for (let i = 0; i < roles.length; i++) {
+      const task = chain.tasks[i];
+      if (!keys(task, ["id", "agent", "goal", "source", "depends_on", "input_sha256", "output_sha256",
+        "attempts", "max_attempts", "status", "reason"])
+        || task.id !== hash([binding, roles[i]]) || task.agent !== roles[i] || task.goal !== goals[i]
+        || canonical(task.source) !== canonical(binding)
+        || canonical(task.depends_on) !== canonical(previous ? [previous.id] : [])
+        || task.attempts !== (task.status === "blocked" && task.reason === "upstream_task_failed" ? 0 : 1)
+        || task.max_attempts !== 1 || !["completed", "blocked", "error"].includes(String(task.status))
+        || typeof task.reason !== "string" || task.reason.length > 80
+        || !/^[A-Za-z0-9_]*(?![\s\S])/.test(task.reason) || !/[A-Za-z0-9]/.test(task.reason)
+        || !sha(task.input_sha256) || !sha(task.output_sha256)
+        || previous !== null && task.input_sha256 !== previous.output_sha256)
+        return false;
+      statuses.push(task.status);
+      previous = task;
+    }
+    const expected = statuses.includes("error") ? "error" : statuses.includes("blocked") ? "waiting_for_evidence" : "completed";
+    const candidate = Object.fromEntries(Object.entries(observation).filter(([key]) => key !== "agent_chain"));
+    return chain.status === expected && previous?.output_sha256 === hash(candidate);
+  }
+  catch {
+    return false;
+  }
+}
+// Revoke inconsistent deserialization proof before building either summary or
+// observation rows, preserving the detector candidate and the caller's record.
+function normalizeDeserializationAgent(value) {
+  const obj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  if (!obj(value) || !Array.isArray(value.observations))
+    return value;
+  let invalid = false;
+  const observations = value.observations.map(observation => {
+    if (!obj(observation) || observation.pattern_id !== "python-unsafe-deserialization")
+      return observation;
+    const evidence = obj(observation.evidence) ? observation.evidence : {};
+    if (obj(observation.evidence) && !("deserialization_observation" in evidence)
+      && !("acquisition" in observation) && observation.state === "needs_evidence")
+      return observation;
+    const savedTrace = normalizeDeserializationObservation(evidence.deserialization_observation);
+    const trace = observation.rule_id === "unsafe-deserialization" && (!Object.hasOwn(evidence, "version") || evidence.version === 1)
+      && savedTrace?.file === observation.file && savedTrace?.sink_line === observation.line ? savedTrace : null;
+    const acquisition = normalizeAcquisition(observation.acquisition, trace);
+    const required = ["request_input_source", "local_input_flow", "input_trust_boundary", "loader_runtime_contract"];
+    const missing = required.filter(key => !acquisition?.facts.some(fact => fact.id === key));
+    const completed = acquisition?.status === "completed";
+    const savedMissing = observation.missing_evidence;
+    if (acquisition && Array.isArray(savedMissing)
+      && savedMissing.length === missing.length && missing.every((key, i) => key === savedMissing[i])
+      && observation.state === (completed ? "source_evidence_collected" : "needs_evidence")
+      && observation.next_action === (completed ? "review_runtime_contract" : "manual_review")
+      && validDeserializationChain(observation, value.source, value.catalog))
+      return observation;
+    invalid = true;
+    const restored = { ...observation, evidence: { ...evidence }, state: "needs_evidence",
+      next_action: "manual_review", missing_evidence: required };
+    delete restored.acquisition;
+    delete restored.agent_chain;
+    if (!trace)
+      delete restored.evidence.deserialization_observation;
+    return restored;
+  });
+  return invalid ? { ...value, observations, status: "partial", stop_reason: "source_evidence_invalid" } : value;
+}
+
 function deserializationTraceRows(value, file, line) {
     const trace = normalizeDeserializationObservation(value);
     if (!trace || trace.file !== file || trace.sink_line !== line)
@@ -778,6 +899,7 @@ function jsSqlReview(value, source) {
 }
 
 function renderSecurityAgent(agent) {
+  agent = normalizeDeserializationAgent(agent);
   const details = byId('security-agent-details');
   const container = byId('security-agent');
   container.replaceChildren();

@@ -52,6 +52,9 @@ same source facts. Normalizers bind acquisition version, file hash, call span,
 fact endpoints and action journal before displaying evidence. The task chain
 also binds the archive, engine, catalog and observation identities. These checks
 establish internal consistency, not authenticity of externally edited JSON.
+Python, web and standalone browser replay all revoke the acquisition when that
+chain is missing or inconsistent: the report becomes `partial`, the candidate
+returns to `needs_evidence`, and all four source/runtime prerequisites are restored.
 Reading a report never runs the collector or a project command. Historical
 reports without this evidence remain readable.
 
