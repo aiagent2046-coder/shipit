@@ -75,3 +75,10 @@ checks and preserved the attachment through saved-report normalization.
 A control scan of the same archive confirmed identical findings and score,
 with zero model calls in both scans. This verifies import consistency only;
 execution remains operator-reported, without independent attestation.
+
+## Controlled execution experiment
+
+To generate a new baseline / intentional mutation / exact restoration cycle,
+see [client-restoration-experiment.md](client-restoration-experiment.md).
+That opt-in Docker command executes the pinned client application. This import
+command continues to consume evidence only; ordinary scans do not execute it.
