@@ -313,6 +313,11 @@ def attach_security_agent(static: dict, *, archive_sha256: str, engine_version: 
     finally:
         if snapshot is not None:
             snapshot.close()
+    from app.scan.js_sql_review import review_js_sql
+    js_review = review_js_sql(static, source_archive, archive_sha256=archive_sha256,
+                              engine_version=engine_version)
+    if js_review is not None:
+        result["js_sql_review"] = js_review
     static["security_agent"] = result
     limitations = [item for item in static.get("limitations", [])
                    if item not in {"security_agent_unavailable", "security_agent_incomplete"}]
@@ -361,6 +366,14 @@ def agent_record(value: object) -> dict | None:
                 result.update(status="partial", stop_reason="agent_chain_invalid")
         else:
             observation["agent_chain"] = chain
+    if "js_sql_review" in result:
+        from app.scan.js_sql_review import normalize_review
+        review = normalize_review(result["js_sql_review"], result.get("source"))
+        if review is None:
+            result.pop("js_sql_review", None)
+            result["js_sql_review_rejected"] = True
+        else:
+            result["js_sql_review"] = review
     from app.scan.client_runtime_chain import normalize_client_runtime_attachment
     normalize_client_runtime_attachment(result)
     return result

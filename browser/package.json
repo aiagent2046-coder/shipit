@@ -9,6 +9,7 @@
     "test:wasm": "node scripts/parity.mjs"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "pyodide": "314.0.6"
   },
   "devDependencies": {

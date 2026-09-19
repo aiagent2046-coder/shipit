@@ -1,3 +1,4 @@
+import { jsSqlReview } from "./jsSqlReview";
 import type { Finding } from "./types";
 
 type Rows = [string, string][];
@@ -313,6 +314,7 @@ export function patternReview(value: unknown): PatternReviewView | null {
   const catalog = object(value.catalog) ? value.catalog : {};
   const source = object(value.source) ? value.source : {};
   const budget = value.budget;
+  const js = jsSqlReview(value.js_sql_review, source);
   const knownStops = ["agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
     "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete", "synthetic_verification_incomplete", "synthetic_evidence_invalid",
     "agent_task_failed", "agent_chain_invalid"];
@@ -320,7 +322,7 @@ export function patternReview(value: unknown): PatternReviewView | null {
     || /^agent_error: [A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value.stop_reason)) ? value.stop_reason : "Stop reason not recorded";
   const hasSynthetic = value.observations.some(item => object(item) && "synthetic_contract" in item);
   const rows: Rows = [
-    ["Pattern review", `${value.status}; ${value.observations.length} observations; ${stop}. `
+    [js ? "Python pattern review" : "Pattern review", `${value.status}; ${value.observations.length} observations; ${stop}. `
       + "Completion describes bounded review, not project safety."],
     ["Pattern catalog", `${text(catalog.version, "Unavailable")}; SHA-256: `
       + (digest(catalog.sha256) ? catalog.sha256 : "Unavailable")],
@@ -342,7 +344,8 @@ export function patternReview(value: unknown): PatternReviewView | null {
   }
   const observations: PatternReviewView["observations"] = [];
   if (!value.observations.length) rows.push(["Pattern observations",
-    "No reviewed candidates recorded. An empty result does not establish safety."]);
+    js ? "No Python catalog candidates recorded. JavaScript SQL observations are listed separately."
+      : "No reviewed candidates recorded. An empty result does not establish safety."]);
   for (const item of value.observations.slice(0, 128)) {
     if (!object(item) || typeof item.file !== "string" || !count(item.line) || item.line < 1
       || !((item.state === "needs_evidence" && item.next_action === "manual_review")
@@ -385,6 +388,11 @@ export function patternReview(value: unknown): PatternReviewView | null {
   }
   if (observations.length < value.observations.length) rows.push(["Observation display incomplete",
     `${value.observations.length - observations.length} records could not be displayed within the supported schema and limit.`]);
+  if (js) {
+    rows.push(...js.rows);
+    observations.push(...js.observations);
+  } else if ("js_sql_review" in value) rows.push(["JavaScript SQL source review unavailable",
+    "The saved source review could not be validated; original findings are retained."]);
   return { status: value.status, rows, observations };
 }
 
