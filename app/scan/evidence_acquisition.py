@@ -49,6 +49,8 @@ def _next_action(record, trace, analysis):
         return None
     if "trace_request_input" not in attempted:
         return "trace_request_input"
+    if record["version"] == 2:
+        return None
     if (trace["driver_status"] == "source_resolved" and analysis.get("parts") is not None
             and "inspect_sql_slots" not in attempted):
         return "inspect_sql_slots"
@@ -59,21 +61,33 @@ def _next_action(record, trace, analysis):
 
 
 def acquire_sql_evidence(trace, snapshot, budget):
+    return _acquire_evidence(trace, snapshot, budget, deserialization=False)
+
+
+def acquire_deserialization_evidence(trace, snapshot, budget):
+    return _acquire_evidence(trace, snapshot, budget, deserialization=True)
+
+
+def _acquire_evidence(trace, snapshot, budget, *, deserialization):
     """Keep a reproducible journal; no action repeats for the same source sink."""
-    key = (trace["file"], trace["source_sha256"], trace["sink_line"], trace["sink_method"], trace["driver_status"])
+    key = (trace["file"], trace["source_sha256"], trace["sink_line"], trace["sink_method"],
+           trace.get("driver_status"), tuple(trace.get("sink_span", ())))
     if snapshot is not None and key in snapshot.acquisitions:
         return deepcopy(snapshot.acquisitions[key])
     record = {
-        "version": 1, "status": "unsupported", "stop_reason": "no_further_action",
+        "version": 2 if deserialization else 1, "status": "unsupported", "stop_reason": "no_further_action",
         "source": {"file": trace["file"], "source_sha256": trace["source_sha256"]},
         "facts": [], "attempts": [],
-        "budget": {"max_steps": MAX_CANDIDATE_STEPS, "steps": 0, "work_units": 0},
+        "budget": {"max_steps": 2 if deserialization else MAX_CANDIDATE_STEPS, "steps": 0, "work_units": 0},
     }
+    if deserialization:
+        record["source"]["sink_span"] = list(trace["sink_span"])
+    goals = {"request_input_source", "local_input_flow"} if deserialization else SOURCE_GOALS
     initial_work = budget.remaining
     analysis = {}
     document = sink = None
     while (action := _next_action(record, trace, analysis)) is not None:
-        if len(record["attempts"]) >= MAX_CANDIDATE_STEPS:
+        if len(record["attempts"]) >= record["budget"]["max_steps"]:
             record.update(status="partial", stop_reason="budget_exhausted")
             break
         old_facts = deepcopy(record["facts"])
@@ -89,10 +103,15 @@ def acquire_sql_evidence(trace, snapshot, budget):
                 result = {"status": "established", "facts": []}
                 reason = "source_snapshot_matched"
             elif action == "trace_request_input":
-                from app.scan.sql_input_evidence import analyze_query_input
-
-                analysis = analyze_query_input(document.tree, sink, spend=budget.spend)
-                if snapshot.framework_shadowed and analysis.get("reason") not in COLLECTOR_LIMITS:
+                if deserialization:
+                    from app.scan.deserialization_input_evidence import analyze_deserialization_input
+                    analysis = analyze_deserialization_input(document.tree, sink, spend=budget.spend)
+                    shadowed = snapshot.deserialization_import_shadowed
+                else:
+                    from app.scan.sql_input_evidence import analyze_query_input
+                    analysis = analyze_query_input(document.tree, sink, spend=budget.spend)
+                    shadowed = snapshot.framework_shadowed
+                if shadowed and analysis.get("reason") not in COLLECTOR_LIMITS:
                     # Visible local modules prevent claiming the imported
                     # framework's HTTP semantics. Symbolic SQL remains usable.
                     analysis = {**analysis, "status": "unknown", "reason": "framework_import_shadowed",
@@ -126,7 +145,7 @@ def acquire_sql_evidence(trace, snapshot, budget):
             if limited:
                 step["reason"] = "source_limit"
                 record.update(status="partial", stop_reason="source_limit")
-            if SOURCE_GOALS <= {fact["id"] for fact in record["facts"]}:
+            if goals <= {fact["id"] for fact in record["facts"]}:
                 record.update(status="completed", stop_reason="source_goal_reached")
             # Each result must satisfy the same schema used for saved reports
             # before a later action or recipe prerequisite can consume it.
@@ -156,7 +175,7 @@ def acquire_sql_evidence(trace, snapshot, budget):
             record.update(status="partial", stop_reason="collector_error")
             break
     else:
-        if SOURCE_GOALS <= {fact["id"] for fact in record["facts"]}:
+        if goals <= {fact["id"] for fact in record["facts"]}:
             record.update(status="completed", stop_reason="source_goal_reached")
     record["budget"].update(steps=len(record["attempts"]), work_units=initial_work - budget.remaining)
     if snapshot is not None:

@@ -151,6 +151,49 @@ def acquisition_cases():
                'native': result}
 
 
+def deserialization_acquisition_cases():
+    source = ('from fastapi import FastAPI, Body\nimport pickle\napp = FastAPI()\n'
+              '@app.post("/load")\ndef load(data: bytes = Body(...)):\n'
+              '    payload = data\n    return pickle.loads(payload)\n')
+    annotated = ('from fastapi import APIRouter as Router, Body as B\n'
+                 'from typing import Annotated as A\nfrom pickle import loads as restore\n'
+                 'app = Router()\n@app.post("/load")\n'
+                 'async def load(data: A[bytes, B()]):\n'
+                 '    payload = data\n    return restore(payload)\n')
+    source_facts = {'request_input_source', 'local_input_flow'}
+    remaining = {'input_trust_boundary', 'loader_runtime_contract'}
+    for name, body, established, shadowed in (
+        ('body-source-goal', source, True, False),
+        ('annotated-import-alias', annotated, True, False),
+        ('overwritten-body', source.replace('    return pickle.loads',
+                                            '    payload = b"local"\n    return pickle.loads'), False, False),
+        ('shadowed-pickle', source, False, True),
+    ):
+        files = {'src/restore.py': body}
+        if shadowed:
+            files['src/pickle.py'] = 'def loads(value): return value\n'
+        data = archive(files)
+        result = scan_archive(data)
+        agent = result['report']['security_agent']
+        decision, = agent['observations']
+        acquisition = decision['acquisition']
+        assert decision['state'] == ('source_evidence_collected' if established else 'needs_evidence')
+        assert (acquisition['status'] == 'completed') == established
+        facts = acquisition['facts']
+        assert len(facts) == (2 if established else 0)
+        assert {fact['id'] for fact in facts} == (source_facts if established else set())
+        assert set(decision['missing_evidence']) == (remaining if established else remaining | source_facts)
+        if established:
+            origin, = next(fact['sources'] for fact in facts if fact['id'] == 'request_input_source')
+            assert origin['parameter'] == 'data' and origin['channel'] == 'body'
+        assert not agent['runtime_verified'] and not agent['automatic_patch']
+        assert not decision['recipe']['automatic_apply'] and 'synthetic_contract' not in decision
+        yield {'id': f'deserialization-evidence-agent/{name}', 'rule': 'unsafe-deserialization',
+               'polarity': 'positive', 'archive': base64.b64encode(data).decode(),
+               'expected': {'expect': [{'rule_id': 'unsafe-deserialization', 'count': 1}]},
+               'native': result}
+
+
 def main():
     if "--portable" in sys.argv:
         # Reuse the exact uploaded bytes: independently rebuilt ZIP timestamps
@@ -171,6 +214,7 @@ def main():
                       'native': scan_archive(data)})
     cases.extend(provenance_cases())
     cases.extend(acquisition_cases())
+    cases.extend(deserialization_acquisition_cases())
     portable = json.loads(subprocess.run(
         [sys.executable, __file__, "--portable"], check=True, capture_output=True, text=True,
         input=json.dumps([case['archive'] for case in cases]),

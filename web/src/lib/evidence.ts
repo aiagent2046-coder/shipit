@@ -2,7 +2,7 @@ import type { Finding, ModelAcceptance, Score, Severity, SourceAssessment, Stati
 import { narrativeProjection as checkedNarrativeProjection } from "./claimNarrative";
 import { cveRows, cveNotices } from "./cveEvidence";
 import { snapshotRows, snapshotNotices, snapshotScopeReasons, snapshotFindingRows } from "./dependencySnapshot";
-import { patternReview, patternReviewNotices, sqlEvidenceRows } from "./securityAgent";
+import { patternReview, patternReviewNotices, sqlEvidenceRows, deserializationEvidenceRows } from "./securityAgent";
 
 const nonProductionContexts = new Set([
   "test_fixture", "test_file", "comment", "doc_example", "ci_service",
@@ -154,7 +154,7 @@ export function claimEvidenceRows(finding: Finding, historical = false): [string
         ? "A locked package version matched an advisory. Application reachability was not checked."
       : "Not recorded for this finding; do not assume the cited code was verified.";
   const rows: [string, string][] = [["Source check", checked]];
-  rows.push(...sqlEvidenceRows(finding));
+  rows.push(...sqlEvidenceRows(finding), ...deserializationEvidenceRows(finding));
   if (finding.source === "dependency" && finding.verification_method === "package_version_match") {
     rows.push(...snapshotFindingRows(record));
   }

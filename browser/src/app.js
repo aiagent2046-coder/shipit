@@ -386,12 +386,16 @@ function normalizeAcquisition(value, trace) {
     const span = (v) => Array.isArray(v) && v.length === 4
         && v.every(n => integer(n)) && v[0] > 0 && (v[2] > v[0] || v[2] === v[0] && v[3] > v[1]);
     const identifier = (v) => typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(v);
-    // Match Python identifiers and its code-point length, including astral letters.
-    const parameter = (v) => typeof v === "string" && v.length <= 256 && [...v].length <= 128
-        && /^[_\p{XID_Start}]\p{XID_Continue}*(?![\s\S])/u.test(v) && !/[\u200c\u200d]/u.test(v);
+    // Python uses Unicode identifier rules and counts code points, not UTF-16
+    // units. Join controls are not Python identifiers; require absolute end too.
+    const parameter = (v) => typeof v === "string" && v.length <= 256
+        && [...v].length <= 128 && /^[_\p{XID_Start}]\p{XID_Continue}*(?![\s\S])/u.test(v)
+        && !/[\u200c\u200d]/u.test(v);
     const choice = (v, options) => typeof v === "string" && options.includes(v);
     const sha = (v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
-    const actions = ["locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints"];
+    const deserialization = normalizeDeserializationObservation(trace) !== null;
+    const actions = deserialization ? ["locate_source", "trace_request_input"]
+        : ["locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints"];
     const methods = { request_input_source: "fastapi_ast_binding",
         local_input_flow: "python_ast_straight_line", sql_value_position: "postgresql_ast_slot_context",
         value_constraints: "python_ast_constraints" };
@@ -405,11 +409,9 @@ function normalizeAcquisition(value, trace) {
         "sink_not_found", "ambiguous_sink", "request_flow_established", "request_flow_not_established",
         "sql_value_positions_established", "sql_slots_not_established", "value_constraints_recorded",
         "value_constraints_unknown", "collector_failed", "work_budget_exhausted", "step_budget_exhausted"];
-    if (!obj(trace) || trace.version !== 2 || trace.method !== "python_ast_local_flow"
-        || trace.input_control_status !== "not_checked" || trace.flow_status !== "possible_local_flow"
-        || !integer(trace.sink_line, 1)
+    if (!obj(trace) || !integer(trace.sink_line, 1)
         || !keys(value, ["version", "status", "stop_reason", "source", "facts", "attempts", "budget"])
-        || value.version !== 1 || !choice(value.status, ["completed", "partial", "unsupported"])
+        || value.version !== (deserialization ? 2 : 1) || !choice(value.status, ["completed", "partial", "unsupported"])
         || !choice(value.stop_reason, stops))
         return null;
     const driver = trace.driver_provenance;
@@ -418,36 +420,43 @@ function normalizeAcquisition(value, trace) {
         && integer(driver.import_line, 1, trace.sink_line) && integer(driver.connection_line, 1, trace.sink_line)
         && integer(driver.cursor_line, 1, trace.sink_line)
         && driver.import_line <= driver.connection_line && driver.connection_line <= driver.cursor_line;
-    if (trace.driver_status === "source_resolved" && !validDriver
+    if (!deserialization && (trace.version !== 2 || trace.method !== "python_ast_local_flow"
+        || trace.input_control_status !== "not_checked" || trace.flow_status !== "possible_local_flow"
+        || trace.driver_status === "source_resolved" && !validDriver
         || trace.driver_status === "unknown" && "driver_provenance" in trace
         || !choice(trace.driver_status, ["unknown", "source_resolved"])
         || !integer(trace.assembly_line, 1)
         || !choice(trace.assembly_kind, ["concatenation", "percent_format", "f_string", "format_call", "join_call"])
-        || !choice(trace.sink_method, ["execute", "executemany", "executescript", "raw", "execute_sql"]))
+        || !choice(trace.sink_method, ["execute", "executemany", "executescript", "raw", "execute_sql"])))
         return null;
     const source = value.source;
     if (!keys(source, ["file", "source_sha256"], ["sink_span"]) || typeof source.file !== "string"
         || !source.file.length || source.file.length > 4096 || /[\x00-\x1f]/.test(source.file)
         || source.file !== trace.file || !sha(source.source_sha256) || source.source_sha256 !== trace.source_sha256
+        || deserialization && (!span(source.sink_span) || !Array.isArray(trace.sink_span)
+            || source.sink_span.some((n, i) => n !== trace.sink_span[i]))
         || "sink_span" in source && (!span(source.sink_span) || source.sink_span[0] !== trace.sink_line))
         return null;
     const { facts, attempts, budget } = value;
-    if (!Array.isArray(facts) || facts.length > 4 || !Array.isArray(attempts) || attempts.length > 4
-        || !keys(budget, ["max_steps", "steps", "work_units"]) || !integer(budget.max_steps, 0, 4)
+    if (!Array.isArray(facts) || facts.length > actions.length || !Array.isArray(attempts) || attempts.length > actions.length
+        || !keys(budget, ["max_steps", "steps", "work_units"]) || !integer(budget.max_steps, 0, actions.length)
         || !integer(budget.steps, 0, budget.max_steps) || budget.steps !== attempts.length || !integer(budget.work_units))
         return null;
     const found = new Map();
     for (const fact of facts) {
         if (!obj(fact) || typeof fact.id !== "string" || !Object.hasOwn(methods, fact.id) || found.has(fact.id)
-            || fact.method !== methods[fact.id])
+            || fact.method !== methods[fact.id]
+            || deserialization && !["request_input_source", "local_input_flow"].includes(fact.id))
             return null;
         const field = fields[fact.id], entries = fact[field];
         if (!keys(fact, ["id", "method", field]) || !Array.isArray(entries) || !entries.length
             || entries.length > (["locations", "constraints"].includes(field) ? 128 : 64))
             return null;
         if (field === "sources") {
+            if (deserialization && entries.length !== 1)
+                return null;
             if (entries.some(item => !keys(item, ["parameter", "channel", "span"]) || !parameter(item.parameter)
-                || !choice(item.channel, ["query", "path"]) || !span(item.span)))
+                || !choice(item.channel, deserialization ? ["body"] : ["query", "path"]) || !span(item.span)))
                 return null;
         }
         else if (field === "locations") {
@@ -468,6 +477,14 @@ function normalizeAcquisition(value, trace) {
     }
     if (found.has("request_input_source") !== found.has("local_input_flow"))
         return null;
+    if (deserialization && found.has("local_input_flow")) {
+        const locations = found.get("local_input_flow").locations;
+        const origin = found.get("request_input_source").sources[0].span;
+        if (JSON.stringify(locations[0]) !== JSON.stringify(origin)
+            || JSON.stringify(locations.at(-1)) !== JSON.stringify(trace.sink_span)
+            || new Set(locations.map(location => JSON.stringify(location))).size !== locations.length)
+            return null;
+    }
     if (found.has("value_constraints")) {
         if (!found.has("local_input_flow"))
             return null;
@@ -503,11 +520,41 @@ function normalizeAcquisition(value, trace) {
     }
     if (emitted.size !== found.size || facts.length > 0 && !("sink_span" in source))
         return null;
-    const complete = found.size === 4;
+    const complete = found.size === actions.length;
     if ((value.status === "completed") !== complete || (value.stop_reason === "source_goal_reached") !== complete
         || (value.status === "partial") !== choice(value.stop_reason, ["budget_exhausted", "collector_error", "source_limit"]))
         return null;
     return structuredClone(value);
+}
+function normalizeDeserializationObservation(value) {
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+        return null;
+    const record = value;
+    const required = ["version", "method", "file", "source_sha256", "sink_line", "sink_span", "sink_method", "loader", "input_control_status"];
+    const integer = (v) => Number.isSafeInteger(v) && Number(v) >= 0 && Number(v) < 2 ** 31;
+    const span = record.sink_span;
+    if (Object.keys(record).length !== required.length || !required.every(key => Object.hasOwn(record, key))
+        || record.version !== 1 || record.method !== "python_ast_import_resolved"
+        || typeof record.file !== "string" || !record.file.length || [...record.file].length > 4096 || /[\x00-\x1f]/.test(record.file)
+        || typeof record.source_sha256 !== "string" || !/^[a-f0-9]{64}(?![\s\S])/.test(record.source_sha256)
+        || !integer(record.sink_line) || record.sink_line < 1 || !Array.isArray(span) || span.length !== 4 || !span.every(integer)
+        || span[0] !== record.sink_line || !(span[2] > span[0] || span[2] === span[0] && span[3] > span[1])
+        || record.sink_method !== "loads" || record.loader !== "pickle.loads" || record.input_control_status !== "not_checked")
+        return null;
+    return structuredClone(record);
+}
+function deserializationTraceRows(value, file, line) {
+    const trace = normalizeDeserializationObservation(value);
+    if (!trace || trace.file !== file || trace.sink_line !== line)
+        return [];
+    return [["Deserialization source trace", `Import-resolved pickle.loads() at line ${trace.sink_line}. `
+                + "Input trust and loader runtime behavior were not checked."],
+        ["Deserialization source SHA-256", String(trace.source_sha256)]];
+}
+function deserializationEvidenceRows(finding) {
+    if (finding.source !== "static" || finding.rule_id !== "unsafe-deserialization" || finding.claim_evidence?.version !== 1)
+        return [];
+    return deserializationTraceRows(finding.claim_evidence.deserialization_observation, finding.file, finding.line);
 }
 function acquisitionRows(value, trace) {
     const record = normalizeAcquisition(value, trace);
@@ -531,9 +578,6 @@ function acquisitionRows(value, trace) {
     return rows;
 }
 
-"use strict";
-"use strict";
-"use strict";
 // Mirror the pure Python saved-record boundary. This validates a saved synthetic
 // recipe record; it does not authenticate JSON or verify the customer project.
 function normalizeSyntheticContract(value, observation, agentSource, catalog) {
@@ -783,10 +827,14 @@ function renderSecurityAgent(agent) {
   }
   let displayed = 0;
   for (const observation of observations.slice(0, 128)) {
-    const sqlRecord = observation.evidence?.sql_observation;
-    const acquisition = observation.rule_id === 'sql-injection-string-built-query'
-      && sqlRecord?.file === observation.file && sqlRecord?.sink_line === observation.line
-      ? normalizeAcquisition(observation.acquisition, sqlRecord) : null;
+    const deserialization = observation.rule_id === 'unsafe-deserialization';
+    const sourceRecord = deserialization ? observation.evidence?.deserialization_observation : observation.evidence?.sql_observation;
+    const acquisition = (deserialization || observation.rule_id === 'sql-injection-string-built-query')
+      && sourceRecord?.file === observation.file && sourceRecord?.sink_line === observation.line
+      ? normalizeAcquisition(observation.acquisition, sourceRecord) : null;
+    const missing = Array.isArray(observation.missing_evidence) ? observation.missing_evidence : [];
+    if (deserialization && acquisition && (observation.pattern_id !== 'python-unsafe-deserialization'
+      || !['input_trust_boundary', 'loader_runtime_contract'].every(key => missing.includes(key)))) continue;
     const synthetic = normalizeSyntheticContract(observation.synthetic_contract, observation, agent.source, agent.catalog);
     const verified = observation.state === 'synthetic_recipe_verified';
     const collected = observation.state === 'source_evidence_collected';
@@ -798,7 +846,7 @@ function renderSecurityAgent(agent) {
     displayed += 1;
     const section = node('section');
     section.append(node('h4', `${text(observation.title, 'Static observation')} · ${label(observation.state)}`));
-    const sql = observation.evidence?.sql_observation;
+    const sql = deserialization ? undefined : observation.evidence?.sql_observation;
     const location = text(observation.file, 'Project');
     const line = Number.isInteger(observation.line) && observation.line > 0 ? `:${observation.line}` : '';
     section.append(node('p', `${location}${line}`, 'finding-location'));
@@ -823,13 +871,13 @@ function renderSecurityAgent(agent) {
         ? 'SQL driver source: not checked in this historical report.'
         : 'SQL driver source: unknown; cursor provenance was not established.', 'hint'));
     }
-    const missing = Array.isArray(observation.missing_evidence) ? observation.missing_evidence : [];
     const evidence = node('div');
     renderDefinitions(evidence, [
       ['Candidate weakness classes', Array.isArray(observation.weaknesses)
         ? observation.weaknesses.map(value => text(value)).join(', ') || 'Not reported' : 'Not reported'],
       ['Missing evidence', missing.length ? missing.map(label).join('; ') : 'Not reported'],
-      ...acquisitionRows(acquisition, sqlRecord),
+      ...(deserialization ? deserializationTraceRows(sourceRecord, observation.file, observation.line) : []),
+      ...acquisitionRows(acquisition, sourceRecord),
       ...(synthetic ? syntheticContractRows(synthetic) : []),
       ...('synthetic_contract' in observation && !synthetic ? [['Synthetic evidence unavailable',
         'The saved synthetic evidence could not be validated. Customer project runtime behavior remains unverified.']] : []),
@@ -838,7 +886,9 @@ function renderSecurityAgent(agent) {
       ['Next step', verified
         ? 'Review the customer project runtime contract: confirm authorization, deployed reachability, intended value types and expected query behavior before choosing a repair.'
         : collected
-        ? 'Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair.'
+        ? (deserialization
+          ? 'Review the runtime contract: confirm input trust, loader options and expected object types before choosing a repair.'
+          : 'Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair.')
         : !('acquisition' in observation) && sql
           ? 'Manual review: trace the input origin and check the database driver’s parameter binding at the query call.'
           : 'Manual review: inspect the reported source location and gather the missing evidence.'],

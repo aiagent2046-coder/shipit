@@ -17,7 +17,7 @@ from app.capabilities import CAPABILITIES
 
 _CATALOG = {
     "schema_version": 1,
-    "catalog_version": "2026-09-19.2",
+    "catalog_version": "2026-09-19.3",
     "cards": [
         {
             "id": "python-sql-string-assembly",
@@ -107,7 +107,7 @@ _CATALOG = {
         },
         {
             "id": "python-unsafe-deserialization",
-            "revision": 1,
+            "revision": 2,
             "title": "Python deserialization requiring trusted input",
             "languages": ["Python"],
             "weaknesses": [{
@@ -121,9 +121,12 @@ _CATALOG = {
             },
             "applicability": {
                 "candidate_conditions": ["python_source", "recognized_deserialization_operation"],
-                "required_evidence": ["source_pattern", "input_trust_boundary", "loader_runtime_contract"],
+                "required_evidence": ["source_pattern", "request_input_source", "local_input_flow",
+                                      "input_trust_boundary", "loader_runtime_contract"],
                 "evidence_descriptions": {
                     "source_pattern": "The check observed a supported import-resolved deserialization operation.",
+                    "request_input_source": "Resolve a supported FastAPI Body bytes declaration in the source.",
+                    "local_input_flow": "Trace that body through local assignments to the exact pickle.loads argument.",
                     "input_trust_boundary": "Establish the producer, authentication and ability to alter the bytes.",
                     "loader_runtime_contract": "Establish the loader, version, options and expected object types.",
                 },
@@ -131,6 +134,8 @@ _CATALOG = {
                     "The operation does not establish that its input is untrusted or that code execution occurred.",
                     "Marshal can return code objects without executing them; missing YAML Loader is version-dependent.",
                     "Unknown wrappers, cross-file provenance and application trust policy require separate evidence.",
+                    "A bounded Body-to-pickle source trace does not establish caller authentication, "
+                    "deployed reachability, byte integrity or runtime loader behavior.",
                     "A safe-format replacement requires an application schema and compatibility decisions.",
                 ],
             },

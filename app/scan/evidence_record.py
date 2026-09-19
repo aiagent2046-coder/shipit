@@ -60,19 +60,37 @@ def _driver(trace: dict) -> bool:
             and proof["import_line"] <= proof["connection_line"] <= proof["cursor_line"])
 
 
+def normalize_deserialization_observation(value: object) -> dict | None:
+    """Accept only an import-resolved pickle call bound to an exact source span."""
+    if (not _keys(value, {"version", "method", "file", "source_sha256", "sink_line", "sink_span",
+                          "sink_method", "loader", "input_control_status"})
+            or type(value["version"]) is not int or value["version"] != 1
+            or value["method"] != "python_ast_import_resolved"
+            or not isinstance(value["file"], str) or not 0 < len(value["file"]) <= 4096
+            or any(ord(char) < 32 for char in value["file"])
+            or not isinstance(value["source_sha256"], str) or not _SHA256.fullmatch(value["source_sha256"])
+            or not _integer(value["sink_line"], 1) or not _span(value["sink_span"])
+            or value["sink_span"][0] != value["sink_line"]
+            or value["sink_method"] != "loads" or value["loader"] != "pickle.loads"
+            or value["input_control_status"] != "not_checked"):
+        return None
+    return deepcopy(value)
+
+
 def normalize_acquisition(value: object, trace: object) -> dict | None:
     """Return a bounded copy only when facts, actions and source identities agree."""
-    if (not isinstance(trace, dict) or trace.get("version") != 2
-            or trace.get("method") != "python_ast_local_flow"
-            or trace.get("input_control_status") != "not_checked"
-            or trace.get("flow_status") != "possible_local_flow"
-            or not _integer(trace.get("sink_line"), 1)
+    deserialization = normalize_deserialization_observation(trace) is not None
+    if (not isinstance(trace, dict)
             or not _keys(value, {"version", "status", "stop_reason", "source", "facts", "attempts", "budget"})
-            or type(value.get("version")) is not int or value["version"] != 1
-            or value.get("status") not in ("completed", "partial", "unsupported")
-            or not isinstance(value.get("stop_reason"), str) or value["stop_reason"] not in STOP_REASONS):
+            or type(value["version"]) is not int or value["version"] != (2 if deserialization else 1)
+            or value["status"] not in ("completed", "partial", "unsupported")
+            or not isinstance(value["stop_reason"], str) or value["stop_reason"] not in STOP_REASONS):
         return None
-    if (trace.get("driver_status") == "source_resolved" and not _driver(trace)
+    if not deserialization and (
+            trace.get("version") != 2 or trace.get("method") != "python_ast_local_flow"
+            or trace.get("input_control_status") != "not_checked"
+            or trace.get("flow_status") != "possible_local_flow" or not _integer(trace.get("sink_line"), 1)
+            or trace.get("driver_status") == "source_resolved" and not _driver(trace)
             or trace.get("driver_status") == "unknown" and "driver_provenance" in trace
             or trace.get("driver_status") not in ("unknown", "source_resolved")
             or not _integer(trace.get("assembly_line"), 1)
@@ -80,6 +98,10 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
                 "concatenation", "percent_format", "f_string", "format_call", "join_call")
             or trace.get("sink_method") not in ("execute", "executemany", "executescript", "raw", "execute_sql")):
         return None
+    actions = ACTIONS[:2] if deserialization else ACTIONS
+    fact_methods = ({key: FACT_METHODS[key] for key in PRODUCES["trace_request_input"]}
+                    if deserialization else FACT_METHODS)
+    max_steps = len(actions)
     source = value["source"]
     if (not _keys(source, {"file", "source_sha256"}, {"sink_span"})
             or not isinstance(source["file"], str) or not 0 < len(source["file"]) <= 4096
@@ -87,20 +109,22 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
             or source["file"] != trace.get("file")
             or not isinstance(source["source_sha256"], str) or not _SHA256.fullmatch(source["source_sha256"])
             or source["source_sha256"] != trace.get("source_sha256")
+            or deserialization and source.get("sink_span") != trace["sink_span"]
             or "sink_span" in source and (not _span(source["sink_span"])
                                            or source["sink_span"][0] != trace["sink_line"])):
         return None
     facts, attempts, budget = value["facts"], value["attempts"], value["budget"]
-    if (not isinstance(facts, list) or len(facts) > 4 or not isinstance(attempts, list) or len(attempts) > 4
+    if (not isinstance(facts, list) or len(facts) > max_steps
+            or not isinstance(attempts, list) or len(attempts) > max_steps
             or not _keys(budget, {"max_steps", "steps", "work_units"})
-            or not _integer(budget["max_steps"], 0, 4)
+            or not _integer(budget["max_steps"], 0, max_steps)
             or not _integer(budget["steps"], 0, budget["max_steps"])
             or budget["steps"] != len(attempts) or not _integer(budget["work_units"])):
         return None
     found = {}
     for fact in facts:
         if (not isinstance(fact, dict) or not isinstance(fact.get("id"), str)
-                or fact["id"] not in FACT_METHODS or fact["id"] in found
+                or fact["id"] not in fact_methods or fact["id"] in found
                 or fact.get("method") != FACT_METHODS[fact["id"]]):
             return None
         field = {"request_input_source": "sources", "local_input_flow": "locations",
@@ -110,11 +134,14 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
                 or not 1 <= len(entries) <= (128 if field in {"locations", "constraints"} else 64)):
             return None
         if field == "sources":
+            if deserialization and len(entries) != 1:
+                return None
             for item in entries:
                 if (not _keys(item, {"parameter", "channel", "span"})
                         or not isinstance(item["parameter"], str) or len(item["parameter"]) > 128
                         or not item["parameter"].isidentifier()
-                        or item["channel"] not in ("query", "path") or not _span(item["span"])):
+                        or item["channel"] not in (("body",) if deserialization else ("query", "path"))
+                        or not _span(item["span"])):
                     return None
         elif field == "locations":
             if not all(_span(item) for item in entries):
@@ -136,6 +163,12 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
         found[fact["id"]] = fact
     if bool(found.get("request_input_source")) != bool(found.get("local_input_flow")):
         return None
+    if deserialization and "local_input_flow" in found:
+        locations = found["local_input_flow"]["locations"]
+        if (locations[0] != found["request_input_source"]["sources"][0]["span"]
+                or locations[-1] != trace["sink_span"]
+                or len({tuple(location) for location in locations}) != len(locations)):
+            return None
     if "value_constraints" in found:
         if "local_input_flow" not in found:
             return None
@@ -147,7 +180,7 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
     produced, previous = set(), -1
     for attempt in attempts:
         if (not _keys(attempt, {"action", "result", "reason", "produced"}, {"detail"})
-                or attempt["action"] not in ACTIONS
+                or attempt["action"] not in actions
                 or "detail" in attempt and (not isinstance(attempt["detail"], str)
                                             or not _NAME.fullmatch(attempt["detail"]))
                 or attempt["result"] not in ("established", "unknown", "unsupported", "error", "budget_exhausted")
@@ -164,7 +197,7 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
             return None
         if attempt["action"] == "locate_source" and attempt["result"] == "established" and "sink_span" not in source:
             return None
-        order, emitted = ACTIONS.index(attempt["action"]), set(attempt["produced"])
+        order, emitted = actions.index(attempt["action"]), set(attempt["produced"])
         if (order <= previous or len(emitted) != len(attempt["produced"])
                 or emitted != (PRODUCES[attempt["action"]] if attempt["result"] == "established" else set())
                 or not emitted <= found.keys()):
@@ -176,7 +209,7 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
         previous = order
     if produced != found.keys() or facts and "sink_span" not in source:
         return None
-    complete = len(found) == 4
+    complete = len(found) == len(fact_methods)
     if ((value["status"] == "completed") != complete
             or (value["stop_reason"] == "source_goal_reached") != complete):
         return None

@@ -12,10 +12,10 @@ import json
 import re
 
 from app.scan.agent_chain import normalize_chain, run_chain
-from app.scan.evidence_record import normalize_acquisition
+from app.scan.evidence_record import normalize_acquisition, normalize_deserialization_observation
 from app.scan.pattern_catalog import catalog_manifest
 from app.scan.rule_coverage import normalize_rule_coverage
-from app.scan.evidence_acquisition import EvidenceBudget, acquire_sql_evidence
+from app.scan.evidence_acquisition import EvidenceBudget, acquire_sql_evidence, acquire_deserialization_evidence
 from app.scan.source_snapshot import SourceSnapshot
 from app.scan.synthetic_record import (normalize_synthetic_contract, normalize_synthetic_summary,
                                       supports_synthetic_contract, unavailable_summary)
@@ -87,6 +87,18 @@ def sql_driver_rows(trace: dict) -> list[tuple[str, str]]:
              if trace["version"] == 2 else "Not checked in this historical report.")]
 
 
+def deserialization_observation(finding: dict) -> dict | None:
+    evidence = finding.get("claim_evidence")
+    if (finding.get("source") != "static" or finding.get("rule_id") != "unsafe-deserialization"
+            or not isinstance(evidence, dict) or type(evidence.get("version")) is not int
+            or evidence["version"] != 1):
+        return None
+    trace = normalize_deserialization_observation(evidence.get("deserialization_observation"))
+    if trace is None or trace["file"] != finding.get("file") or trace["sink_line"] != finding.get("line"):
+        return None
+    return trace
+
+
 def _base(archive_sha256: str, engine_version: str) -> dict:
     return {
         "version": 1, "mode": "deterministic_static",
@@ -103,6 +115,8 @@ def _base(archive_sha256: str, engine_version: str) -> dict:
 
 def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: int) -> dict:
     trace = sql_observation(finding) if card["detection"]["check"] == "sql_injection" else None
+    deserialization = (deserialization_observation(finding)
+                       if card["detection"]["check"] == "unsafe_deserialization" else None)
     established = {"static_rule_observation", "source_pattern"}
     if trace is not None:
         established.add("sql_source_observation")
@@ -121,14 +135,16 @@ def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: i
         "weaknesses": [weakness["id"] for weakness in card["weaknesses"]],
         "rule_id": finding["rule_id"], "file": finding["file"], "line": finding["line"],
         "state": "needs_evidence",
-        "evidence": {"sql_observation": trace} if trace else {},
+        "evidence": ({"sql_observation": trace} if trace else
+                     {"deserialization_observation": deserialization} if deserialization else {}),
         "missing_evidence": missing,
         "next_action": "manual_review",
         "recipe": {"id": recipe.get("id"), "status": recipe["status"], "automatic_apply": False},
         "steps": [
             {"action": "classify_observation", "result": "candidate_weakness_class"},
             {"action": "check_source_evidence", "result": (
-                "sql_source_observation" if trace else "static_rule_observation")},
+                "sql_source_observation" if trace else "deserialization_source_observation"
+                if deserialization else "static_rule_observation")},
             {"action": "assess_recipe", "result": (
                 "missing_preconditions" if missing else "manual_guidance_only")},
         ],
@@ -136,8 +152,10 @@ def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: i
 
 
 def _research_candidate(observation, snapshot, budget):
-    trace = observation["evidence"]["sql_observation"]
-    acquisition = acquire_sql_evidence(trace, snapshot, budget)
+    deserialization = observation["evidence"].get("deserialization_observation")
+    trace = deserialization or observation["evidence"]["sql_observation"]
+    acquire = acquire_deserialization_evidence if deserialization else acquire_sql_evidence
+    acquisition = acquire(trace, snapshot, budget)
     acquisition = normalize_acquisition(acquisition, trace)
     if acquisition is None:
         raise ValueError("Invalid acquired evidence")
@@ -199,7 +217,7 @@ def _verify_candidate(observation, source, catalog):
 
 def _coordinate_candidate(card, finding, ordinal, result, snapshot, budget, executor, session):
     seed = _review_candidate(card, finding, result["source"]["archive_sha256"], ordinal)
-    trace = seed["evidence"].get("sql_observation")
+    trace = seed["evidence"].get("sql_observation") or seed["evidence"].get("deserialization_observation")
     if trace is None:
         return seed
     binding = {**result["source"], "source_sha256": trace["source_sha256"],
@@ -207,9 +225,13 @@ def _coordinate_candidate(card, finding, ordinal, result, snapshot, budget, exec
 
     def detect(observation):
         # Revalidate the scanner-owned hand-off, never a model-written claim.
-        if sql_observation(finding) != observation["evidence"]["sql_observation"]:
+        expected = deserialization_observation(finding) if "deserialization_observation" in seed["evidence"] else (
+            sql_observation(finding))
+        if expected != trace or observation["evidence"] != seed["evidence"]:
             raise ValueError("Invalid detector hand-off")
-        return observation, "completed", "static_sql_observation"
+        return observation, "completed", ("static_deserialization_observation"
+                                          if "deserialization_observation" in seed["evidence"]
+                                          else "static_sql_observation")
 
     return run_chain(seed, binding, {
         "detector": detect,
@@ -255,7 +277,7 @@ def review_static_observations(static: dict, *, archive_sha256: str, engine_vers
             candidates.append((card, finding))
     candidates.sort(key=lambda row: (
         row[0]["id"], row[1]["file"], row[1]["line"], row[1]["rule_id"],
-        json.dumps(sql_observation(row[1]), sort_keys=True),
+        json.dumps(sql_observation(row[1]) or deserialization_observation(row[1]), sort_keys=True),
     ))
     occurrences: Counter = Counter()
     evidence_budget = EvidenceBudget()
@@ -302,7 +324,8 @@ def attach_security_agent(static: dict, *, archive_sha256: str, engine_version: 
     """An unavailable coordinator never discards successful scanner findings."""
     snapshot = None
     try:
-        if source_archive is not None and any(sql_observation(row) for row in static.get("findings", [])):
+        if source_archive is not None and any(sql_observation(row) or deserialization_observation(row)
+                                              for row in static.get("findings", [])):
             snapshot = SourceSnapshot.from_archive(source_archive, archive_sha256=archive_sha256)
         result = review_static_observations(static, archive_sha256=archive_sha256,
                                             engine_version=engine_version, source_snapshot=snapshot,
@@ -338,6 +361,40 @@ def agent_record(value: object) -> dict | None:
             or not isinstance(value.get("budget"), dict)):
         return None
     result = deepcopy(value)
+    for observation in result["observations"]:
+        if (not isinstance(observation, dict)
+                or observation.get("pattern_id") != "python-unsafe-deserialization"):
+            continue
+        evidence = observation.get("evidence")
+        if (isinstance(evidence, dict) and "deserialization_observation" not in evidence
+                and "acquisition" not in observation and observation.get("state") == "needs_evidence"):
+            continue
+        if not isinstance(evidence, dict):
+            evidence = {}
+            observation["evidence"] = evidence
+        trace = deserialization_observation({
+            "source": "static", "rule_id": observation.get("rule_id"),
+            "file": observation.get("file"), "line": observation.get("line"),
+            "claim_evidence": {"version": 1, **evidence},
+        })
+        acquisition = normalize_acquisition(observation.get("acquisition"), trace)
+        facts = {fact["id"] for fact in acquisition["facts"]} if acquisition else set()
+        required = ["request_input_source", "local_input_flow", "input_trust_boundary", "loader_runtime_contract"]
+        missing = [key for key in required if key not in facts]
+        state = (("source_evidence_collected", "review_runtime_contract")
+                 if acquisition and acquisition["status"] == "completed" else ("needs_evidence", "manual_review"))
+        if (acquisition is None or observation.get("missing_evidence") != missing
+                or normalize_chain(observation.get("agent_chain"), observation,
+                                   result.get("source"), result.get("catalog")) is None
+                or (observation.get("state"), observation.get("next_action")) != state):
+            # A saved record cannot remove trust/runtime gaps or borrow another
+            # call's proof. Retain the detector candidate and restore its gaps.
+            observation.pop("acquisition", None)
+            observation.pop("agent_chain", None)
+            observation.update(state="needs_evidence", next_action="manual_review", missing_evidence=required)
+            if trace is None:
+                evidence.pop("deserialization_observation", None)
+            result.update(status="partial", stop_reason="source_evidence_invalid")
     for observation in result["observations"]:
         if not isinstance(observation, dict):
             continue

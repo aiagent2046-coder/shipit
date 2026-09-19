@@ -71,7 +71,7 @@ type AcquisitionFact = {
   constraints?: { slot: number; kind: string; type: string; span: AcquisitionSpan }[];
 };
 export interface SourceAcquisition {
-  version: 1; status: "completed" | "partial" | "unsupported"; stop_reason: string;
+  version: 1 | 2; status: "completed" | "partial" | "unsupported"; stop_reason: string;
   source: { file: string; source_sha256: string; sink_span?: AcquisitionSpan };
   facts: AcquisitionFact[];
   attempts: { action: string; result: string; reason: string; produced: string[]; detail?: string }[];
@@ -96,7 +96,9 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     && !/[\u200c\u200d]/u.test(v);
   const choice = (v: unknown, options: string[]): v is string => typeof v === "string" && options.includes(v);
   const sha = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
-  const actions = ["locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints"];
+  const deserialization = normalizeDeserializationObservation(trace) !== null;
+  const actions = deserialization ? ["locate_source", "trace_request_input"]
+    : ["locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints"];
   const methods: Record<string, string> = { request_input_source: "fastapi_ast_binding",
     local_input_flow: "python_ast_straight_line", sql_value_position: "postgresql_ast_slot_context",
     value_constraints: "python_ast_constraints" };
@@ -110,11 +112,9 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     "sink_not_found", "ambiguous_sink", "request_flow_established", "request_flow_not_established",
     "sql_value_positions_established", "sql_slots_not_established", "value_constraints_recorded",
     "value_constraints_unknown", "collector_failed", "work_budget_exhausted", "step_budget_exhausted"];
-  if (!obj(trace) || trace.version !== 2 || trace.method !== "python_ast_local_flow"
-    || trace.input_control_status !== "not_checked" || trace.flow_status !== "possible_local_flow"
-    || !integer(trace.sink_line, 1)
+  if (!obj(trace) || !integer(trace.sink_line, 1)
     || !keys(value, ["version", "status", "stop_reason", "source", "facts", "attempts", "budget"])
-    || value.version !== 1 || !choice(value.status, ["completed", "partial", "unsupported"])
+    || value.version !== (deserialization ? 2 : 1) || !choice(value.status, ["completed", "partial", "unsupported"])
     || !choice(value.stop_reason, stops)) return null;
   const driver = trace.driver_provenance;
   const validDriver = trace.driver_status === "source_resolved" && choice(trace.sink_method, ["execute", "executemany"])
@@ -122,31 +122,37 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     && integer(driver.import_line, 1, trace.sink_line) && integer(driver.connection_line, 1, trace.sink_line)
     && integer(driver.cursor_line, 1, trace.sink_line)
     && driver.import_line <= driver.connection_line && driver.connection_line <= driver.cursor_line;
-  if (trace.driver_status === "source_resolved" && !validDriver
+  if (!deserialization && (trace.version !== 2 || trace.method !== "python_ast_local_flow"
+    || trace.input_control_status !== "not_checked" || trace.flow_status !== "possible_local_flow"
+    || trace.driver_status === "source_resolved" && !validDriver
     || trace.driver_status === "unknown" && "driver_provenance" in trace
     || !choice(trace.driver_status, ["unknown", "source_resolved"])
     || !integer(trace.assembly_line, 1)
     || !choice(trace.assembly_kind, ["concatenation", "percent_format", "f_string", "format_call", "join_call"])
-    || !choice(trace.sink_method, ["execute", "executemany", "executescript", "raw", "execute_sql"])) return null;
+    || !choice(trace.sink_method, ["execute", "executemany", "executescript", "raw", "execute_sql"]))) return null;
   const source = value.source;
   if (!keys(source, ["file", "source_sha256"], ["sink_span"]) || typeof source.file !== "string"
     || !source.file.length || source.file.length > 4096 || /[\x00-\x1f]/.test(source.file)
     || source.file !== trace.file || !sha(source.source_sha256) || source.source_sha256 !== trace.source_sha256
+    || deserialization && (!span(source.sink_span) || !Array.isArray(trace.sink_span)
+      || source.sink_span.some((n, i) => n !== (trace.sink_span as number[])[i]))
     || "sink_span" in source && (!span(source.sink_span) || source.sink_span[0] !== trace.sink_line)) return null;
   const { facts, attempts, budget } = value;
-  if (!Array.isArray(facts) || facts.length > 4 || !Array.isArray(attempts) || attempts.length > 4
-    || !keys(budget, ["max_steps", "steps", "work_units"]) || !integer(budget.max_steps, 0, 4)
+  if (!Array.isArray(facts) || facts.length > actions.length || !Array.isArray(attempts) || attempts.length > actions.length
+    || !keys(budget, ["max_steps", "steps", "work_units"]) || !integer(budget.max_steps, 0, actions.length)
     || !integer(budget.steps, 0, budget.max_steps) || budget.steps !== attempts.length || !integer(budget.work_units)) return null;
   const found = new Map<string, AcquisitionFact>();
   for (const fact of facts) {
     if (!obj(fact) || typeof fact.id !== "string" || !Object.hasOwn(methods, fact.id) || found.has(fact.id)
-      || fact.method !== methods[fact.id]) return null;
+      || fact.method !== methods[fact.id]
+      || deserialization && !["request_input_source", "local_input_flow"].includes(fact.id)) return null;
     const field = fields[fact.id], entries = fact[field];
     if (!keys(fact, ["id", "method", field]) || !Array.isArray(entries) || !entries.length
       || entries.length > (["locations", "constraints"].includes(field) ? 128 : 64)) return null;
     if (field === "sources") {
+      if (deserialization && entries.length !== 1) return null;
       if (entries.some(item => !keys(item, ["parameter", "channel", "span"]) || !parameter(item.parameter)
-        || !choice(item.channel, ["query", "path"]) || !span(item.span))) return null;
+        || !choice(item.channel, deserialization ? ["body"] : ["query", "path"]) || !span(item.span))) return null;
     } else if (field === "locations") {
       if (!entries.every(span)) return null;
     } else if (field === "slots") {
@@ -159,6 +165,13 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     found.set(fact.id, fact as unknown as AcquisitionFact);
   }
   if (found.has("request_input_source") !== found.has("local_input_flow")) return null;
+  if (deserialization && found.has("local_input_flow")) {
+    const locations = found.get("local_input_flow")!.locations!;
+    const origin = found.get("request_input_source")!.sources![0].span;
+    if (JSON.stringify(locations[0]) !== JSON.stringify(origin)
+      || JSON.stringify(locations.at(-1)) !== JSON.stringify(trace.sink_span)
+      || new Set(locations.map(location => JSON.stringify(location))).size !== locations.length) return null;
+  }
   if (found.has("value_constraints")) {
     if (!found.has("local_input_flow")) return null;
     const covered = new Set(found.get("value_constraints")!.constraints!.map(item => item.slot));
@@ -187,10 +200,39 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     produced.forEach(id => emitted.add(id)); previous = order;
   }
   if (emitted.size !== found.size || facts.length > 0 && !("sink_span" in source)) return null;
-  const complete = found.size === 4;
+  const complete = found.size === actions.length;
   if ((value.status === "completed") !== complete || (value.stop_reason === "source_goal_reached") !== complete
     || (value.status === "partial") !== choice(value.stop_reason, ["budget_exhausted", "collector_error", "source_limit"])) return null;
   return structuredClone(value) as unknown as SourceAcquisition;
+}
+
+export function normalizeDeserializationObservation(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const required = ["version", "method", "file", "source_sha256", "sink_line", "sink_span", "sink_method", "loader", "input_control_status"];
+  const integer = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) >= 0 && Number(v) < 2 ** 31;
+  const span = record.sink_span;
+  if (Object.keys(record).length !== required.length || !required.every(key => Object.hasOwn(record, key))
+    || record.version !== 1 || record.method !== "python_ast_import_resolved"
+    || typeof record.file !== "string" || !record.file.length || [...record.file].length > 4096 || /[\x00-\x1f]/.test(record.file)
+    || typeof record.source_sha256 !== "string" || !/^[a-f0-9]{64}(?![\s\S])/.test(record.source_sha256)
+    || !integer(record.sink_line) || record.sink_line < 1 || !Array.isArray(span) || span.length !== 4 || !span.every(integer)
+    || span[0] !== record.sink_line || !(span[2] > span[0] || span[2] === span[0] && span[3] > span[1])
+    || record.sink_method !== "loads" || record.loader !== "pickle.loads" || record.input_control_status !== "not_checked") return null;
+  return structuredClone(record);
+}
+
+function deserializationTraceRows(value: unknown, file: unknown, line: unknown): Rows {
+  const trace = normalizeDeserializationObservation(value);
+  if (!trace || trace.file !== file || trace.sink_line !== line) return [];
+  return [["Deserialization source trace", `Import-resolved pickle.loads() at line ${trace.sink_line}. `
+    + "Input trust and loader runtime behavior were not checked."],
+    ["Deserialization source SHA-256", String(trace.source_sha256)]];
+}
+
+export function deserializationEvidenceRows(finding: Finding): Rows {
+  if (finding.source !== "static" || finding.rule_id !== "unsafe-deserialization" || finding.claim_evidence?.version !== 1) return [];
+  return deserializationTraceRows(finding.claim_evidence.deserialization_observation, finding.file, finding.line);
 }
 
 export function acquisitionRows(value: unknown, trace: unknown): [string, string][] {
@@ -316,7 +358,7 @@ export function patternReview(value: unknown): PatternReviewView | null {
   const budget = value.budget;
   const js = jsSqlReview(value.js_sql_review, source);
   const knownStops = ["agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
-    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete", "synthetic_verification_incomplete", "synthetic_evidence_invalid",
+    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete", "synthetic_verification_incomplete", "synthetic_evidence_invalid", "source_evidence_invalid",
     "agent_task_failed", "agent_chain_invalid"];
   const stop = typeof value.stop_reason === "string" && (knownStops.includes(value.stop_reason)
     || /^agent_error: [A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value.stop_reason)) ? value.stop_reason : "Stop reason not recorded";
@@ -356,8 +398,13 @@ export function patternReview(value: unknown): PatternReviewView | null {
     if (!object(recipe) || recipe.automatic_apply !== false
       || !["manual_guidance", "not_available"].includes(text(recipe.status, ""))) continue;
     const evidence = object(item.evidence) ? item.evidence : {};
-    const traceRows = item.rule_id === "sql-injection-string-built-query" ? sqlTraceRows(evidence.sql_observation, item.file, item.line) : [];
-    const acquisition = traceRows.length ? normalizeAcquisition(item.acquisition, evidence.sql_observation) : null;
+    const deserialization = item.rule_id === "unsafe-deserialization";
+    const trace = deserialization ? evidence.deserialization_observation : evidence.sql_observation;
+    const traceRows = deserialization ? deserializationTraceRows(trace, item.file, item.line)
+      : item.rule_id === "sql-injection-string-built-query" ? sqlTraceRows(trace, item.file, item.line) : [];
+    const acquisition = traceRows.length ? normalizeAcquisition(item.acquisition, trace) : null;
+    if (deserialization && acquisition && (item.pattern_id !== "python-unsafe-deserialization"
+      || !["input_trust_boundary", "loader_runtime_contract"].every(key => missing.includes(key)))) continue;
     const synthetic = normalizeSyntheticContract(item.synthetic_contract, item, source, catalog);
     const verified = item.state === "synthetic_recipe_verified";
     const collected = item.state === "source_evidence_collected" || verified;
@@ -371,13 +418,15 @@ export function patternReview(value: unknown): PatternReviewView | null {
         : collected ? "Supported source evidence collected; runtime behavior and repair preconditions remain unverified."
         : "Needs evidence; the candidate and repair preconditions remain unverified."],
       ...traceRows,
-      ...acquisitionRows(acquisition, evidence.sql_observation),
+      ...acquisitionRows(acquisition, trace),
       ...(synthetic ? syntheticContractRows(synthetic) : []),
       ...("synthetic_contract" in item && !synthetic ? [["Synthetic evidence unavailable", "The saved synthetic evidence could not be validated. Customer project runtime behavior remains unverified."]] as Rows : []),
       ...("acquisition" in item && !acquisition ? [["Source investigation unavailable", "The saved evidence could not be validated. Do not treat missing source facts as established."]] as Rows : []),
       ["Missing evidence", missing.length ? missing.map(label).join("; ") : "Not recorded; prerequisites are not established."],
       ["Next step", verified ? "Review the customer project runtime contract: confirm authorization, deployed reachability, intended value types and expected query behavior before choosing a repair."
-        : collected ? "Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair."
+        : collected ? (deserialization
+          ? "Review the runtime contract: confirm input trust, loader options and expected object types before choosing a repair."
+          : "Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair.")
         : "Manual review: gather the missing evidence before choosing a repair."],
       ["Repair guidance", recipe.status === "manual_guidance" && recipe.automatic_apply === false
         ? `${text(recipe.id)} · manual guidance; check all prerequisites. No automatic patch applied.`

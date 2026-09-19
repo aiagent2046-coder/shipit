@@ -17,6 +17,7 @@ AST parsing is bounded; no uploaded code is imported, called or deserialized.
 from __future__ import annotations
 
 import ast
+import hashlib
 import zipfile
 
 from app.scan.rule_coverage import remaining_findings
@@ -24,6 +25,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
+from app.scan.claim_evidence import static_claim_evidence
 from app.scan.rule_coverage import RuleCoverage
 
 RULE_ID = "unsafe-deserialization"
@@ -65,6 +67,7 @@ class _Evidence:
     line: int
     what: str
     kind: str = "code"
+    sink_span: tuple[int, int, int, int] | None = None
 
 
 # An import proves a name only in the scope where Python binds it. Ordinary
@@ -326,7 +329,9 @@ def _evidence(tree: ast.Module) -> list[_Evidence]:
             continue
         if member in _ALWAYS_UNSAFE.get(module, ()):
             kind = "marshal" if module == "marshal" else "code"
-            found.append(_Evidence(node.lineno, f"calls {target}()", kind))
+            span = ((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+                    if target == "pickle.loads" else None)
+            found.append(_Evidence(node.lineno, f"calls {target}()", kind, span))
         elif module == "torch" and member == "load":
             if any(keyword.arg == "weights_only" and isinstance(keyword.value, ast.Constant)
                    and keyword.value.value is False for keyword in node.keywords):
@@ -386,7 +391,8 @@ def scan_unsafe_deserialization(fileobj: BinaryIO, *, coverage: dict | None = No
                 accounting.skip("ast_limit")
                 continue
             remaining = remaining_findings(_MAX_FINDINGS) - len(findings)
-            findings.extend(_finding(info.filename, item) for item in evidence[:remaining])
+            source_digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+            findings.extend(_finding(info.filename, item, source_digest) for item in evidence[:remaining])
             if len(evidence) > remaining:
                 accounting.skip("finding_limit")
             else:
@@ -395,7 +401,7 @@ def scan_unsafe_deserialization(fileobj: BinaryIO, *, coverage: dict | None = No
     return findings
 
 
-def _finding(path: str, item: _Evidence) -> CheckFinding:
+def _finding(path: str, item: _Evidence, source_digest: str = "") -> CheckFinding:
     risk = (
         "This loader can reconstruct arbitrary Python objects and invoke code during "
         "deserialization. Malicious input could run with this process's privileges."
@@ -427,7 +433,7 @@ def _finding(path: str, item: _Evidence) -> CheckFinding:
         line=item.line,
         explanation=(
             f"Line {item.line} {item.what}. {risk} "
-            "Where the bytes come from has NOT been verified; trusted internal data and "
+            "Where the bytes come from has NOT been verified by this detector; trusted internal data and "
             "untrusted external data can reach the same call."
         ),
         fix_hint=(
@@ -437,4 +443,9 @@ def _finding(path: str, item: _Evidence) -> CheckFinding:
             "loading. A checksum supplied alongside untrusted bytes does not authenticate "
             "them; a digest helps only when its expected value comes from a trusted source."
         ),
+        claim_evidence={**static_claim_evidence(), "deserialization_observation": {
+            "version": 1, "method": "python_ast_import_resolved", "file": path,
+            "source_sha256": source_digest, "sink_line": item.line, "sink_span": list(item.sink_span),
+            "sink_method": "loads", "loader": "pickle.loads", "input_control_status": "not_checked",
+        }} if item.sink_span else None,
     )
