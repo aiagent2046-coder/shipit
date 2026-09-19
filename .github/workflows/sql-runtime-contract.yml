@@ -1,0 +1,55 @@
+name: sql-runtime-contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sql-runtime-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-sql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: synthetic-contract-password
+          POSTGRES_DB: drydock_sql_contract
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SQL_CONTRACT_DATABASE_URL: postgresql://postgres:synthetic-contract-password@127.0.0.1:5432/drydock_sql_contract
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install locked test dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.txt
+          python -m pip install -e . --no-deps
+      - name: Verify target boundaries and real PostgreSQL behavior
+        run: python -m pytest -q tests/test_sql_runtime_target.py tests/test_sql_runtime_contract.py
+      - name: Compare before, after and restored mutation
+        run: python scripts/verify_sql_runtime_contract.py --output "$RUNNER_TEMP/sql-runtime-contract.json"
+      - name: Preserve synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sql-runtime-contract-evidence
+          path: ${{ runner.temp }}/sql-runtime-contract.json
+          if-no-files-found: error
+          retention-days: 14
