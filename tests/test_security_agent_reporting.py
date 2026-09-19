@@ -151,11 +151,17 @@ def test_upgraded_or_malformed_records_do_not_render_a_review(completed, field, 
     lambda row: row["recipe"].update(automatic_apply=True),
     lambda row: row["recipe"].update(status="verified"),
 ])
-def test_malformed_nested_decisions_keep_summary_and_explicit_display_gap(completed, mutate):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_malformed_nested_decisions_keep_summary_and_explicit_display_gap(completed, mutate, legacy):
     invalid = deepcopy(completed["score"]["scan_manifest"]["security_agent"])
+    if legacy:
+        invalid["observations"][0].pop("agent_chain", None)
     mutate(invalid["observations"][0])
     rows = dict(security_agent_rows(invalid))
-    assert rows["Pattern review"].startswith("completed; 1 observations;")
+    status = "completed" if legacy else "partial"
+    assert rows["Pattern review"].startswith(f"{status}; 1 observations;")
+    if not legacy:
+        assert "agent_chain_invalid" in rows["Pattern review"]
     assert "Candidate weakness classes" not in rows
     assert "Repair guidance" not in rows
     assert rows["Observation display incomplete"] == (

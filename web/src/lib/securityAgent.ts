@@ -314,7 +314,8 @@ export function patternReview(value: unknown): PatternReviewView | null {
   const source = object(value.source) ? value.source : {};
   const budget = value.budget;
   const knownStops = ["agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
-    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete", "synthetic_verification_incomplete", "synthetic_evidence_invalid"];
+    "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete", "synthetic_verification_incomplete", "synthetic_evidence_invalid",
+    "agent_task_failed", "agent_chain_invalid"];
   const stop = typeof value.stop_reason === "string" && (knownStops.includes(value.stop_reason)
     || /^agent_error: [A-Za-z_][A-Za-z0-9_]{0,127}$/.test(value.stop_reason)) ? value.stop_reason : "Stop reason not recorded";
   const hasSynthetic = value.observations.some(item => object(item) && "synthetic_contract" in item);
