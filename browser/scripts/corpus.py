@@ -77,6 +77,17 @@ def provenance_cases():
         ('custom-method', 'import psycopg\n' + sink, False),
         ('with', 'from psycopg import connect\nwith connect(dsn) as c:\n'
          '    with c.cursor() as cur:\n        ' + sink, True),
+        ('annotation-rebinding', prefix + 'marker: (cur := CustomCursor())\n' + sink, False),
+        ('default-escape', prefix + 'def configure(connection=c):\n'
+         '    customize(connection)\nconfigure()\n' + sink, False),
+        ('bound-setter', 'import psycopg\nc = psycopg.connect(dsn)\n'
+         'change = c.__setattr__\nchange("cursor_factory", CustomCursor)\n'
+         'cur = c.cursor()\n' + sink, False),
+        ('chained-store', 'import psycopg\nregistry["driver"] = pg = psycopg\n'
+         'c = pg.connect(dsn)\ncur = c.cursor()\n' + sink, False),
+        ('match-binding', 'import psycopg\ndef load(value):\n'
+         '    c = psycopg.connect(dsn)\n    cur = c.cursor()\n    ' + sink
+         + '    match value:\n        case psycopg:\n            pass\n', False),
     ):
         data = archive({'src/query.py': source})
         result = scan_archive(data)

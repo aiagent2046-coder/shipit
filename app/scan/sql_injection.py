@@ -714,7 +714,8 @@ def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
             observations: dict[tuple[int, str, str], dict] = {}
             with track_analysis_limits() as limits:
                 signals = _find_in_module(tree, observations=observations)
-            drivers = {} if driver_shadowed else cursor_provenance(tree, max_nodes=_MAX_NODES)
+            drivers = (cursor_provenance(tree, max_nodes=_MAX_NODES)
+                       if signals and not driver_shadowed else {})
             source_digest = hashlib.sha256(raw).hexdigest()
             available = finding_limit - len(findings)
             for line, sink, kind in signals[:available]:

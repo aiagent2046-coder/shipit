@@ -53,6 +53,18 @@ imports or driver-module escapes conservatively disable provenance for the
 whole file. A repository-local `psycopg.py` or `psycopg/` disables it for the
 archive. These conservative boundaries may leave valid chains unknown.
 
+Unknown attribute access, function defaults and container stores revoke source
+identity for the affected object and its aliases. A later target in a chained
+assignment cannot restore it. Executable annotation expressions are analyzed
+conservatively, including rebinding and opaque calls; match captures are treated
+as local bindings throughout their function. A driver-module escape also
+invalidates evidence recorded in a deferred function before that escape.
+
+The optional pass has an 80,000-node cap and a separate 640,000-unit work budget
+covering traversal and binding work. Exhaustion yields unknown driver provenance
+while retaining the independently detected SQL finding. Calls do not copy the
+entire alias table, and files without SQL observations skip this evidence pass.
+
 This establishes a chain in the uploaded source under ordinary Python import
 semantics. It does not inspect the installed package, import hooks, external
 monkeypatching, connection success or execution. DSNs and source values are not
@@ -62,7 +74,8 @@ Only `psycopg3_cursor_provenance` is removed from missing recipe prerequisites.
 Attacker control, SQL value position, intended type and runtime behavior still
 require evidence; the next action remains manual review. The implementation
 and positive/unknown regressions live in `app/scan/psycopg_provenance.py` and
-`tests/test_psycopg_provenance.py`; browser parity includes these result shapes.
+`tests/test_psycopg_provenance.py`, `tests/test_psycopg_provenance_review.py` and
+`tests/test_psycopg_provenance_budget.py`; browser parity includes these result shapes.
 
 ## One constrained transformation
 
