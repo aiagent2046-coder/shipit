@@ -133,8 +133,9 @@ rule did not produce a finding, not that the application is safe.
 5. Measure false positives, misses, unknown outcomes, time and memory against
    the same input and versions. Fewer findings alone is not an improvement.
 
-The runtime repair checks in steps 2–4 are proposed work, not capabilities added
-by this PR. The current pilot delivers bounded static evidence, explicit gaps
+The [synthetic PostgreSQL contract](sql-runtime-contract.md) now exercises steps
+2–4 for a fixed text-value fixture and two explicit NULL operators. Its evidence
+is scoped to the recipe, not an uploaded application. The current pilot delivers bounded static evidence, explicit gaps
 and a reviewable recipe. The deterministic coordinator classifies the source
 observation, gathers supported missing source facts and records which recipe
 prerequisites remain. When all four source facts are collected, the next action

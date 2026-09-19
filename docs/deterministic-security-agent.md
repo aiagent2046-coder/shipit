@@ -122,6 +122,7 @@ acceptance and the browser CPython/WASM/Chromium corpus exercise the same record
 
 This release provides classification, adaptive source collection and bounded decisions.
 Broader driver resolution, cross-function input flow, automatic repairs and
-database execution tests remain future work. Promoting the SQL recipe requires
-an independent synthetic runtime contract and a mutation that restores the
-vulnerable construction and is detected by that contract.
+application-specific database execution tests remain future work. The separate
+[synthetic PostgreSQL contract](sql-runtime-contract.md) checks a fixed text-value
+recipe before/after binding and detects a restored vulnerable mutation. Its
+success does not close any uploaded application's runtime prerequisites.
