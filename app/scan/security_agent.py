@@ -361,4 +361,6 @@ def agent_record(value: object) -> dict | None:
                 result.update(status="partial", stop_reason="agent_chain_invalid")
         else:
             observation["agent_chain"] = chain
+    from app.scan.client_runtime_chain import normalize_client_runtime_attachment
+    normalize_client_runtime_attachment(result)
     return result
