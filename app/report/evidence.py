@@ -739,7 +739,8 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
                        f"Excluded: {_rule_reasons(coverage['exclusion_reasons'], RULE_EXCLUSION_LABELS)}.")
         rows.append((f"Pattern check: {text(item.get('title'))}", detail))
     if not agent["observations"]:
-        rows.append(("Pattern observations", "No reviewed candidates recorded. An empty result does not establish safety."))
+        rows.append(("Pattern observations",
+                     "No reviewed candidates recorded. An empty result does not establish safety."))
     displayed = 0
     for index, observation in enumerate(agent["observations"][:128], 1):
         if (not isinstance(observation, dict) or not isinstance(observation.get("file"), str)
@@ -760,7 +761,8 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
         weaknesses = observation.get("weaknesses")
         weaknesses = [item for item in weaknesses if isinstance(item, str) and re.fullmatch(r"CWE-[1-9][0-9]*", item)
                       ] if isinstance(weaknesses, list) else []
-        rows.append(("Candidate weakness classes", ", ".join(weaknesses) + " — candidate classes, not verified vulnerabilities."
+        rows.append(("Candidate weakness classes",
+                     ", ".join(weaknesses) + " — candidate classes, not verified vulnerabilities."
                      if weaknesses else "Not recorded; do not infer a weakness class."))
         rows.append(("Review state", "Needs evidence; the candidate and repair preconditions remain unverified."))
         evidence = observation.get("evidence")
