@@ -118,7 +118,11 @@ def test_non_sql_candidate_has_its_class_and_manual_review_without_a_recipe():
     assert rows["Candidate weakness classes"].startswith("CWE-502")
     assert "input trust boundary" in rows["Missing evidence"]
     assert "loader runtime contract" in rows["Missing evidence"]
-    assert rows["Source evidence"].startswith("Static rule observation only")
+    assert rows["Deserialization source trace"].startswith("Import-resolved pickle.loads()")
+    assert rows["Review state"].startswith("Needs evidence;")
+    assert "request input source" in rows["Missing evidence"]
+    assert "local input flow" in rows["Missing evidence"]
+    assert "Source fact: request input source" not in rows
     assert rows["Repair guidance"].startswith("No repair recipe available. Manual review is required")
 
 
