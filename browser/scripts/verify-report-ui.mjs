@@ -48,6 +48,36 @@ const report = {
     stop_reason: 'candidate_limit', limitations: ['static_analysis_only'], runtime_verified: false, automatic_patch: false,
   },
 };
+// The same source identity binds every fact and recorded action to this sink.
+const acquiredReport = structuredClone(report);
+const acquiredAgent = acquiredReport.security_agent;
+acquiredAgent.status = 'completed';
+acquiredAgent.stop_reason = 'bounded_review_completed';
+acquiredAgent.budget = { max_candidates: 128, candidates_found: 1, processed: 1, candidates_omitted: 0 };
+const acquired = acquiredAgent.observations[0];
+acquired.title = 'Request input source investigation';
+acquired.state = 'source_evidence_collected';
+acquired.next_action = 'review_runtime_contract';
+acquired.missing_evidence = ['runtime_reachability', 'attacker_control', 'expected_query_contract'];
+acquired.acquisition = {
+  version: 1, status: 'completed', stop_reason: 'source_goal_reached',
+  source: { file: acquired.file, source_sha256: 'b'.repeat(64), sink_span: [9, 4, 9, 42] },
+  facts: [
+    { id: 'request_input_source', method: 'fastapi_ast_binding',
+      sources: [{ parameter: 'user_id', channel: 'query', span: [5, 11, 5, 23] }] },
+    { id: 'local_input_flow', method: 'python_ast_straight_line', locations: [[5, 11, 5, 23], [7, 18, 7, 25], [9, 4, 9, 42]] },
+    { id: 'sql_value_position', method: 'postgresql_ast_slot_context', slots: [{ index: 0, role: 'value' }] },
+    { id: 'value_constraints', method: 'python_ast_constraints',
+      constraints: [{ slot: 0, kind: 'declared_type', type: 'str', span: [5, 20, 5, 23] }] },
+  ],
+  attempts: [
+    { action: 'locate_source', result: 'established', reason: 'source_snapshot_matched', produced: [] },
+    { action: 'trace_request_input', result: 'established', reason: 'request_flow_established', produced: ['request_input_source', 'local_input_flow'] },
+    { action: 'inspect_sql_slots', result: 'established', reason: 'sql_value_positions_established', produced: ['sql_value_position'] },
+    { action: 'collect_value_constraints', result: 'established', reason: 'value_constraints_recorded', produced: ['value_constraints'] },
+  ],
+  budget: { max_steps: 4, steps: 4, work_units: 100 },
+};
 const sarif = { version: '2.1.0', runs: [{ results: report.findings.map(f => ({ message: { text: f.title } })) }] };
 const browser = await chromium.launch();
 try {
@@ -120,6 +150,74 @@ try {
     for await (const chunk of stream) chunks.push(chunk);
     assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()), expected, 'Presentation must not modify exports');
   }
+  async function scanControlled(nextReport) {
+    await page.evaluate(next => { window.scanResponse = next; }, { report: nextReport, sarif });
+    await page.getByRole('button', { name: 'Scan locally', exact: true }).click();
+    await patternReview.locator('summary').click();
+  }
+  await scanControlled(acquiredReport);
+  const acquiredSection = patternReview.locator('section').filter({ hasText: 'Request input source investigation' });
+  await acquiredSection.waitFor({ state: 'visible' });
+  const acquiredText = await acquiredSection.innerText();
+  assert.match(acquiredText, /source evidence collected/);
+  assert.match(acquiredText, /Source investigation[\s\S]*completed; source goal reached/);
+  assert.match(acquiredText, /Investigation: Locate the source[\s\S]*established; source snapshot matched/);
+  assert.match(acquiredText, /Investigation: Trace request input[\s\S]*established; request flow established/);
+  assert.match(acquiredText, /Investigation: Check SQL value positions[\s\S]*established; sql value positions established/);
+  assert.match(acquiredText, /Investigation: Check value constraints[\s\S]*established; value constraints recorded/);
+  assert.match(acquiredText, /query parameter user_id at line 5/);
+  assert.match(acquiredText, /Local flow at lines 5, 7, 9/);
+  assert.match(acquiredText, /1 substitution\(s\) in SQL value positions/);
+  assert.match(acquiredText, /slot 1: declared type str at line 5/);
+  assert.match(acquiredText, /runtime reachability; attacker control; expected query contract/);
+  assert.match(acquiredText, /Review the runtime contract: confirm reachability/);
+  assert.doesNotMatch(acquiredText, /Manual review: trace the input origin/);
+  assert.match(acquiredText, /runtime exploitability and repair behavior remain unverified/);
+  assert.equal(await acquiredSection.locator('img').count(), 0, 'Source identities remain text in acquired evidence');
+  for (const [label, expected] of [['Export JSON', acquiredReport], ['Export SARIF', sarif]]) {
+    const pending = page.waitForEvent('download');
+    await page.getByRole('button', { name: label }).click();
+    const stream = await (await pending).createReadStream();
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()), expected, 'Acquisition display must preserve exports');
+  }
+  const partialReport = structuredClone(acquiredReport);
+  const partialObservation = partialReport.security_agent.observations[0];
+  partialObservation.title = 'Incomplete source investigation';
+  partialObservation.state = 'needs_evidence';
+  partialObservation.next_action = 'manual_review';
+  partialObservation.missing_evidence.unshift('psycopg3_cursor_provenance', 'sql_value_position');
+  partialObservation.evidence.sql_observation.driver_status = 'unknown';
+  delete partialObservation.evidence.sql_observation.driver_provenance;
+  partialObservation.acquisition.status = 'unsupported';
+  partialObservation.acquisition.stop_reason = 'no_further_action';
+  partialObservation.acquisition.facts.splice(2, 1);
+  partialObservation.acquisition.attempts[2] = { action: 'inspect_sql_slots', result: 'unknown',
+    reason: 'sql_slots_not_established', produced: [] };
+  await scanControlled(partialReport);
+  const partialSection = patternReview.locator('section').filter({ hasText: 'Incomplete source investigation' });
+  await partialSection.waitFor({ state: 'visible' });
+  const partialText = await partialSection.innerText();
+  assert.match(partialText, /unsupported; no further action/);
+  assert.match(partialText, /unknown; sql slots not established/);
+  assert.match(partialText, /query parameter user_id at line 5/);
+  assert.match(partialText, /slot 1: declared type str at line 5/);
+  assert.match(partialText, /psycopg3 cursor provenance; sql value position/);
+  assert.match(partialText, /Manual review: inspect the reported source location and gather the missing evidence/);
+  assert.doesNotMatch(partialText, /Review the runtime contract:|substitution\(s\) in SQL value positions/);
+  for (const mutate of [
+    observation => { observation.acquisition.source.source_sha256 = 'c'.repeat(64); },
+    observation => { observation.acquisition.facts.pop(); },
+  ]) {
+    const forged = structuredClone(acquiredReport);
+    mutate(forged.security_agent.observations[0]);
+    await scanControlled(forged);
+    assert.equal(await patternReview.locator('section').count(), 0, 'Invalid acquisition must not promote a decision');
+    assert.match(await patternReview.innerText(), /1 records could not be displayed within the supported schema and limit/);
+    assert.doesNotMatch(await patternReview.innerText(), /Review the runtime contract:|query parameter user_id/);
+  }
+  await scanControlled(acquiredReport);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
   await page.evaluate(() => {
@@ -134,7 +232,7 @@ try {
   assert.equal(await patternReview.isVisible(), false, 'Older reports without pattern review must hide the section');
   assert.equal(await page.locator('#security-agent').textContent(), '', 'Rescanning must clear previous observations');
   assert.deepEqual(errors, []);
-  console.log('Report UI: grouping, retained priority, pattern review evidence, keyboard disclosure, safe text, metadata, exports and mobile layout passed');
+  console.log('Report UI: grouping, retained priority, legacy review, acquired source facts, remaining gaps, rejected forged records, keyboard disclosure, safe text, exports and mobile layout passed');
 } finally {
   await browser.close();
 }

@@ -131,9 +131,10 @@ class _State:
 
 
 class _Trace:
-    def __init__(self, writes, budget):
+    def __init__(self, writes, budget, tree):
         self.writes = writes
         self.budget = budget
+        self.tree = tree
         self.sinks = {}
         self.visited = Counter()
         self.driver_escaped = False
@@ -246,7 +247,12 @@ class _Trace:
                         state.clear()
                 # Only immutable import bindings cross a deferred scope. Never
                 # freeze a connection/cursor from the time a function is defined.
-                if functions and not node.decorator_list:
+                supported_route = False
+                if functions and isinstance(node, ast.FunctionDef) and node.decorator_list:
+                    from app.scan.sql_input_evidence import is_supported_fastapi_route
+
+                    supported_route = is_supported_fastapi_route(self.tree, node, spend=self.budget.spend)
+                if functions and (not node.decorator_list or supported_route):
                     inherited = _State(self)
                     locals_ = _writes(self.budget.walk(node), self.budget)
                     for name, value in state.items():
@@ -367,7 +373,7 @@ def _cursor_provenance(tree, max_nodes, budget):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             if any(not isinstance(target, ast.Name) for target in targets):
                 return {}
-    trace = _Trace(_writes(nodes, budget), budget)
+    trace = _Trace(_writes(nodes, budget), budget, tree)
     trace.block(tree.body, _State(trace))
     if trace.driver_escaped:
         return {}

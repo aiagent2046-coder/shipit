@@ -1,6 +1,6 @@
 # SQL pattern pilot: Python and Psycopg 3
 
-Pattern ID: `python-sql-string-assembly`, revision 2.
+Pattern ID: `python-sql-string-assembly`, revision 3.
 Recipe ID: `sql-value-parameterization-python-psycopg3`, revision 1.
 Status: executable static-evidence pilot selected by the
 [deterministic coordinator](deterministic-security-agent.md). The recipe remains
@@ -70,9 +70,12 @@ semantics. It does not inspect the installed package, import hooks, external
 monkeypatching, connection success or execution. DSNs and source values are not
 copied to the evidence. SQL findings and their severity remain unchanged.
 
-Only `psycopg3_cursor_provenance` is removed from missing recipe prerequisites.
-Attacker control, SQL value position, intended type and runtime behavior still
-require evidence; the next action remains manual review. The implementation
+The driver pass removes only `psycopg3_cursor_provenance` from missing recipe
+prerequisites. The adaptive source collectors can separately establish HTTP
+origin, local input flow, SQL value positions and declared/conversion constraints
+for supported FastAPI handlers. See the [source investigation contract](deterministic-security-agent.md#sql-evidence-and-limits).
+Caller authorization, deployed reachability, intended type and runtime behavior
+still require evidence. The implementation
 and positive/unknown regressions live in `app/scan/psycopg_provenance.py` and
 `tests/test_psycopg_provenance.py`, `tests/test_psycopg_provenance_review.py` and
 `tests/test_psycopg_provenance_budget.py`; browser parity includes these result shapes.
@@ -133,6 +136,7 @@ rule did not produce a finding, not that the application is safe.
 The runtime repair checks in steps 2–4 are proposed work, not capabilities added
 by this PR. The current pilot delivers bounded static evidence, explicit gaps
 and a reviewable recipe. The deterministic coordinator classifies the source
-observation, records which recipe prerequisites are missing, and stops within
-its budget with `next_action: manual_review`. It cannot establish the installed driver's
+observation, gathers supported missing source facts and records which recipe
+prerequisites remain. When all four source facts are collected, the next action
+is `review_runtime_contract`; other candidates retain `manual_review`. It cannot establish the installed driver's
 runtime identity or promote the proposed transformation to an automatic repair.

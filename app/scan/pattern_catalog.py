@@ -17,11 +17,11 @@ from app.capabilities import CAPABILITIES
 
 _CATALOG = {
     "schema_version": 1,
-    "catalog_version": "2026-09-19.1",
+    "catalog_version": "2026-09-19.2",
     "cards": [
         {
             "id": "python-sql-string-assembly",
-            "revision": 2,
+            "revision": 3,
             "title": "SQL text assembled from Python values",
             "languages": ["Python"],
             "weaknesses": [{
@@ -35,10 +35,16 @@ _CATALOG = {
             },
             "applicability": {
                 "candidate_conditions": ["python_source", "sql_string_assembly_at_recognized_sink"],
-                "required_evidence": ["sql_source_observation", "attacker_control"],
+                "required_evidence": ["sql_source_observation", "request_input_source", "local_input_flow",
+                                      "caller_authorization", "route_reachability"],
                 "evidence_descriptions": {
                     "sql_source_observation": "The Python SQL check observed nonliteral query assembly at a sink.",
-                    "attacker_control": "Establish who can influence the assembled value and reach the operation.",
+                    "request_input_source": "Resolve a supported HTTP parameter declaration in the source.",
+                    "local_input_flow": (
+                        "Trace that parameter through supported local assignments to the exact SQL slot."),
+                    "caller_authorization": "Establish which callers are permitted to reach the operation.",
+                    "route_reachability": (
+                        "Establish the deployed route and a feasible execution path to this operation."),
                     "psycopg3_cursor_provenance": (
                         "Trace a same-file import → connect() → cursor() chain; execute() alone is insufficient."),
                     "sql_value_position": "Establish that the expression supplies a SQL value, not an identifier.",
@@ -49,7 +55,8 @@ _CATALOG = {
                     "The source observation does not establish attacker control or runtime exploitability.",
                     "A Python SQL candidate does not establish the narrower Psycopg 3 repair preconditions.",
                     "Static driver provenance does not verify installed modules, input control or runtime behavior.",
-                    "Branches, wrappers, custom factories and cross-file drivers remain unknown.",
+                    "Source evidence collection supports a bounded FastAPI/Psycopg subset; "
+                    "ambiguous paths remain unknown.",
                     "Cross-file builders, dynamic drivers and authorization require separate evidence.",
                     "Missing or partial rule coverage remains incomplete even when a candidate is present.",
                 ],

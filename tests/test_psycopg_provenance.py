@@ -115,7 +115,8 @@ def test_one_prerequisite_is_removed_but_runtime_and_repair_remain_manual():
     result = report({'src/query.py': CHAIN + SINK})
     observation, = result['security_agent']['observations']
     assert set(observation['missing_evidence']) == {
-        'attacker_control', 'sql_value_position', 'intended_value_type', 'runtime_behavior_contract',
+        'request_input_source', 'local_input_flow', 'caller_authorization', 'route_reachability',
+        'sql_value_position', 'intended_value_type', 'runtime_behavior_contract',
     }
     assert observation['state'] == 'needs_evidence'
     assert observation['next_action'] == 'manual_review'
@@ -189,3 +190,43 @@ def test_deferred_import_proof_is_lost_when_the_module_escapes(escape):
     source = ('import psycopg\ndef load():\n    c = psycopg.connect(dsn)\n'
               '    cur = c.cursor()\n    ' + SINK + escape)
     assert trace(source)[0]['driver_status'] == 'unknown'
+
+
+FASTAPI_ROUTE = (
+    'from fastapi import FastAPI\n'
+    'import psycopg\n'
+    'app = FastAPI()\n'
+    '@app.get("/users")\n'
+    'def load(user_id: str):\n'
+    '    conn = psycopg.connect(dsn)\n'
+    '    cur = conn.cursor()\n'
+    '    cur.execute(f"SELECT {user_id}")\n'
+)
+
+
+@pytest.mark.parametrize('source', [
+    FASTAPI_ROUTE,
+    FASTAPI_ROUTE.replace('from fastapi import FastAPI', 'from fastapi import APIRouter as FastAPI'),
+])
+def test_supported_fastapi_registration_preserves_local_cursor_source_chain(source):
+    value, = trace(source)
+    assert value['driver_status'] == 'source_resolved'
+    assert value['driver_provenance']['import_line'] == 2
+    assert value['driver_provenance']['connection_line'] == 6
+    assert value['driver_provenance']['cursor_line'] == 7
+
+
+@pytest.mark.parametrize('source', [
+    FASTAPI_ROUTE.replace('@app.get("/users")', '@unknown'),
+    FASTAPI_ROUTE.replace('@app.get("/users")', '@unknown\n@app.get("/users")'),
+    FASTAPI_ROUTE.replace('from fastapi import FastAPI', 'from other import FastAPI'),
+    FASTAPI_ROUTE.replace('app = FastAPI()', 'app = FastAPI()\napp = CustomApp()'),
+    FASTAPI_ROUTE + 'def helper(value=mutate()):\n    pass\n',
+    FASTAPI_ROUTE + 'def helper(value: mutate()):\n    pass\n',
+    FASTAPI_ROUTE + 'def helper(router=app):\n    pass\n',
+], ids=['unknown-decorator', 'additional-decorator', 'shadowed-factory', 'rebound-app',
+        'helper-default', 'helper-annotation', 'escaped-router'])
+def test_unproven_decorators_and_helper_metadata_keep_cursor_proof_unknown(source):
+    value, = trace(source)
+    assert value['driver_status'] == 'unknown'
+    assert 'driver_provenance' not in value

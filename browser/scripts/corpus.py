@@ -102,6 +102,39 @@ def provenance_cases():
                'native': result}
 
 
+def acquisition_cases():
+    source = ('from fastapi import FastAPI\nimport psycopg\napp = FastAPI()\n'
+              '@app.get("/users")\ndef load(name: str):\n'
+              '    conn = psycopg.connect(dsn)\n    cur = conn.cursor()\n'
+              '    cur.execute(f"SELECT id FROM users WHERE name = \'{name}\'")\n')
+    for name, body, established, skipped in (
+        ('source-goal', source, True, set()),
+        ('unknown-driver', source.replace('connect(dsn)', 'connect(dsn, cursor_factory=CustomCursor)'),
+         False, {'inspect_sql_slots'}),
+        ('unknown-wrapper', source.replace("'{name}'", "'{normalize(name)}'"),
+         False, {'collect_value_constraints'}),
+        ('dynamic-identifier', source.replace("SELECT id FROM users WHERE name = '{name}'",
+                                            'SELECT id FROM {name} WHERE id = 1'), False, set()),
+        ('bound-input', source.replace("'{name}'", "'{value}'").replace(
+            '    cur.execute', '    value = name\n    name = "constant"\n    cur.execute'), True, set()),
+    ):
+        data = archive({'src/query.py': body})
+        result = scan_archive(data)
+        decision, = result['report']['security_agent']['observations']
+        acquisition = decision['acquisition']
+        assert (decision['state'] == 'source_evidence_collected') == established
+        assert (acquisition['status'] == 'completed') == established
+        assert not skipped.intersection(step['action'] for step in acquisition['attempts'])
+        assert {'caller_authorization', 'route_reachability', 'intended_value_type',
+                'runtime_behavior_contract'} <= set(decision['missing_evidence'])
+        assert not result['report']['security_agent']['runtime_verified']
+        assert not decision['recipe']['automatic_apply']
+        yield {'id': f'sql-evidence-agent/{name}', 'rule': 'sql-injection-string-built-query',
+               'polarity': 'positive', 'archive': base64.b64encode(data).decode(),
+               'expected': {'expect': [{'rule_id': 'sql-injection-string-built-query', 'count': 1}]},
+               'native': result}
+
+
 def main():
     if "--portable" in sys.argv:
         # Reuse the exact uploaded bytes: independently rebuilt ZIP timestamps
@@ -121,6 +154,7 @@ def main():
                       'archive': base64.b64encode(data).decode(), 'expected': expected,
                       'native': scan_archive(data)})
     cases.extend(provenance_cases())
+    cases.extend(acquisition_cases())
     portable = json.loads(subprocess.run(
         [sys.executable, __file__, "--portable"], check=True, capture_output=True, text=True,
         input=json.dumps([case['archive'] for case in cases]),

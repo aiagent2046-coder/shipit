@@ -1,9 +1,7 @@
-"""Bounded, deterministic review of observations against bundled pattern cards.
+"""Bounded review and adaptive collection of source evidence for pattern cards.
 
-The existing scanners execute the detection phase. This coordinator selects
-cards, checks their evidence requirements and records the next permitted step.
-It does not run project code, call a model, apply patches or infer a driver's
-identity from an execute() method name.
+The coordinator selects actions from missing facts and validates each result
+before planning again. It never runs project code, calls a model or patches it.
 """
 from __future__ import annotations
 
@@ -15,6 +13,8 @@ import re
 
 from app.scan.pattern_catalog import catalog_manifest
 from app.scan.rule_coverage import normalize_rule_coverage
+from app.scan.evidence_acquisition import EvidenceBudget, acquire_sql_evidence
+from app.scan.source_snapshot import SourceSnapshot
 
 MAX_CANDIDATES = 128
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -97,13 +97,18 @@ def _base(archive_sha256: str, engine_version: str) -> dict:
     }
 
 
-def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: int) -> dict:
+def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: int,
+                      source_snapshot=None, evidence_budget=None) -> dict:
     trace = sql_observation(finding) if card["detection"]["check"] == "sql_injection" else None
     established = {"static_rule_observation", "source_pattern"}
     if trace is not None:
         established.add("sql_source_observation")
         if trace.get("driver_status") == "source_resolved":
             established.add("psycopg3_cursor_provenance")
+    acquisition = None
+    if trace is not None:
+        acquisition = acquire_sql_evidence(trace, source_snapshot, evidence_budget or EvidenceBudget())
+        established.update(fact["id"] for fact in acquisition["facts"])
     required = list(dict.fromkeys([
         *card["applicability"]["required_evidence"], *card["recipe"]["preconditions"],
     ]))
@@ -116,8 +121,13 @@ def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: i
         "pattern_id": card["id"], "pattern_revision": card["revision"], "title": card["title"],
         "weaknesses": [weakness["id"] for weakness in card["weaknesses"]],
         "rule_id": finding["rule_id"], "file": finding["file"], "line": finding["line"],
-        "state": "needs_evidence", "evidence": {"sql_observation": trace} if trace else {},
-        "missing_evidence": missing, "next_action": "manual_review",
+        "state": ("source_evidence_collected" if acquisition and acquisition["status"] == "completed"
+                  else "needs_evidence"),
+        "evidence": {"sql_observation": trace} if trace else {},
+        **({"acquisition": acquisition} if acquisition is not None else {}),
+        "missing_evidence": missing,
+        "next_action": ("review_runtime_contract" if acquisition and acquisition["status"] == "completed"
+                        else "manual_review"),
         "recipe": {"id": recipe.get("id"), "status": recipe["status"], "automatic_apply": False},
         "steps": [
             {"action": "classify_observation", "result": "candidate_weakness_class"},
@@ -129,15 +139,13 @@ def _review_candidate(card: dict, finding: dict, archive_sha256: str, ordinal: i
     }
 
 
-def review_static_observations(static: dict, *, archive_sha256: str, engine_version: str) -> dict:
-    """Reproducible one-pass state machine over an immutable scan snapshot.
-
-    Missing source/driver/runtime evidence ends in manual review, not a retry
-    loop. Coverage failures and exhausted candidate budgets survive separately
-    from observed findings. Completion never means the project is safe.
-    """
+def review_static_observations(static: dict, *, archive_sha256: str, engine_version: str,
+                              source_snapshot=None) -> dict:
+    """Re-plan supported source checks while retaining independent coverage gaps."""
     if not isinstance(archive_sha256, str) or not _SHA256.fullmatch(archive_sha256):
         raise ValueError("Invalid source snapshot identity")
+    if source_snapshot is not None and source_snapshot.archive_sha256 != archive_sha256:
+        raise ValueError("Source snapshot identity mismatch")
     manifest = catalog_manifest()
     cards = sorted(manifest["cards"], key=lambda card: card["id"])
     result = _base(archive_sha256, engine_version)
@@ -170,33 +178,46 @@ def review_static_observations(static: dict, *, archive_sha256: str, engine_vers
         json.dumps(sql_observation(row[1]), sort_keys=True),
     ))
     occurrences: Counter = Counter()
+    evidence_budget = EvidenceBudget()
     for card, finding in candidates[:MAX_CANDIDATES]:
         key = (card["id"], finding["rule_id"], finding["file"], finding["line"])
         ordinal = occurrences[key]
         occurrences[key] += 1
-        result["observations"].append(_review_candidate(card, finding, archive_sha256, ordinal))
+        result["observations"].append(_review_candidate(card, finding, archive_sha256, ordinal,
+                                                      source_snapshot, evidence_budget))
     omitted = max(0, len(candidates) - MAX_CANDIDATES)
     result["budget"].update(candidates_found=len(candidates), processed=len(result["observations"]),
-                            candidates_omitted=omitted)
+                            candidates_omitted=omitted, evidence_actions=evidence_budget.actions,
+                            max_evidence_actions=evidence_budget.max_actions,
+                            evidence_work=evidence_budget.maximum - evidence_budget.remaining,
+                            max_evidence_work=evidence_budget.maximum)
     statuses = {row["status"] for row in result["plan"]}
     if statuses == {"unavailable"}:
         result["status"], result["stop_reason"] = "unavailable", "checks_unavailable"
     elif omitted or statuses & {"unavailable", "partial"}:
         result["status"] = "partial"
         result["stop_reason"] = "candidate_budget_exhausted" if omitted else "coverage_incomplete"
+    elif any(row.get("acquisition", {}).get("status") == "partial" for row in result["observations"]):
+        result["status"], result["stop_reason"] = "partial", "evidence_collection_incomplete"
     else:
         result["status"], result["stop_reason"] = "completed", "bounded_review_completed"
     return result
 
 
-def attach_security_agent(static: dict, *, archive_sha256: str, engine_version: str) -> None:
+def attach_security_agent(static: dict, *, archive_sha256: str, engine_version: str, source_archive=None) -> None:
     """An unavailable coordinator never discards successful scanner findings."""
+    snapshot = None
     try:
+        if source_archive is not None and any(sql_observation(row) for row in static.get("findings", [])):
+            snapshot = SourceSnapshot.from_archive(source_archive, archive_sha256=archive_sha256)
         result = review_static_observations(static, archive_sha256=archive_sha256,
-                                            engine_version=engine_version)
+                                            engine_version=engine_version, source_snapshot=snapshot)
     except Exception as exc:  # Same isolation boundary as the detector stage.
         result = _base(archive_sha256, engine_version)
         result["stop_reason"] = f"agent_error: {type(exc).__name__}"
+    finally:
+        if snapshot is not None:
+            snapshot.close()
     static["security_agent"] = result
     limitations = [item for item in static.get("limitations", [])
                    if item not in {"security_agent_unavailable", "security_agent_incomplete"}]
