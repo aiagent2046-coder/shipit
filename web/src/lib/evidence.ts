@@ -2,6 +2,7 @@ import type { Finding, ModelAcceptance, Score, Severity, SourceAssessment, Stati
 import { narrativeProjection as checkedNarrativeProjection } from "./claimNarrative";
 import { cveRows, cveNotices } from "./cveEvidence";
 import { snapshotRows, snapshotNotices, snapshotScopeReasons, snapshotFindingRows } from "./dependencySnapshot";
+import { patternReview, patternReviewNotices, sqlEvidenceRows } from "./securityAgent";
 
 const nonProductionContexts = new Set([
   "test_fixture", "test_file", "comment", "doc_example", "ci_service",
@@ -153,6 +154,7 @@ export function claimEvidenceRows(finding: Finding, historical = false): [string
         ? "A locked package version matched an advisory. Application reachability was not checked."
       : "Not recorded for this finding; do not assume the cited code was verified.";
   const rows: [string, string][] = [["Source check", checked]];
+  rows.push(...sqlEvidenceRows(finding));
   if (finding.source === "dependency" && finding.verification_method === "package_version_match") {
     rows.push(...snapshotFindingRows(record));
   }
@@ -276,7 +278,13 @@ export function claimEvidenceRows(finding: Finding, historical = false): [string
       + "remain unverified. Severity and score eligibility are unchanged."]);
     rows.push(["Original model provenance — not independent confirmation", JSON.stringify(projection.original.producer)]);
   }
-  if (record?.observation) rows.push([projection ? "Source interpretation — outcome unverified" : "Model interpretation — unverified", record.observation]);
+  if (record?.observation) {
+    const label = projection ? "Source interpretation — outcome unverified"
+      : finding.source === "llm" || finding.rule_id?.startsWith("llm-") ? "Model interpretation — unverified"
+      : finding.source === "static" ? "Static observation — unverified"
+      : finding.source === "dependency" ? "Source observation — unverified" : "Legacy observation — provenance not recorded";
+    rows.push([label, record.observation]);
+  }
   rows.push(["Required conditions — not checked", record?.required_conditions?.length
     ? record.required_conditions.join("\n") : "Not recorded; do not assume the conditions for harm are satisfied."]);
   rows.push(["Consequence check", "No independent verification recorded."]);
@@ -445,6 +453,8 @@ function ruleCoverageRows(score: Score): [string, string][] {
 function classifiedLimits(score: Score): [string[], string[], string[]] {
   const model: string[] = [], dependency: string[] = [], other: string[] = [];
   for (const reason of score.scan_manifest?.limitations ?? []) {
+    if (["security_agent_unavailable", "security_agent_incomplete"].includes(reason)
+      && patternReviewNotices(score.scan_manifest?.security_agent).length) continue;
     if (reason === "static_checks_failed" && normalizedCheckFailures(score.scan_manifest?.static_checks_not_run).length) continue;
     if (modelLimitations.has(reason) || reason.startsWith("rubric_failed:")) model.push(reason);
     else if (dependencyLimitations.has(reason)) dependency.push(reason);
@@ -482,7 +492,8 @@ export function nonModelStatusNotices(score: Score): [string, string][] {
   const manifest = score.scan_manifest;
   const hasSnapshot = manifest?.dependency_cve != null || manifest?.dependency_snapshot != null;
   const notices: [string, string][] = [...cveNotices(manifest?.sca_cve),
-    ...snapshotNotices(manifest?.dependency_cve, manifest?.dependency_snapshot)];
+    ...snapshotNotices(manifest?.dependency_cve, manifest?.dependency_snapshot),
+    ...patternReviewNotices(manifest?.security_agent)];
   const handled = new Set([...snapshotScopeReasons, "dependency_snapshot_unavailable",
     ...(manifest?.sca_skipped_reason === "no_client" ? ["dependency_coverage_incomplete"] : [])]);
   const dependency = hasSnapshot ? recordedDependency.filter(reason => !handled.has(reason)) : recordedDependency;
@@ -687,6 +698,7 @@ export function manifestRows(score: Score): [string, string][] {
     ["Last responding model", m.model || "No model response recorded"],
     ["Model responses", String(m.model_calls)],
     ["Review areas applied", m.rubrics_completed.join(", ") || "None"],
+    ...(patternReview(m.security_agent)?.rows.slice(0, 2) ?? []),
     ["Files eligible for model review", String(m.llm_candidate_files ?? "Not recorded")],
     ["Unique files submitted to model", String(m.llm_submitted_files ?? "Not recorded")],
     ["Eligible files not submitted", String(m.llm_files_not_submitted ?? "Not recorded")],

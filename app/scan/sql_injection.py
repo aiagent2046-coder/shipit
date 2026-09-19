@@ -37,12 +37,14 @@ module, import it, or evaluate any expression inside it.
 from __future__ import annotations
 
 import ast
+import hashlib
 import zipfile
 import zlib
 from dataclasses import dataclass
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
+from app.scan.claim_evidence import static_claim_evidence
 from app.scan.rule_coverage import RuleCoverage, mark_analysis_limit, remaining_findings, track_analysis_limits
 
 RULE_ID = "sql-injection-string-built-query"
@@ -99,6 +101,16 @@ _MAX_FILE_BYTES = 400_000
 _MAX_FILES = 400
 _MAX_FINDINGS = 32
 _MAX_NODES = 80_000
+
+# Machine-readable names follow the existing AST classifications. Keep the
+# prose labels unchanged: they are part of the detector's legacy output.
+_ASSEMBLY_KINDS = {
+    "string concatenation with +": "concatenation",
+    "%-formatting": "percent_format",
+    "an f-string": "f_string",
+    ".format()": "format_call",
+    ".join()": "join_call",
+}
 
 
 class _AnalysisLimitReached(Exception):
@@ -322,6 +334,7 @@ class _QueryFlow:
 
     def __init__(self):
         self.findings: set[tuple[int, str, str]] = set()
+        self.observations: dict[tuple[int, str, str], dict] = {}
         self.remaining = _MAX_NODES
 
     def _text_import(self, node: ast.AST, state) -> str | None:
@@ -498,9 +511,22 @@ class _QueryFlow:
             value = arguments[0]
             if value.assembly:
                 line, kind = value.assembly
+                assembly_kind = _ASSEMBLY_KINDS[kind]
                 if isinstance(argument, ast.Name):
                     kind = f"{kind} at line {line}"
-                self.findings.add((node.lineno, node.func.attr, kind))
+                signal = (node.lineno, node.func.attr, kind)
+                self.findings.add(signal)
+                # Merged branches and bounded loop passes preserve a possible
+                # assembly value, not proof that a runtime execution takes it.
+                # The first supporting trace is enough when legacy findings
+                # collapse multiple same-line observations into one signal.
+                self.observations.setdefault(signal, {
+                    "assembly_line": line,
+                    "assembly_kind": assembly_kind,
+                    "sink_line": node.lineno,
+                    "sink_method": node.func.attr,
+                    "flow_status": "possible_local_flow",
+                })
         # A literal container stops being a constant after an opaque mutation.
         if node.func.attr in {"append", "extend", "insert", "update", "add", "setdefault"}:
             receiver = self.value(node.func.value, state)
@@ -630,7 +656,8 @@ class _QueryFlow:
         return state
 
 
-def _find_in_module(tree: ast.AST) -> list[tuple[int, str, str]]:
+def _find_in_module(tree: ast.AST, *, observations: dict | None = None) -> list[tuple[int, str, str]]:
+    """Keep legacy signals; optionally collect their source-location facts."""
     flow = _QueryFlow()
     try:
         _, stable = _scope_bindings(tree)
@@ -639,6 +666,8 @@ def _find_in_module(tree: ast.AST) -> list[tuple[int, str, str]]:
         # A deeply nested uploaded expression must not abort the archive's
         # static stage. Preserve findings already established before the limit.
         mark_analysis_limit()
+    if observations is not None:
+        observations.update(flow.observations)
     return sorted(flow.findings)
 
 
@@ -677,8 +706,10 @@ def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
                 accounting.skip("ast_limit")
                 continue
 
+            observations: dict[tuple[int, str, str], dict] = {}
             with track_analysis_limits() as limits:
-                signals = _find_in_module(tree)
+                signals = _find_in_module(tree, observations=observations)
+            source_digest = hashlib.sha256(raw).hexdigest()
             available = finding_limit - len(findings)
             for line, sink, kind in signals[:available]:
                 observation = (
@@ -699,6 +730,19 @@ def scan_sql_injection(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
                     category="Security",
                     file=name,
                     line=line,
+                    claim_evidence={
+                        **static_claim_evidence(),
+                        "observation": observation,
+                        "sql_observation": {
+                            "version": 1,
+                            "method": "python_ast_local_flow",
+                            "source_sha256": source_digest,
+                            "file": name,
+                            **observations[(line, sink, kind)],
+                            "driver_status": "not_checked",
+                            "input_control_status": "not_checked",
+                        },
+                    },
                     explanation=observation + " If any part of that string comes from a request, "
                     "a form, a URL or another user-controlled source, the database receives it as "
                     "SQL rather than as data, and an attacker can change what the query does -- "

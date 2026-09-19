@@ -22,6 +22,7 @@ from app.report.cve import cve_rows, cve_notices
 from app.report.dependency_snapshot import SCOPE_REASONS, snapshot_rows, snapshot_notices, snapshot_finding_rows
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
+from app.scan.security_agent import agent_record, sql_observation
 
 
 def is_non_production(finding: dict) -> bool:
@@ -194,6 +195,10 @@ def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
     has_snapshot = manifest.get("dependency_cve") is not None or manifest.get("dependency_snapshot") is not None
     notices = [*cve_notices(manifest.get("sca_cve")),
                *snapshot_notices(manifest.get("dependency_cve"), manifest.get("dependency_snapshot"))]
+    agent = agent_record(manifest.get("security_agent"))
+    if agent and agent["status"] in {"unavailable", "partial"}:
+        notices.append(("Pattern review incomplete", "The coordinator could not complete its bounded plan. "
+                        "Existing findings are retained; missing review does not establish safety."))
     if has_snapshot:
         handled = SCOPE_REASONS | {"dependency_snapshot_unavailable"}
         if manifest.get("sca_skipped_reason") == "no_client":
@@ -382,6 +387,13 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
     else:
         checked = "Not recorded for this finding; do not assume the cited code was verified."
     rows = [("Source check", checked)]
+    if trace := sql_observation(finding):
+        rows.extend([
+            ("SQL source trace", f"{trace['assembly_kind']} at line {trace['assembly_line']} → "
+             f"{trace['sink_method']}() at line {trace['sink_line']}. Possible local flow; "
+             "driver identity, input control and runtime behavior were not checked."),
+            ("SQL source SHA-256", trace["source_sha256"]),
+        ])
     if finding.get("source") == "dependency" and finding.get("verification_method") == "package_version_match":
         rows.extend(snapshot_finding_rows(record))
     if not historical and unsupported_transport(record):
@@ -510,7 +522,16 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
         rows.append(("Original model provenance — not independent confirmation",
                      json.dumps(projection["original"]["producer"], ensure_ascii=False)))
     if record.get("observation"):
-        label = "Source interpretation — outcome unverified" if projection else "Model interpretation — unverified"
+        if projection:
+            label = "Source interpretation — outcome unverified"
+        elif finding.get("source") == "llm" or str(finding.get("rule_id", "")).startswith("llm-"):
+            label = "Model interpretation — unverified"
+        elif finding.get("source") == "static":
+            label = "Static observation — unverified"
+        elif finding.get("source") == "dependency":
+            label = "Source observation — unverified"
+        else:
+            label = "Legacy observation — provenance not recorded"
         rows.append((label, record["observation"]))
     conditions = record.get("required_conditions")
     rows.append(("Required conditions — not checked", "\n".join(conditions) if conditions else
@@ -644,6 +665,140 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
             f"this application was not checked.{aged}")
 
 
+def security_agent_rows(value: object) -> list[tuple[str, str]]:
+    """Explain the saved bounded review without substituting today's catalog.
+
+    Recipe identities and unmet prerequisites are recorded by the coordinator;
+    they do not authorize a patch or establish the candidate weakness at runtime.
+    The HTML consumers escape every label and value, including archive paths.
+    """
+    agent = agent_record(value)
+    if agent is None:
+        return []
+
+    def text(value: object, fallback: str = "Not recorded") -> str:
+        return value if isinstance(value, str) and value.strip() else fallback
+
+    def count(value: object) -> str:
+        return str(value) if type(value) is int and value >= 0 else "Not recorded"
+
+    def humanize(value: object) -> str:
+        return text(value).replace("_", " ")
+
+    stop = agent.get("stop_reason")
+    known_stops = {"agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
+                   "coverage_incomplete", "bounded_review_completed"}
+    # Saved diagnostics are untrusted. Only the producer's type-only error
+    # form is displayable; never echo exception messages or arbitrary reasons.
+    if not (isinstance(stop, str) and (stop in known_stops
+            or re.fullmatch(r"agent_error: [A-Za-z_][A-Za-z0-9_]{0,127}", stop))):
+        stop = "Stop reason not recorded"
+    catalog = agent.get("catalog")
+    catalog = catalog if isinstance(catalog, dict) else {}
+    source = agent.get("source")
+    source = source if isinstance(source, dict) else {}
+    budget = agent["budget"]
+    rows = [
+        ("Pattern review", f"{agent['status']}; {len(agent['observations'])} observations; "
+         f"{stop}. Completion describes bounded review, not project safety."),
+        ("Pattern catalog", f"{text(catalog.get('version'), 'Unavailable')}; "
+         f"SHA-256: {text(catalog.get('sha256'), 'Unavailable')}"),
+        ("Pattern catalog cards", count(catalog.get("cards"))),
+        ("Pattern review source", f"Archive SHA-256: {text(source.get('archive_sha256'))}; "
+         f"engine: {text(source.get('engine_version'))}."),
+        ("Candidate review budget", f"{count(budget.get('processed'))} processed of "
+         f"{count(budget.get('candidates_found'))} candidates; "
+         f"{count(budget.get('candidates_omitted'))} omitted; "
+         f"limit: {count(budget.get('max_candidates'))}."),
+        ("Pattern review limits", "Selected static patterns only. Candidate classes are unverified; "
+         "attacker control, driver identity and runtime behavior were not checked. "
+         "No runtime tests or automatic patches were run."),
+    ]
+    plan_labels = {
+        "analyzed": "Analyzed within the recorded scope",
+        "not_applicable": "No eligible files for this check",
+        "partial": "Partial check; coverage is incomplete",
+        "unavailable": "Check unavailable; coverage is not established",
+    }
+    for item in agent["plan"]:
+        if not isinstance(item, dict):
+            continue
+        check = text(item.get("check"))
+        status = item.get("status")
+        detail = plan_labels.get(status, "Review status not recorded") if isinstance(status, str) else (
+            "Review status not recorded")
+        detail += f". Pattern: {text(item.get('pattern_id'))}; check: {check}."
+        coverage = (normalize_rule_coverage({check: item.get("coverage")}) or {}).get(check)
+        if coverage is None:
+            detail += " File coverage not recorded."
+        else:
+            detail += (f" {coverage['analyzed_files']} of {coverage['eligible_files']} eligible files analyzed; "
+                       f"{coverage['attempted_files']} attempted; {coverage['skipped_files']} not fully analyzed; "
+                       f"{coverage['excluded_files']} excluded from {coverage['files_total']} archive files. "
+                       f"Not fully analyzed: {_rule_reasons(coverage['skip_reasons'], RULE_SKIP_LABELS)}. "
+                       f"Excluded: {_rule_reasons(coverage['exclusion_reasons'], RULE_EXCLUSION_LABELS)}.")
+        rows.append((f"Pattern check: {text(item.get('title'))}", detail))
+    if not agent["observations"]:
+        rows.append(("Pattern observations",
+                     "No reviewed candidates recorded. An empty result does not establish safety."))
+    displayed = 0
+    for index, observation in enumerate(agent["observations"][:128], 1):
+        if (not isinstance(observation, dict) or not isinstance(observation.get("file"), str)
+                or type(observation.get("line")) is not int or observation["line"] < 1
+                or observation.get("state") != "needs_evidence"
+                or observation.get("next_action") != "manual_review"):
+            continue
+        recipe = observation.get("recipe")
+        if (not isinstance(recipe, dict) or recipe.get("automatic_apply") is not False
+                or recipe.get("status") not in ("manual_guidance", "not_available")):
+            continue
+        displayed += 1
+        rows.append((f"Pattern observation {index}",
+                     f"{text(observation.get('title'))} — {text(observation.get('file'))}:"
+                     f"{count(observation.get('line'))}. Pattern: {text(observation.get('pattern_id'))}, "
+                     f"revision {count(observation.get('pattern_revision'))}; "
+                     f"rule: {text(observation.get('rule_id'))}."))
+        weaknesses = observation.get("weaknesses")
+        weaknesses = [item for item in weaknesses if isinstance(item, str) and re.fullmatch(r"CWE-[1-9][0-9]*", item)
+                      ] if isinstance(weaknesses, list) else []
+        rows.append(("Candidate weakness classes",
+                     ", ".join(weaknesses) + " — candidate classes, not verified vulnerabilities."
+                     if weaknesses else "Not recorded; do not infer a weakness class."))
+        rows.append(("Review state", "Needs evidence; the candidate and repair preconditions remain unverified."))
+        evidence = observation.get("evidence")
+        trace = sql_observation({"source": "static", "rule_id": observation.get("rule_id"),
+                                 "file": observation.get("file"), "line": observation.get("line"),
+                                 "claim_evidence": {"version": 1, **evidence}}) if isinstance(evidence, dict) else None
+        if trace:
+            rows.extend([
+                ("SQL source trace", f"{humanize(trace['assembly_kind'])} at line {trace['assembly_line']} → "
+                 f"{trace['sink_method']}() at line {trace['sink_line']}. Possible local flow; "
+                 "driver identity, input control and runtime behavior were not checked."),
+                ("SQL source SHA-256", trace["source_sha256"]),
+            ])
+        else:
+            rows.append(("Source evidence", "Static rule observation only; no additional SQL source trace recorded."))
+        missing = observation.get("missing_evidence")
+        missing = [item for item in missing if isinstance(item, str)] if isinstance(missing, list) else []
+        rows.append(("Missing evidence", "; ".join(humanize(item) for item in missing) if missing else
+                     "Not recorded; do not assume the repair preconditions are satisfied."))
+        rows.append(("Next step", "Manual review: gather the missing evidence before evaluating a repair."))
+        guidance = (f"{text(recipe.get('id'))} — manual guidance only; establish the missing preconditions "
+                    "before applying the recorded recipe. No automatic patch was applied."
+                    if recipe.get("status") == "manual_guidance" and recipe.get("automatic_apply") is False else
+                    "No repair recipe available. Manual review is required; no automatic patch was applied.")
+        rows.append(("Repair guidance", guidance))
+        steps = observation.get("steps")
+        steps = [step for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
+        if steps:
+            rows.append(("Review steps", "; ".join(f"{humanize(step.get('action'))}: {humanize(step.get('result'))}"
+                                                   for step in steps)))
+    if displayed < len(agent["observations"]):
+        rows.append(("Observation display incomplete", f"{len(agent['observations']) - displayed} records "
+                     "could not be displayed within the supported schema and limit."))
+    return rows
+
+
 def manifest_rows(score: dict) -> list[tuple[str, str]]:
     manifest = score.get("scan_manifest")
     if not isinstance(manifest, dict):
@@ -661,6 +816,7 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Model responses", str(manifest.get("model_calls", 0))),
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),
     ]
+    rows.extend(security_agent_rows(manifest.get("security_agent")))
     accounting = manifest.get("model_findings")
     rows.extend((f"Static check failed: {item['check']}", item["reason"])
                 for item in normalize_check_failures(manifest.get("static_checks_not_run")))
