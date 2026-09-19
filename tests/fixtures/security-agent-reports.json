@@ -1,0 +1,553 @@
+[
+  {
+    "name": "completed",
+    "files": {
+      "src/query.py": "def load(cursor, user_id):\n    query = \"SELECT id FROM users WHERE id = \" + user_id\n    cursor.execute(query)\n"
+    },
+    "score": {
+      "total": 9.5,
+      "categories": {
+        "Security": 9.0,
+        "Auth": 10.0,
+        "Testing": 9.7,
+        "Deploy": 9.8,
+        "Money & Data": 10.0,
+        "Frontend": 10.0
+      },
+      "basis": "static_only",
+      "scan_manifest": {
+        "archive_sha256": "dca802b7bb62639fbe3b6ea02e9eef5c0d2ede892fb595aa5db0160fc0dac992",
+        "engine_version": "2026-09-18-6",
+        "archive_files": 1,
+        "commit_sha": null,
+        "model": null,
+        "model_calls": 0,
+        "rubrics_completed": [],
+        "llm_candidate_files": null,
+        "llm_submitted_files": 0,
+        "llm_files_not_submitted": null,
+        "runtime_verified": false,
+        "security_agent": {
+          "version": 1,
+          "mode": "deterministic_static",
+          "source": {
+            "archive_sha256": "dca802b7bb62639fbe3b6ea02e9eef5c0d2ede892fb595aa5db0160fc0dac992",
+            "engine_version": "2026-09-18-6"
+          },
+          "catalog": {
+            "version": "2026-09-18.1",
+            "sha256": "56a1516de66fc1772037e67c94e98a6ce3845e8808faa57d879bac78cee95f38",
+            "cards": 3
+          },
+          "status": "completed",
+          "plan": [
+            {
+              "pattern_id": "python-outbound-request-input",
+              "title": "Python outbound address influenced by a request",
+              "check": "outbound_url",
+              "status": "analyzed",
+              "coverage": {
+                "version": 1,
+                "files_total": 1,
+                "eligible_files": 1,
+                "attempted_files": 1,
+                "analyzed_files": 1,
+                "excluded_files": 0,
+                "skipped_files": 0,
+                "exclusion_reasons": {},
+                "skip_reasons": {},
+                "partial": false
+              }
+            },
+            {
+              "pattern_id": "python-sql-string-assembly",
+              "title": "SQL text assembled from Python values",
+              "check": "sql_injection",
+              "status": "analyzed",
+              "coverage": {
+                "version": 1,
+                "files_total": 1,
+                "eligible_files": 1,
+                "attempted_files": 1,
+                "analyzed_files": 1,
+                "excluded_files": 0,
+                "skipped_files": 0,
+                "exclusion_reasons": {},
+                "skip_reasons": {},
+                "partial": false
+              }
+            },
+            {
+              "pattern_id": "python-unsafe-deserialization",
+              "title": "Python deserialization requiring trusted input",
+              "check": "unsafe_deserialization",
+              "status": "analyzed",
+              "coverage": {
+                "version": 1,
+                "files_total": 1,
+                "eligible_files": 1,
+                "attempted_files": 1,
+                "analyzed_files": 1,
+                "excluded_files": 0,
+                "skipped_files": 0,
+                "exclusion_reasons": {},
+                "skip_reasons": {},
+                "partial": false
+              }
+            }
+          ],
+          "observations": [
+            {
+              "id": "0fec39d2721b0317cd6bb51942e67523e54b928441d8b9971634ac726a382618",
+              "pattern_id": "python-sql-string-assembly",
+              "pattern_revision": 1,
+              "title": "SQL text assembled from Python values",
+              "weaknesses": [
+                "CWE-89"
+              ],
+              "rule_id": "sql-injection-string-built-query",
+              "file": "src/query.py",
+              "line": 3,
+              "state": "needs_evidence",
+              "evidence": {
+                "sql_observation": {
+                  "version": 1,
+                  "method": "python_ast_local_flow",
+                  "file": "src/query.py",
+                  "source_sha256": "0f35922617352bab36a6d8acad02c3d605cece7d849acd6ba33e1b225a5e465d",
+                  "assembly_line": 2,
+                  "assembly_kind": "concatenation",
+                  "sink_line": 3,
+                  "sink_method": "execute",
+                  "flow_status": "possible_local_flow",
+                  "driver_status": "not_checked",
+                  "input_control_status": "not_checked"
+                }
+              },
+              "missing_evidence": [
+                "attacker_control",
+                "psycopg3_cursor_provenance",
+                "sql_value_position",
+                "intended_value_type",
+                "runtime_behavior_contract"
+              ],
+              "next_action": "manual_review",
+              "recipe": {
+                "id": "sql-value-parameterization-python-psycopg3",
+                "status": "manual_guidance",
+                "automatic_apply": false
+              },
+              "steps": [
+                {
+                  "action": "classify_observation",
+                  "result": "candidate_weakness_class"
+                },
+                {
+                  "action": "check_source_evidence",
+                  "result": "sql_source_observation"
+                },
+                {
+                  "action": "assess_recipe",
+                  "result": "missing_preconditions"
+                }
+              ]
+            }
+          ],
+          "budget": {
+            "max_candidates": 128,
+            "candidates_found": 1,
+            "processed": 1,
+            "candidates_omitted": 0
+          },
+          "stop_reason": "bounded_review_completed",
+          "runtime_verified": false,
+          "automatic_patch": false,
+          "limitations": [
+            "catalog_covers_selected_patterns",
+            "static_observations_only",
+            "attacker_control_not_checked",
+            "driver_identity_not_checked",
+            "runtime_tests_not_run",
+            "automatic_patch_not_run"
+          ]
+        },
+        "static_checks": [],
+        "static_limits": {},
+        "inventory": {},
+        "limitations": []
+      }
+    },
+    "finding": {
+      "rule_id": "sql-injection-string-built-query",
+      "title": "Database query assembled from a string instead of parameters",
+      "severity": "high",
+      "confidence": 0.7,
+      "category": "Security",
+      "file": "src/query.py",
+      "line": 3,
+      "masked": "",
+      "explanation": "The query text passed to execute() at line 3 in src/query.py is built with string concatenation with + at line 2 rather than passed as a parameter. If any part of that string comes from a request, a form, a URL or another user-controlled source, the database receives it as SQL rather than as data, and an attacker can change what the query does -- read other people's rows, or delete them. Whether this particular value is reachable from user input has NOT been verified; the string assembly is what was observed.",
+      "fix_hint": "Pass the values as parameters instead of building the string: cur.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,)) -- the driver then sends them separately from the SQL and they cannot change its meaning. Keep the query text a plain literal. Where a table or column name really must vary, select it from a fixed allow-list in code rather than interpolating it.",
+      "context": null,
+      "origin_category": null,
+      "source": "static",
+      "verification_status": "unverified",
+      "verification_method": "source_pattern",
+      "claim_evidence": {
+        "version": 1,
+        "source_check": {
+          "kind": "static_rule"
+        },
+        "observation": "The query text passed to execute() at line 3 in src/query.py is built with string concatenation with + at line 2 rather than passed as a parameter.",
+        "required_conditions": null,
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "sql_observation": {
+          "version": 1,
+          "method": "python_ast_local_flow",
+          "source_sha256": "0f35922617352bab36a6d8acad02c3d605cece7d849acd6ba33e1b225a5e465d",
+          "file": "src/query.py",
+          "assembly_line": 2,
+          "assembly_kind": "concatenation",
+          "sink_line": 3,
+          "sink_method": "execute",
+          "flow_status": "possible_local_flow",
+          "driver_status": "not_checked",
+          "input_control_status": "not_checked"
+        }
+      }
+    }
+  },
+  {
+    "name": "partial",
+    "files": {
+      "src/query.py": "def load(cursor, user_id):\n    query = \"SELECT id FROM users WHERE id = \" + user_id\n    cursor.execute(query)\n",
+      "src/broken.py": "def invalid(:\n"
+    },
+    "score": {
+      "total": 9.5,
+      "categories": {
+        "Security": 9.0,
+        "Auth": 10.0,
+        "Testing": 9.7,
+        "Deploy": 9.8,
+        "Money & Data": 10.0,
+        "Frontend": 10.0
+      },
+      "basis": "static_only",
+      "scan_manifest": {
+        "archive_sha256": "dc1bfc5e6aa3b480fe8ed2d90d17723b80887ad3ea939f970afe45b4ed1d98c2",
+        "engine_version": "2026-09-18-6",
+        "archive_files": 2,
+        "commit_sha": null,
+        "model": null,
+        "model_calls": 0,
+        "rubrics_completed": [],
+        "llm_candidate_files": null,
+        "llm_submitted_files": 0,
+        "llm_files_not_submitted": null,
+        "runtime_verified": false,
+        "security_agent": {
+          "version": 1,
+          "mode": "deterministic_static",
+          "source": {
+            "archive_sha256": "dc1bfc5e6aa3b480fe8ed2d90d17723b80887ad3ea939f970afe45b4ed1d98c2",
+            "engine_version": "2026-09-18-6"
+          },
+          "catalog": {
+            "version": "2026-09-18.1",
+            "sha256": "56a1516de66fc1772037e67c94e98a6ce3845e8808faa57d879bac78cee95f38",
+            "cards": 3
+          },
+          "status": "partial",
+          "plan": [
+            {
+              "pattern_id": "python-outbound-request-input",
+              "title": "Python outbound address influenced by a request",
+              "check": "outbound_url",
+              "status": "analyzed",
+              "coverage": {
+                "version": 1,
+                "files_total": 2,
+                "eligible_files": 2,
+                "attempted_files": 2,
+                "analyzed_files": 2,
+                "excluded_files": 0,
+                "skipped_files": 0,
+                "exclusion_reasons": {},
+                "skip_reasons": {},
+                "partial": false
+              }
+            },
+            {
+              "pattern_id": "python-sql-string-assembly",
+              "title": "SQL text assembled from Python values",
+              "check": "sql_injection",
+              "status": "partial",
+              "coverage": {
+                "version": 1,
+                "files_total": 2,
+                "eligible_files": 2,
+                "attempted_files": 2,
+                "analyzed_files": 1,
+                "excluded_files": 0,
+                "skipped_files": 1,
+                "exclusion_reasons": {},
+                "skip_reasons": {
+                  "parse_error": 1
+                },
+                "partial": true
+              }
+            },
+            {
+              "pattern_id": "python-unsafe-deserialization",
+              "title": "Python deserialization requiring trusted input",
+              "check": "unsafe_deserialization",
+              "status": "partial",
+              "coverage": {
+                "version": 1,
+                "files_total": 2,
+                "eligible_files": 2,
+                "attempted_files": 2,
+                "analyzed_files": 1,
+                "excluded_files": 0,
+                "skipped_files": 1,
+                "exclusion_reasons": {},
+                "skip_reasons": {
+                  "parse_error": 1
+                },
+                "partial": true
+              }
+            }
+          ],
+          "observations": [
+            {
+              "id": "9be1fc8b90bf182594b9a3e27a7f42866215eb3a2d9a012db174f5f0bf3c0a21",
+              "pattern_id": "python-sql-string-assembly",
+              "pattern_revision": 1,
+              "title": "SQL text assembled from Python values",
+              "weaknesses": [
+                "CWE-89"
+              ],
+              "rule_id": "sql-injection-string-built-query",
+              "file": "src/query.py",
+              "line": 3,
+              "state": "needs_evidence",
+              "evidence": {
+                "sql_observation": {
+                  "version": 1,
+                  "method": "python_ast_local_flow",
+                  "file": "src/query.py",
+                  "source_sha256": "0f35922617352bab36a6d8acad02c3d605cece7d849acd6ba33e1b225a5e465d",
+                  "assembly_line": 2,
+                  "assembly_kind": "concatenation",
+                  "sink_line": 3,
+                  "sink_method": "execute",
+                  "flow_status": "possible_local_flow",
+                  "driver_status": "not_checked",
+                  "input_control_status": "not_checked"
+                }
+              },
+              "missing_evidence": [
+                "attacker_control",
+                "psycopg3_cursor_provenance",
+                "sql_value_position",
+                "intended_value_type",
+                "runtime_behavior_contract"
+              ],
+              "next_action": "manual_review",
+              "recipe": {
+                "id": "sql-value-parameterization-python-psycopg3",
+                "status": "manual_guidance",
+                "automatic_apply": false
+              },
+              "steps": [
+                {
+                  "action": "classify_observation",
+                  "result": "candidate_weakness_class"
+                },
+                {
+                  "action": "check_source_evidence",
+                  "result": "sql_source_observation"
+                },
+                {
+                  "action": "assess_recipe",
+                  "result": "missing_preconditions"
+                }
+              ]
+            }
+          ],
+          "budget": {
+            "max_candidates": 128,
+            "candidates_found": 1,
+            "processed": 1,
+            "candidates_omitted": 0
+          },
+          "stop_reason": "coverage_incomplete",
+          "runtime_verified": false,
+          "automatic_patch": false,
+          "limitations": [
+            "catalog_covers_selected_patterns",
+            "static_observations_only",
+            "attacker_control_not_checked",
+            "driver_identity_not_checked",
+            "runtime_tests_not_run",
+            "automatic_patch_not_run"
+          ]
+        },
+        "static_checks": [],
+        "static_limits": {},
+        "inventory": {},
+        "limitations": [
+          "security_agent_incomplete"
+        ]
+      }
+    },
+    "finding": {
+      "rule_id": "sql-injection-string-built-query",
+      "title": "Database query assembled from a string instead of parameters",
+      "severity": "high",
+      "confidence": 0.7,
+      "category": "Security",
+      "file": "src/query.py",
+      "line": 3,
+      "masked": "",
+      "explanation": "The query text passed to execute() at line 3 in src/query.py is built with string concatenation with + at line 2 rather than passed as a parameter. If any part of that string comes from a request, a form, a URL or another user-controlled source, the database receives it as SQL rather than as data, and an attacker can change what the query does -- read other people's rows, or delete them. Whether this particular value is reachable from user input has NOT been verified; the string assembly is what was observed.",
+      "fix_hint": "Pass the values as parameters instead of building the string: cur.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,)) -- the driver then sends them separately from the SQL and they cannot change its meaning. Keep the query text a plain literal. Where a table or column name really must vary, select it from a fixed allow-list in code rather than interpolating it.",
+      "context": null,
+      "origin_category": null,
+      "source": "static",
+      "verification_status": "unverified",
+      "verification_method": "source_pattern",
+      "claim_evidence": {
+        "version": 1,
+        "source_check": {
+          "kind": "static_rule"
+        },
+        "observation": "The query text passed to execute() at line 3 in src/query.py is built with string concatenation with + at line 2 rather than passed as a parameter.",
+        "required_conditions": null,
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "sql_observation": {
+          "version": 1,
+          "method": "python_ast_local_flow",
+          "source_sha256": "0f35922617352bab36a6d8acad02c3d605cece7d849acd6ba33e1b225a5e465d",
+          "file": "src/query.py",
+          "assembly_line": 2,
+          "assembly_kind": "concatenation",
+          "sink_line": 3,
+          "sink_method": "execute",
+          "flow_status": "possible_local_flow",
+          "driver_status": "not_checked",
+          "input_control_status": "not_checked"
+        }
+      }
+    }
+  },
+  {
+    "name": "unavailable",
+    "files": {
+      "src/query.py": "def load(cursor, user_id):\n    query = \"SELECT id FROM users WHERE id = \" + user_id\n    cursor.execute(query)\n"
+    },
+    "score": {
+      "total": 9.5,
+      "categories": {
+        "Security": 9.0,
+        "Auth": 10.0,
+        "Testing": 9.7,
+        "Deploy": 9.8,
+        "Money & Data": 10.0,
+        "Frontend": 10.0
+      },
+      "basis": "static_only",
+      "scan_manifest": {
+        "archive_sha256": "dca802b7bb62639fbe3b6ea02e9eef5c0d2ede892fb595aa5db0160fc0dac992",
+        "engine_version": "2026-09-18-6",
+        "archive_files": 1,
+        "commit_sha": null,
+        "model": null,
+        "model_calls": 0,
+        "rubrics_completed": [],
+        "llm_candidate_files": null,
+        "llm_submitted_files": 0,
+        "llm_files_not_submitted": null,
+        "runtime_verified": false,
+        "security_agent": {
+          "version": 1,
+          "mode": "deterministic_static",
+          "source": {
+            "archive_sha256": "dca802b7bb62639fbe3b6ea02e9eef5c0d2ede892fb595aa5db0160fc0dac992",
+            "engine_version": "2026-09-18-6"
+          },
+          "catalog": null,
+          "status": "unavailable",
+          "plan": [],
+          "observations": [],
+          "budget": {
+            "max_candidates": 128,
+            "candidates_found": 0,
+            "processed": 0,
+            "candidates_omitted": 0
+          },
+          "stop_reason": "agent_error: ValueError",
+          "runtime_verified": false,
+          "automatic_patch": false,
+          "limitations": [
+            "catalog_covers_selected_patterns",
+            "static_observations_only",
+            "attacker_control_not_checked",
+            "driver_identity_not_checked",
+            "runtime_tests_not_run",
+            "automatic_patch_not_run"
+          ]
+        },
+        "static_checks": [],
+        "static_limits": {},
+        "inventory": {},
+        "limitations": [
+          "security_agent_unavailable"
+        ]
+      }
+    },
+    "finding": {
+      "rule_id": "sql-injection-string-built-query",
+      "title": "Database query assembled from a string instead of parameters",
+      "severity": "high",
+      "confidence": 0.7,
+      "category": "Security",
+      "file": "src/query.py",
+      "line": 3,
+      "masked": "",
+      "explanation": "The query text passed to execute() at line 3 in src/query.py is built with string concatenation with + at line 2 rather than passed as a parameter. If any part of that string comes from a request, a form, a URL or another user-controlled source, the database receives it as SQL rather than as data, and an attacker can change what the query does -- read other people's rows, or delete them. Whether this particular value is reachable from user input has NOT been verified; the string assembly is what was observed.",
+      "fix_hint": "Pass the values as parameters instead of building the string: cur.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,)) -- the driver then sends them separately from the SQL and they cannot change its meaning. Keep the query text a plain literal. Where a table or column name really must vary, select it from a fixed allow-list in code rather than interpolating it.",
+      "context": null,
+      "origin_category": null,
+      "source": "static",
+      "verification_status": "unverified",
+      "verification_method": "source_pattern",
+      "claim_evidence": {
+        "version": 1,
+        "source_check": {
+          "kind": "static_rule"
+        },
+        "observation": "The query text passed to execute() at line 3 in src/query.py is built with string concatenation with + at line 2 rather than passed as a parameter.",
+        "required_conditions": null,
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "sql_observation": {
+          "version": 1,
+          "method": "python_ast_local_flow",
+          "source_sha256": "0f35922617352bab36a6d8acad02c3d605cece7d849acd6ba33e1b225a5e465d",
+          "file": "src/query.py",
+          "assembly_line": 2,
+          "assembly_kind": "concatenation",
+          "sink_line": 3,
+          "sink_method": "execute",
+          "flow_status": "possible_local_flow",
+          "driver_status": "not_checked",
+          "input_control_status": "not_checked"
+        }
+      }
+    }
+  }
+]

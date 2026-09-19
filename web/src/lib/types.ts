@@ -89,6 +89,7 @@ export interface RejectionDiagnostic {
 
 export interface ScanManifest {
   // Validated at the presentation boundary for older/malformed stored reports.
+  security_agent?: unknown;
   sca_cve?: unknown;
   dependency_cve?: unknown;
   dependency_snapshot?: unknown;
@@ -253,6 +254,7 @@ export interface NarrativeProjection {
 export interface Finding {
   claim_evidence?: {
     version: 1;
+    sql_observation?: unknown;
     snapshot_check_status?: "retained_not_reconfirmed";
     source_check: { kind: "quote_match"; line_start: number; line_end: number }
       | { kind: "static_rule" | "not_recorded" };
