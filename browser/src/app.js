@@ -412,6 +412,24 @@ function renderSecurityAgent(agent) {
     if (sql && typeof sql === 'object') {
       section.append(node('p', `Possible local SQL flow: assembly line ${count(sql.assembly_line)} → ${text(sql.sink_method, 'query call')} line ${count(sql.sink_line)}. Driver behavior and external input control are not checked.`, 'hint'));
     }
+    const proof = sql?.driver_provenance;
+    if (observation.rule_id === 'sql-injection-string-built-query'
+        && sql?.version === 2 && sql.driver_status === 'source_resolved'
+        && sql.input_control_status === 'not_checked'
+        && ['concatenation', 'percent_format', 'f_string', 'format_call', 'join_call'].includes(sql.assembly_kind)
+        && sql.method === 'python_ast_local_flow' && sql.flow_status === 'possible_local_flow'
+        && sql.file === observation.file && sql.sink_line === observation.line
+        && typeof sql.source_sha256 === 'string' && /^[a-f0-9]{64}$/.test(sql.source_sha256)
+        && ['execute', 'executemany'].includes(sql.sink_method)
+        && proof?.version === 1 && proof.driver === 'psycopg3' && proof.method === 'python_ast_straight_line'
+        && [proof.import_line, proof.connection_line, proof.cursor_line, sql.sink_line, sql.assembly_line].every(n => Number.isInteger(n) && n > 0 && n < 2 ** 31)
+        && proof.import_line <= proof.connection_line && proof.connection_line <= proof.cursor_line && proof.cursor_line <= sql.sink_line) {
+      section.append(node('p', `Psycopg 3: import line ${proof.import_line} → connect() line ${proof.connection_line} → cursor() line ${proof.cursor_line}. Static source provenance only; installed driver and runtime behavior are unverified.`, 'hint'));
+    } else if (sql) {
+      section.append(node('p', sql.driver_status === 'not_checked'
+        ? 'SQL driver source: not checked in this historical report.'
+        : 'SQL driver source: unknown; cursor provenance was not established.', 'hint'));
+    }
     const missing = Array.isArray(observation.missing_evidence) ? observation.missing_evidence : [];
     const evidence = node('div');
     renderDefinitions(evidence, [

@@ -30,7 +30,7 @@ def test_assignment_chain_binds_exact_assembly_and_sink_to_original_bytes():
     evidence = finding.claim_evidence
     observation = evidence["sql_observation"]
     assert observation == {
-        "version": 1,
+        "version": 2,
         "method": "python_ast_local_flow",
         "source_sha256": hashlib.sha256(raw).hexdigest(),
         "file": "src/query.py",
@@ -39,7 +39,7 @@ def test_assignment_chain_binds_exact_assembly_and_sink_to_original_bytes():
         "sink_line": 5,
         "sink_method": "execute",
         "flow_status": "possible_local_flow",
-        "driver_status": "not_checked",
+        "driver_status": "unknown",
         "input_control_status": "not_checked",
     }
     assert evidence["source_check"] == {"kind": "static_rule"}
@@ -98,7 +98,7 @@ def test_import_resolved_wrapper_preserves_the_inner_assembly_location():
     assert observation["sink_method"] == "execute"
     # A transparent SQLAlchemy text() binding cannot establish the actual
     # execution receiver's driver, much less authorize the Psycopg recipe.
-    assert observation["driver_status"] == "not_checked"
+    assert observation["driver_status"] == "unknown"
 
 
 @pytest.mark.parametrize("source", [

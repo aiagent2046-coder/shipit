@@ -49,7 +49,7 @@ def test_offline_report_exposes_review_and_static_provenance_in_main_and_baselin
     assert agent["source"]["archive_sha256"] in rows["Pattern review source"]
     assert rows["Candidate review budget"] == "1 processed of 1 candidates; 0 omitted; limit: 128."
     assert "1 of 1 eligible files analyzed" in rows["Pattern check: SQL text assembled from Python values"]
-    assert "python-sql-string-assembly, revision 1" in rows["Pattern observation 1"]
+    assert "python-sql-string-assembly, revision 2" in rows["Pattern observation 1"]
     assert "src/query.py:3" in rows["Pattern observation 1"]
     assert rows["Candidate weakness classes"] == "CWE-89 — candidate classes, not verified vulnerabilities."
     assert "Possible local flow" in rows["SQL source trace"]
