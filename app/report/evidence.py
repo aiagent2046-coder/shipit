@@ -705,6 +705,8 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
     budget = agent["budget"]
     has_synthetic = any(isinstance(item, dict) and "synthetic_contract" in item
                         for item in agent["observations"])
+    client_runtime = (agent.get("client_runtime")
+                      if agent.get("client_runtime_status") == "accepted" else None)
     rows = [
         ("Pattern review", f"{agent['status']}; {len(agent['observations'])} observations; "
          f"{stop}. Completion describes bounded review, not project safety."),
@@ -717,11 +719,33 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
          f"{count(budget.get('candidates_found'))} candidates; "
          f"{count(budget.get('candidates_omitted'))} omitted; "
          f"limit: {count(budget.get('max_candidates'))}."),
-        ("Pattern review limits", "Selected static patterns only. Candidate classes are unverified; "
-         "attacker control and runtime behavior were not checked. "
-         + ("Customer project runtime tests not run. No automatic patch applied." if has_synthetic else
-            "No runtime tests or automatic patches were run.")),
+        ("Pattern review limits", (
+            "Selected static patterns only. Candidate classes remain unverified. "
+            "The scanner did not execute the imported client scenario. "
+            "Its reported results cover only project CRUD and cross-tenant isolation; "
+            "SQL exploit behavior and repair preconditions remain unverified. No automatic patch applied."
+            if client_runtime else
+            "Selected static patterns only. Candidate classes are unverified; "
+            "attacker control and runtime behavior were not checked. "
+            + ("Customer project runtime tests not run. No automatic patch applied." if has_synthetic else
+               "No runtime tests or automatic patches were run."))),
     ]
+    if client_runtime:
+        rows.extend([
+            ("Client runtime evidence", "Operator-supplied scenario results accepted for consistency only. "
+             "This is not independent runtime attestation or verification of the entire project."),
+            ("Client runtime scope", "Project creation, reading, update and archiving; cross-tenant access "
+             "denials and database state checks. "
+             f"{len(client_runtime['checks'])} reported checks passed. No SQL repair proof is established."),
+            ("Client runtime archive SHA-256", client_runtime["archive_sha256"]),
+            ("Client runtime run", client_runtime["run_id"]),
+            ("Client runtime scenario", client_runtime["scenario_id"]),
+            ("Client runtime scenario SHA-256", client_runtime["scenario_sha256"]),
+            ("Client runtime evidence SHA-256", client_runtime["evidence_sha256"]),
+        ])
+    elif agent.get("client_runtime_status") == "rejected":
+        rows.append(("Client runtime evidence unavailable", "The supplied client runtime evidence could not "
+                     "be validated. Its reported results are not accepted as evidence."))
     plan_labels = {
         "analyzed": "Analyzed within the recorded scope",
         "not_applicable": "No eligible files for this check",

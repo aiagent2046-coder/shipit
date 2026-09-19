@@ -64,7 +64,8 @@ class _CheckDidNotRun:
         self.mount = MOUNT_UNKNOWN
 
 
-def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, synthetic_sql_executor=None) -> dict:
+def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, synthetic_sql_executor=None,
+                    client_runtime_evidence=None, client_runtime_run_id=None) -> dict:
     """Returns {"score": {...}, "findings": [ScoredFinding-as-dict]}.
 
     The score here describes THIS stage only. app/scan/pipeline.py reads just
@@ -440,4 +441,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
     attach_security_agent(result, archive_sha256=hashlib.file_digest(fileobj, "sha256").hexdigest(),
                           engine_version=AUDIT_ENGINE_VERSION, source_archive=fileobj,
                           synthetic_sql_executor=synthetic_sql_executor)
+    if client_runtime_evidence is not None or client_runtime_run_id is not None:
+        from app.scan.client_runtime_chain import attach_client_runtime
+        attach_client_runtime(result["security_agent"], client_runtime_evidence, run_id=client_runtime_run_id)
     return result
