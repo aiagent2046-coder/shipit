@@ -239,6 +239,26 @@ try {
   assert.equal(await fileGroup.locator('article').count(), 2);
   assert.equal(await page.locator('#findings article').count(), fileReport.findings.length);
   assert.match(await page.locator('#findings-summary').innerText(), new RegExp(`^${fileReport.findings.length} total findings`));
+  const ownerSummary = page.getByRole('region', { name: 'Report in brief', exact: true });
+  assert.equal(await ownerSummary.isVisible(), true);
+  assert.match(await ownerSummary.innerText(), /2 file-loading locations/);
+  assert.match(await ownerSummary.innerText(), /other observations remain below/);
+  for (const card of await fileGroup.locator('.owner-finding').all()) {
+    const visible = await card.innerText();
+    assert.match(visible, /If an untrusted file/);
+    assert.match(visible, /What we know/);
+    assert.match(visible, /What needs checking/);
+    assert.match(visible, /This step is complete when/);
+    assert.doesNotMatch(visible, /source_sha256|sink_span|source_evidence_collected/);
+    assert.equal(await card.locator('.owner-developer-details').getAttribute('open'), null);
+  }
+  const nextLink = ownerSummary.getByRole('link', { name: 'See the file-loading question' });
+  await nextLink.focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#owner-finding-0').evaluate(el => el === document.activeElement), true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await page.setViewportSize({ width: 1280, height: 900 });
   for (const evidence of await fileGroup.locator('article details').all()) {
     await evidence.locator(':scope > summary').click();
   }
@@ -267,6 +287,16 @@ try {
   }
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  const contextualFiles = structuredClone(fileReport);
+  for (const finding of contextualFiles.findings) Object.assign(finding, {
+    severity: 'low', confidence: .1, context: 'test_fixture',
+  });
+  await scanControlled(contextualFiles);
+  const contextualOwner = page.locator('#owner-finding-0');
+  assert.equal(await contextualOwner.isVisible(), false);
+  await ownerSummary.getByRole('link', { name: 'See the file-loading question' }).click();
+  assert.equal(await contextualOwner.isVisible(), true, 'The next action must reveal a collapsed contextual card');
+  assert.equal(await contextualOwner.evaluate(el => el === document.activeElement), true);
   await scanControlled(acquiredReport);
   await page.evaluate(() => {
     window.scanResponse.report.findings = window.scanResponse.report.findings.filter(f => f.context === 'test_fixture');
@@ -279,6 +309,8 @@ try {
   assert.equal(await page.locator('#findings article').count(), 1, 'Rescanning must clear old cards');
   assert.equal(await patternReview.isVisible(), false, 'Older reports without pattern review must hide the section');
   assert.equal(await page.locator('#security-agent').textContent(), '', 'Rescanning must clear previous observations');
+  assert.equal(await ownerSummary.isVisible(), false, 'Rescanning must clear an inapplicable owner summary');
+  assert.equal(await page.locator('#owner-report-summary').textContent(), '', 'Unsupported reports must not inherit earlier advice');
   assert.deepEqual(errors, []);
   console.log('Report UI: grouping, retained priority, legacy review, acquired source facts, remaining gaps, rejected forged records, keyboard disclosure, safe text, exports and mobile layout passed');
 } finally {

@@ -8,7 +8,8 @@ import { getAudit, reportUrl, ApiError } from "@/lib/api";
 import { RESULT_PREFIX } from "@/components/AuditForm";
 import { findingCounts } from "@/lib/evidence";
 import { AuditCoverage } from "@/components/AuditCoverage";
-import { FindingsList, PreviewHistory, SeveritySummary } from "@/components/FindingsList";
+import { FindingsList, OwnerReportSummary, PreviewHistory, SeveritySummary } from "@/components/FindingsList";
+import { projectOwnerReport } from "@/lib/ownerReport";
 import { Spinner } from "@/components/Spinner";
 import { FixpackPurchase } from "@/components/FixpackPurchase";
 import { RlsCheck } from "@/components/RlsCheck";
@@ -133,6 +134,8 @@ function AuditPageInner() {
     };
   }, [id, token]);
 
+  const ownerProjection = projectOwnerReport(view?.findings, view?.score.scan_manifest ?? {});
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
       <Link href="/" className="text-sm text-muted hover:text-text">
@@ -208,6 +211,7 @@ function AuditPageInner() {
             </div>
 
             <div className="my-6 border-t border-border" />
+            <OwnerReportSummary projection={ownerProjection} />
             <AuditCoverage score={view.score} findings={view.findings} />
 
             <div className="mt-6 flex flex-wrap gap-3">
@@ -235,7 +239,7 @@ function AuditPageInner() {
             <h2 id="current-observations-title" className="mb-3 text-lg font-semibold">
               Current scan observations
             </h2>
-            <FindingsList findings={view.findings} />
+            <FindingsList findings={view.findings} projection={ownerProjection} />
           </section>
 
           <div id="fix-pack" tabIndex={-1} className="scroll-mt-6">
