@@ -72,6 +72,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -125,6 +126,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -178,6 +180,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -239,6 +242,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -330,6 +334,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -392,6 +397,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -469,6 +475,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -585,6 +592,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -768,6 +776,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -846,6 +855,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -929,6 +939,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -988,6 +999,7 @@
         "text": "1 file-loading location needs a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -1824,6 +1836,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -1887,6 +1900,7 @@
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
           "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps.",
           "Application behavior has not been verified by this report."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
@@ -2064,7 +2078,8 @@
         "title": "File loading: the next question",
         "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
         "coverage_notes": [
-          "Source review does not establish exploitation or a verified fix."
+          "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is unavailable; see the recorded coverage gaps."
         ],
         "next_action": "Identify where this file comes from and who can replace or modify it."
       }

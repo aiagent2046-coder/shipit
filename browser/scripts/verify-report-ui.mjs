@@ -353,6 +353,66 @@ try {
   await roadmap.locator('summary').click();
   await roadmap.getByRole('link', { name: 'Dependency coverage', exact: true }).click();
   assert.equal(await page.locator('#roadmap-coverage').evaluate(el => el === document.activeElement), true);
+  const legacyCopyReport = { findings: [
+    finding('venv is committed to the repository (40 files)', {
+      source: 'static', rule_id: 'dependency-dir-committed', file: 'venv', line: 0,
+      explanation: 'Every clone downloads all of it.', fix_hint: 'Untrack it immediately.',
+    }),
+    finding("No error boundary above the app's routes", {
+      source: 'static', rule_id: 'missing-error-boundary', file: 'src/main.tsx', severity: 'high',
+      explanation: 'One small bug becomes a total outage. <img src=x onerror=alert(3)>',
+      fix_hint: 'Create every boundary file now.',
+    }),
+    ...[
+      { source: 'llm' },
+      { source: 'static', verification_status: 'contradicted' },
+      { source: 'static', claim_evidence: { syntax_check: { result: 'contradicted' } } },
+      { source: 'static', claim_evidence: { source_assessments: [{ kind: 'separate_review' }] } },
+    ].map((overrides, index) => finding(`Separate assessment ${index}`, {
+      rule_id: 'missing-error-boundary', explanation: `Retain the separate assessment ${index}.`, ...overrides,
+    })),
+  ] };
+  const legacyCopySarif = { version: '2.1.0', runs: [{ results: legacyCopyReport.findings.map(f => ({
+    ruleId: f.rule_id, message: { text: f.title },
+  })) }] };
+  await scanControlled(legacyCopyReport, legacyCopySarif);
+  for (const [index, risk] of [
+    [0, 'Folder names alone do not establish Git tracking'],
+    [1, 'Runtime behavior was not tested'],
+  ]) {
+    const card = page.locator(`#roadmap-finding-${index} article`);
+    const original = card.locator('details.original-recorded-text');
+    const raw = legacyCopyReport.findings[index];
+    assert.equal(await original.getAttribute('open'), null, 'Old categorical copy must be collapsed');
+    assert.ok((await card.innerText()).includes(risk));
+    for (const key of ['title', 'explanation', 'fix_hint']) {
+      assert.equal((await card.innerText()).includes(raw[key]), false, 'Old prose must not appear in the default card');
+    }
+    assert.match(await card.innerText(), /Verification: unverified/);
+    assert.equal(await card.locator('.severity').textContent(), raw.severity);
+    await original.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    for (const key of ['title', 'explanation', 'fix_hint']) {
+      assert.ok((await original.innerText()).includes(raw[key]), 'Original text must remain available without alteration');
+    }
+    assert.equal(await card.locator('img').count(), 0, 'Original text remains escaped');
+    await original.locator('summary').click();
+  }
+  for (const index of [2, 3, 4, 5]) {
+    const card = page.locator(`#roadmap-finding-${index} article`);
+    assert.equal(await card.locator('details.original-recorded-text').count(), 0,
+      'LLM, contradicted and specialized assessments must retain their own display');
+    assert.ok((await card.innerText()).includes(legacyCopyReport.findings[index].explanation));
+  }
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  for (const [label, expected] of [['Export JSON', legacyCopyReport], ['Export SARIF', legacyCopySarif]]) {
+    const pending = page.waitForEvent('download');
+    await page.getByRole('button', { name: label }).click();
+    const stream = await (await pending).createReadStream();
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()), expected, 'Bounded prose must preserve recorded JSON and SARIF');
+  }
   await scanControlled({ findings: [] });
   assert.equal(await roadmap.locator('.roadmap-task').count(), 0);
   assert.match(await roadmap.innerText(), /does not establish that the project is ready or safe/);

@@ -5,6 +5,11 @@ export interface OwnerReportContext {
   archive_sha256?: unknown;
   engine_version?: unknown;
   dependency_cve?: unknown;
+  limitations?: unknown;
+  sca_skipped_reason?: unknown;
+  sca_dependencies?: unknown;
+  sca_coverage_incomplete?: unknown;
+  sca_incomplete_lockfiles?: unknown;
   runtime_verified?: unknown;
 }
 
@@ -29,6 +34,55 @@ const ownerObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const ownerDigest = (value: unknown): value is string => typeof value === "string"
   && /^[a-f0-9]{64}(?![\s\S])/.test(value);
+
+export interface DependencyCoverageGap {
+  status: "partial" | "unavailable";
+  unresolved_manifests: string[];
+}
+
+// Match Python's explicit whitespace and codepoint ordering for saved paths.
+function ownerCodepointOrder(left: string, right: string): number {
+  const a = Array.from(left, char => char.codePointAt(0)!);
+  const b = Array.from(right, char => char.codePointAt(0)!);
+  for (let index = 0; index < Math.min(a.length, b.length); index++) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return a.length - b.length;
+}
+
+function ownerUnresolvedManifests(value: unknown): string[] {
+  return ownerObject(value) ? Object.entries(value)
+    .filter(([path, reason]) => /[^\t\n\v\f\r ]/.test(path) && reason === "unresolved")
+    .map(([path]) => path).sort(ownerCodepointOrder) : [];
+}
+
+// A recognized bundled snapshot owns its recorded scope. Disabled live OSV
+// must not negate it; missing facts never become a completeness or safety claim.
+export function dependencyCoverageGap(context: unknown): DependencyCoverageGap | null {
+  if (!ownerObject(context)) return null;
+  const snapshot = context.dependency_cve;
+  if (ownerObject(snapshot)) {
+    if (snapshot.status === "checked" || snapshot.status === "not_applicable") return null;
+    if (snapshot.status === "partial" || snapshot.status === "unavailable") {
+      return { status: snapshot.status, unresolved_manifests: ownerUnresolvedManifests(snapshot.incomplete_manifests) };
+    }
+  }
+  const limitations = new Set(Array.isArray(context.limitations)
+    ? context.limitations.filter((item): item is string => typeof item === "string") : []);
+  const skipped = typeof context.sca_skipped_reason === "string" ? context.sca_skipped_reason : "";
+  const dependencies = context.sca_dependencies;
+  const noClient = skipped === "no_client" && typeof dependencies === "number"
+    && Number.isSafeInteger(dependencies) && dependencies > 0;
+  const unavailable = ["dependency_check_not_run", "dependency_database_unavailable", "dependency_snapshot_unavailable"]
+    .some(reason => limitations.has(reason)) || skipped.startsWith("osv_unavailable") || noClient;
+  const partial = ["dependency_lockfile_unreadable", "dependency_coverage_incomplete"]
+    .some(reason => limitations.has(reason)) || context.sca_coverage_incomplete === true
+    || skipped === "no_resolvable_lockfile" || skipped.startsWith("lockfile_unreadable");
+  return unavailable || partial ? {
+    status: unavailable ? "unavailable" : "partial",
+    unresolved_manifests: ownerUnresolvedManifests(context.sca_incomplete_lockfiles),
+  } : null;
+}
 
 // Presentation only: never fetch, infer trust from a function name, or alter the
 // finding. Saved acquisitions become source facts only after receipt validation.
@@ -109,9 +163,10 @@ export function projectOwnerReport(findings: unknown, contextValue: OwnerReportC
   }
   if (!cards.length) return { version: 1, cards, summary: null };
   const coverageNotes = ["Source review does not establish exploitation or a verified fix."];
-  if (ownerObject(context.dependency_cve) && context.dependency_cve.status === "partial") {
-    coverageNotes.push("Dependency checking is incomplete; see the recorded coverage gaps.");
-  }
+  const dependencyGap = dependencyCoverageGap(context);
+  if (dependencyGap) coverageNotes.push(dependencyGap.status === "partial"
+    ? "Dependency checking is incomplete; see the recorded coverage gaps."
+    : "Dependency checking is unavailable; see the recorded coverage gaps.");
   if (context.runtime_verified === false) coverageNotes.push("Application behavior has not been verified by this report.");
   const locationText = locations.size === 1 ? "1 file-loading location needs" : `${locations.size} file-loading locations need`;
   return { version: 1, cards, summary: {

@@ -113,3 +113,45 @@ def test_legacy_report_without_trace_keeps_original_rendering():
     assert 'aria-label="Report in brief"' not in html
     assert '<summary>Details for a developer</summary>' not in html
     assert escape(result["findings"][0]["title"]) in html
+
+
+@pytest.mark.parametrize(('facts', 'message'), [
+    ({'limitations': ['dependency_coverage_incomplete'],
+      'sca_skipped_reason': 'no_resolvable_lockfile',
+      'sca_incomplete_lockfiles': {'requirements.txt': 'unresolved'}}, 'incomplete'),
+    ({'dependency_cve': {'status': 'unavailable'}}, 'unavailable'),
+    ({'limitations': ['dependency_database_unavailable']}, 'unavailable'),
+    ({'dependency_cve': {'status': 'checked'}, 'sca_skipped_reason': 'no_client',
+      'sca_dependencies': 19, 'limitations': ['dependency_snapshot_scope',
+                                           'dependency_runtime_reachability_not_checked']}, None),
+    ({'dependency_cve': {'status': 'not_applicable'}, 'sca_skipped_reason': 'no_client'}, None),
+    ({'limitations': 'dependency_coverage_incomplete', 'sca_coverage_incomplete': 'true',
+      'sca_skipped_reason': ['no_resolvable_lockfile'], 'dependency_cve': {'status': []}}, None),
+])
+def test_summary_and_roadmap_share_current_dependency_scope(facts, message):
+    from app.report.owner_roadmap import build_owner_roadmap
+
+    report = {'findings': deepcopy(REPORTS['completed']['findings']),
+              'score': {'scan_manifest': facts, 'free_baseline': {
+                  'score': {'scan_manifest': {'dependency_cve': {'status': 'partial'}}}}}}
+    context = owner_report_context(report)
+    before = deepcopy(report)
+    summary = build_owner_report(report['findings'], context)['summary']
+    messages = [note for note in summary['coverage_notes'] if note.startswith('Dependency checking')]
+    assert messages == ([f'Dependency checking is {message}; see the recorded coverage gaps.'] if message else [])
+    assert ('dependency-coverage' in [task['id'] for task in
+                                     build_owner_roadmap(report['findings'], context)['tasks']]) == bool(message)
+    assert report == before
+
+
+def test_context_keeps_only_current_saved_scope_and_ignores_history():
+    current = {'limitations': ['dependency_coverage_incomplete'],
+               'sca_skipped_reason': 'no_resolvable_lockfile', 'sca_coverage_incomplete': True,
+               'sca_incomplete_lockfiles': {'requirements.txt': 'unresolved'}, 'sca_dependencies': 0}
+    report = {'limitations': ['dependency_check_not_run'], 'score': {
+        'scan_manifest': current,
+        'free_baseline': {'score': {'scan_manifest': {'dependency_cve': {'status': 'partial'}}}},
+    }}
+    assert owner_report_context(report) == current
+    assert owner_report_context({'score': {'scan_manifest': {},
+                                         'free_baseline': report['score']['free_baseline']}}) == {}

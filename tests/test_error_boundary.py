@@ -78,6 +78,10 @@ def test_a_routed_next_app_with_no_boundary_fires():
     assert scan.findings[0].severity == "high"
     assert scan.findings[0].category == "Frontend"
     assert scan.coverage == COVERAGE_COMPLETE
+    assert "inspected" in scan.findings[0].title
+    assert "custom boundaries may not be recognized" in scan.findings[0].explanation.lower()
+    assert "Runtime behavior was not tested" in scan.findings[0].explanation
+    assert "If a suitable boundary is missing" in scan.findings[0].fix_hint
 
 
 def test_a_mounted_spa_with_no_boundary_fires():

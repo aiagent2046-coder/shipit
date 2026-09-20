@@ -6,6 +6,7 @@ verification status. Its source facts come only from replayable scanner receipts
 from __future__ import annotations
 
 import re
+from typing import Literal, TypedDict
 
 from app.scan.evidence_record import normalize_acquisition
 from app.scan.security_agent import agent_record, deserialization_observation
@@ -23,6 +24,53 @@ _UNKNOWN = [
     "Whether the application checks the file’s trust before loading it.",
     "Whether the possible command execution can occur in the running application.",
 ]
+
+
+class DependencyCoverageGap(TypedDict):
+    status: Literal["partial", "unavailable"]
+    unresolved_manifests: list[str]
+
+
+def _unresolved_manifests(value: object) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return sorted(path for path, reason in value.items()
+                  if isinstance(path, str) and path.strip(" \t\n\r\v\f") and reason == "unresolved")
+
+
+def dependency_coverage_gap(context: object) -> DependencyCoverageGap | None:
+    """Read recorded dependency gaps from current snapshot or legacy scan facts.
+
+    A recognized snapshot status owns its scope: disabled live OSV (no_client)
+    must not negate a completed bundled-catalog check. This helper records a gap,
+    never certifies completeness or promotes a missing field to a safe result.
+    """
+    if not isinstance(context, dict):
+        return None
+    snapshot = context.get("dependency_cve")
+    status = snapshot.get("status") if isinstance(snapshot, dict) else None
+    if isinstance(status, str) and status in ("checked", "not_applicable", "partial", "unavailable"):
+        if status in ("checked", "not_applicable"):
+            return None
+        return {"status": status, "unresolved_manifests": _unresolved_manifests(
+            snapshot.get("incomplete_manifests"))}
+    limitations = context.get("limitations")
+    limitations = {item for item in limitations if isinstance(item, str)} if isinstance(limitations, list) else set()
+    skipped = context.get("sca_skipped_reason")
+    skipped = skipped if isinstance(skipped, str) else ""
+    dependencies = context.get("sca_dependencies")
+    no_client = (skipped == "no_client" and type(dependencies) in (int, float)
+                 and 0 < dependencies <= 9_007_199_254_740_991 and int(dependencies) == dependencies)
+    unavailable = (bool(limitations & {"dependency_check_not_run", "dependency_database_unavailable",
+                                       "dependency_snapshot_unavailable"})
+                   or skipped.startswith("osv_unavailable") or no_client)
+    partial = (bool(limitations & {"dependency_lockfile_unreadable", "dependency_coverage_incomplete"})
+               or context.get("sca_coverage_incomplete") is True
+               or skipped == "no_resolvable_lockfile" or skipped.startswith("lockfile_unreadable"))
+    if not unavailable and not partial:
+        return None
+    return {"status": "unavailable" if unavailable else "partial",
+            "unresolved_manifests": _unresolved_manifests(context.get("sca_incomplete_lockfiles"))}
 
 
 def _bound_agent(context: dict) -> dict | None:
@@ -70,7 +118,7 @@ def build_owner_report(findings: list[dict], context: dict | None = None) -> dic
     """Project supported file-loader cards without modifying caller-owned data.
 
     Adapters pass the saved agent, outer archive/engine identities when present,
-    dependency_cve and runtime_verified. Absent evidence stays explicitly unknown.
+    dependency coverage facts and runtime_verified. Absent evidence stays explicitly unknown.
     """
     context = context if isinstance(context, dict) else {}
     agent = _bound_agent(context)
@@ -112,9 +160,11 @@ def build_owner_report(findings: list[dict], context: dict | None = None) -> dic
     if cards:
         count = len(locations)
         coverage_notes = ["Source review does not establish exploitation or a verified fix."]
-        dependency = context.get("dependency_cve")
-        if isinstance(dependency, dict) and dependency.get("status") == "partial":
-            coverage_notes.append("Dependency checking is incomplete; see the recorded coverage gaps.")
+        dependency_gap = dependency_coverage_gap(context)
+        if dependency_gap:
+            coverage_notes.append("Dependency checking is incomplete; see the recorded coverage gaps."
+                                  if dependency_gap["status"] == "partial" else
+                                  "Dependency checking is unavailable; see the recorded coverage gaps.")
         if context.get("runtime_verified") is False:
             coverage_notes.append("Application behavior has not been verified by this report.")
         summary = {
@@ -134,4 +184,6 @@ def owner_report_context(report: dict) -> dict:
     source = manifest if isinstance(manifest, dict) else report
     return {key: source[key] for key in (
         "security_agent", "archive_sha256", "engine_version", "dependency_cve", "runtime_verified",
+        "limitations", "sca_skipped_reason", "sca_coverage_incomplete", "sca_incomplete_lockfiles",
+        "sca_dependencies",
     ) if key in source}
