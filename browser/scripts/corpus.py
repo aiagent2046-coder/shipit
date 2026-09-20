@@ -194,6 +194,33 @@ def deserialization_acquisition_cases():
                'native': result}
 
 
+def file_deserialization_acquisition_cases():
+    source = ('import pickle\ndef load(path):\n'
+              '    if alternate(path):\n        return read_alternate(path)\n'
+              '    with open(path, "rb") as handle:\n        return pickle.load(handle)\n')
+    for name, body, established in (
+        ('file-source-goal', source, True),
+        ('loader-alias', source.replace('import pickle', 'from pickle import load as restore')
+         .replace('pickle.load(handle)', 'restore(handle)'), True),
+        ('overwritten-path', source.replace('    with open', '    path = "local"\n    with open'), False),
+        ('custom-open', source.replace('open(path,', 'custom_open(path,'), False),
+    ):
+        data = archive({'src/restore.py': body})
+        result = scan_archive(data)
+        agent = result['report']['security_agent']
+        decision, = agent['observations']
+        assert decision['state'] == ('source_evidence_collected' if established else 'needs_evidence')
+        assert {fact['id'] for fact in decision['acquisition']['facts']} == (
+            {'file_input_source', 'local_input_flow'} if established else set())
+        assert {'request_input_source', 'input_trust_boundary', 'loader_runtime_contract'} <= set(
+            decision['missing_evidence'])
+        assert not agent['runtime_verified'] and not agent['automatic_patch']
+        yield {'id': f'file-deserialization-agent/{name}', 'rule': 'unsafe-deserialization',
+               'polarity': 'positive', 'archive': base64.b64encode(data).decode(),
+               'expected': {'expect': [{'rule_id': 'unsafe-deserialization', 'count': 1}]},
+               'native': result}
+
+
 def main():
     if "--portable" in sys.argv:
         # Reuse the exact uploaded bytes: independently rebuilt ZIP timestamps
@@ -215,6 +242,7 @@ def main():
     cases.extend(provenance_cases())
     cases.extend(acquisition_cases())
     cases.extend(deserialization_acquisition_cases())
+    cases.extend(file_deserialization_acquisition_cases())
     portable = json.loads(subprocess.run(
         [sys.executable, __file__, "--portable"], check=True, capture_output=True, text=True,
         input=json.dumps([case['archive'] for case in cases]),

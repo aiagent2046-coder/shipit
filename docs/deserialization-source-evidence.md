@@ -58,5 +58,44 @@ returns to `needs_evidence`, and all four source/runtime prerequisites are resto
 Reading a report never runs the collector or a project command. Historical
 reports without this evidence remain readable.
 
-The change uses engine version `2026-09-19-6`, catalog `2026-09-19.3` and
-deserialization card revision 2, invalidating results cached before this analysis.
+## File input
+
+Engine `2026-09-20-1`, catalog `2026-09-20.1` and deserialization card revision 3
+also support a bounded file binding. An import-resolved `pickle.load` observation
+starts the same task chain, with acquisition version 3 and the actions
+`locate_source` and `trace_file_input`. Earlier Body acquisitions retain version 2.
+
+```python
+import pickle
+
+def read_checkpoint(path):
+    with open(path, "rb") as handle:
+        return pickle.load(handle)
+```
+
+The file researcher records `file_input_source` and `local_input_flow`: the
+function and parameter, the binary read operation, its handle binding and the
+exact loader span. Every fact is bound to the original source hash and task
+receipts. It does not open the named project file or load a checkpoint.
+
+Supported source shapes are deliberately narrow. In particular, an earlier
+branch ending in `return` may precede the file operation, as in Needle's format
+dispatch. The branch condition is not interpreted. The trace does not establish
+the selected format, caller, file producer, file integrity, reachability or the
+runtime behavior of a function called in that condition. Rebinding, unsupported
+file operations and visible loader/builtin shadowing leave the source goal open.
+
+Completed file collection leaves `request_input_source`, `input_trust_boundary`
+and `loader_runtime_contract` unresolved. For file observations, reports label
+the first legacy prerequisite as **Calling code and origin of the file (not
+checked)**: an HTTP source is not inferred from a filesystem operation. The next
+step is to inspect callers and producers and decide which serialization formats
+the application should accept. This does not certify Safetensors or any
+application-specific migration.
+
+Related file-loader findings in one file are grouped for display, with every
+original location and its evidence retained. Every member retains its own
+confidence and verification status; no group-wide verification is inferred.
+JSON/SARIF findings and scoring retain the individual observations.
+
+The version changes invalidate results cached before file-input analysis.

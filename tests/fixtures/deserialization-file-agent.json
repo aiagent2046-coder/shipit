@@ -1,0 +1,2738 @@
+[
+  {
+    "name": "completed",
+    "report": {
+      "engine_version": "2026-09-20-1",
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 11,
+          "masked": "",
+          "explanation": "Line 11 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 11,
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "gitignore-missing-secrets",
+          "title": "Environment ignore coverage needs review",
+          "severity": "medium",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "Archive-local ignore coverage was not established for candidate paths: .env. Rules were evaluated for each path, including nested files and negations. Global Git excludes and runtime configuration were not checked. This does not establish that credentials were committed.",
+          "fix_hint": "For paths used for private configuration, add appropriate ignore rules in their directory or the repository root. Keep intentional public build configuration and templates. Ignore rules do not remove files already tracked by Git.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        },
+        {
+          "rule_id": "no-tests",
+          "title": "No test files found",
+          "severity": "medium",
+          "confidence": 0.8,
+          "category": "Testing",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "There is nothing that checks your app still works after a change. Right now the only way to find out you broke signup or checkout is a user hitting it in production. That risk grows every time you ask an AI assistant to modify code you are not reading line by line.",
+          "fix_hint": "Start with one test for the thing that would hurt most if it silently broke \u2014 usually payment or login. One test that runs on every change is worth far more than a suite you plan to write later.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        },
+        {
+          "rule_id": "no-dockerfile",
+          "title": "No Dockerfile found in the archive",
+          "severity": "low",
+          "confidence": 0.9,
+          "category": "Deploy",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "A Dockerfile is one deployment option. Its absence does not establish that the app cannot run on a server; systemd and managed platforms are other options.",
+          "fix_hint": "Review existing deployment instructions; add a Dockerfile only if containers are needed.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        },
+        {
+          "rule_id": "no-ci",
+          "title": "No recognized CI configuration found in the archive",
+          "severity": "low",
+          "confidence": 0.9,
+          "category": "Deploy",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "No recognized GitHub Actions, GitLab CI, CircleCI, Jenkins, Azure Pipelines, Bitbucket Pipelines, Travis, Drone or Buildkite configuration was found. External automation and CI settings outside the archive were not checked.",
+          "fix_hint": "Check whether external CI already builds and tests this project. If it does not, add a workflow appropriate to the project's build and test commands. Configuration presence alone does not verify successful execution.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        }
+      ],
+      "checks_run": [
+        "secrets",
+        "rls",
+        "schema_drift",
+        "project_files",
+        "ci_deploy_source",
+        "service_role",
+        "error_boundary",
+        "auth_read_consistency",
+        "auth_write_consistency",
+        "http_success",
+        "sql_injection",
+        "sql_injection_js",
+        "outbound_url",
+        "tls_verification",
+        "unsafe_deserialization",
+        "open_redirect",
+        "path_traversal",
+        "xss",
+        "archive_extraction",
+        "insecure_randomness",
+        "unsafe_xml_parse",
+        "command_injection",
+        "session_cookie"
+      ],
+      "checks_not_run": [],
+      "coverage": {
+        "secrets": "1/1 files scanned; excluded: none; files with invalid UTF-8 bytes omitted: 0. Exclusions are outside this check; no finding does not establish that excluded content is safe.",
+        "sql_injection": "Python statements whose SQL text is assembled from a value the function received, across expression branches, telling a fixed conditional fragment apart from an input-built query; a single import-resolved sqlalchemy text() wrapper is transparent to the sink, so the query text inside it is what is read. A parameterized call is silent. Whether the value is attacker-controlled, and any database-side policy, is not verified. At most 400 eligible files up to 400 KB each and 32 findings per check; test/example paths, dependency trees, generated builds, symbolic links and Git metadata are excluded. File, finding, decoding, parsing and expression-analysis gaps are recorded explicitly.",
+        "sql_injection_js": "TypeScript/JavaScript statements whose SQL text is assembled from values, which is the half that runs on the Next.js repositories Drydock audits in the main. Template literals and concatenation at the call site are read; cross-file builders, ORM query construction and runtime reachability are not resolved. At most 400 eligible files up to 400 KB each and 32 findings per check; test/example paths, dependency trees, generated builds, symbolic links and Git metadata are excluded. File, finding, decoding, parsing and expression-analysis gaps are recorded explicitly.",
+        "error_boundary": "complete",
+        "tls_verification": "At most 400 Python and JS/TS files, each up to 400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Recognized test/example/documentation paths are skipped, except migration paths; vendor and dependency trees plus generated build directories (.next, dist, build) are excluded before the file limit. Local imports and client/context aliases identify supported requests/httpx/aiohttp, ssl, urllib3, Tornado and Elasticsearch settings; JS/TS recognises Node https/tls options and process.env. Literal False/false, imported ssl.CERT_NONE and exact Node env 0 are read; hostname and certificate-chain checks have distinct explanations. Comments, strings, types, malformed/oversized files, unknown wrappers, cross-file and dynamic configuration, shell/CI YAML and runtime connections are unresolved. Vue/Svelte component script blocks are not covered by this TLS check. A clean result does not establish that every connection is verified",
+        "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; object lookups compared with protected reads on the same router and repository binding, including recognized identity dependencies and imported aliases; ASCII dependency, guard and witness names are decomposed through camelCase humps, so getAuthorized reads as get_authorized; non-ASCII name parts are preserved; test/vendor files excluded; middleware and runtime access not resolved",
+        "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in parseable Python files up to 2 MB, compared with sibling routes on the same router; potential writes are recognized by leading call-name tokens or literal mutating SQL; actual storage effects, conventionally public paths, test/vendor files, router-level dependencies and middleware are not resolved",
+        "outbound_url": "Known HTTP clients in locally declared FastAPI routes; at most 400 eligible Python files up to 400 KB each. Recognized test/example/documentation paths are skipped, except migration paths; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit; 20,000 AST nodes and depth 100 per file, 16,000 template characters and 256 slots, 32 findings total. Supported Request fields, locally declared Pydantic string fields, known-string strip(), URL expressions and preceding local checks are traced within one handler; complex control flow, unknown calls/helpers, validation correctness, DNS, redirects, network policy and TS/JS are not resolved",
+        "open_redirect": "Local FastAPI routes in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. The Starlette/FastAPI RedirectResponse constructor whose target authority (between :// and the first /, ? or #) is built from a value the request supplies is reported. A caller value that fills only the path stays silent, except an input immediately after a leading slash that can form //host. Only an exact literal destination allowlist on the accepting branch suppresses the signal. Prefix/scheme checks, assertions and unknown validators do not establish that allowlist. Flask/Django redirect(), HTTPResponse/HTTPException Location headers, meta-refresh and JS/TS are not covered, and a helper that assembles the URL is not followed. Whether the route is reachable is not verified; parsed-host and cross-function validators are unresolved.",
+        "unsafe_deserialization": "At most 400 Python files up to 400 KB, 20,000 AST nodes and depth 100. Recognized test/example/documentation paths are skipped, except migration paths; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. Import-resolved loads with lexical shadowing and stable outer bindings. Unsafe YAML classes must have confirmed library provenance; Base/Safe/Full loaders are silent. Marshal and missing YAML Loader produce separate, conditional risk descriptions. Input trust and dependency versions are not verified. Assignment aliases, conditional imports, mutated modules, custom YAML loaders, stored Unpickler instances, cross-file resolution, bare torch.load and TS/JS are not covered; at most 32 findings are reported",
+        "unsafe_xml_parse": "Import-resolved Python XML parses in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories are excluded before the file limit. Reports lxml.etree parse/fromstring calls with an inline XMLParser that explicitly sets resolve_entities=True, passed by keyword or position, and iterparse calls with direct resolve_entities=True in XML mode. Defaults, version inference, parser variables, set_default_parser, custom resolvers, XInclude, feed parsing and cross-file resolution are outside this check. Input trust and runtime access are not verified. No finding does not establish safe parsing.",
+        "archive_extraction": "Import-resolved Python tarfile extraction in parseable Python files up to 400 KB; at most 400 files and 32 findings; vendor, dependency trees and generated build directories are excluded before the file limit. Only a literal filter=\"fully_trusted\" on extract or extractall of an object proven to come from tarfile.open (a direct chain, or a name bound once before extraction in the same lexical scope and control branch) is reported: the explicit opt-out is unsafe on every Python with the parameter (measured on 3.12.13: fully_trusted writes outside the destination where the data and tar filters refuse the same member). A missing filter is version-dependent (3.14 defaults to data) and is not a finding; data and tar filters refuse escaping members, zipfile sanitizes paths itself, and variable filters, ** spreads, rebound or mutated receivers, modified tarfile modules, deferred closures/type aliases, generic declarations, zipfile calls and cross-file provenance are unresolved. Where the archive bytes come from and actual exposure are not verified.",
+        "path_traversal": "Local FastAPI route handlers in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. Imported file operations and proven pathlib receivers are traced locally with bounded expansion. Path construction alone is not a sink. A same-file module-level helper declared exactly once and never rebound is followed through one transition: its body is traced, and a single-return helper's value is read as the call's. Helpers from other files, nested defs, decorated or rebound names, coroutines, generators, unpacked or assignment-expression arguments, keyword-only parameters and second hops remain opaque. Containment recognizes imported secure_filename results and a resolved Path checked against a fixed absolute base on the branch reaching the operation. General control-flow joins, other validation patterns, runtime symlinks and TS/JS file handling are NOT covered",
+        "xss": "JavaScript/TypeScript/JSX/TSX parsed with the bundled native grammar, plus bounded Vue single-file components with HTML templates and JS/TS scripts; at most 400 files up to 400 KB each, 20,000 syntax nodes and depth 100, with at most 32 findings. Test/example paths, vendor, dependency trees and generated build directories are excluded before the file limit. DOM innerHTML/outerHTML assignments, document.write/writeln, insertAdjacentHTML and React dangerouslySetInnerHTML are reported for nonliteral values. Vue v-html expressions are also reported unless they are fixed literals; helpers and sanitizers are unresolved. Unsupported Vue template/script languages and malformed components are recorded as coverage gaps. A complete literal or an earlier visible, globally unambiguous const literal stays silent; concatenation, shadowed names and comments do not establish a static value. Sanitization, input trust, DOM receiver provenance, cross-file resolution and other framework template bindings are unresolved. Missing native grammars withhold the check; malformed or oversized source is reported in coverage rather than treated as analyzed.",
+        "insecure_randomness": "Python AST and JavaScript/TypeScript/JSX/TSX syntax; at most 400 files up to 400 KB each, 20,000 syntax nodes and depth 100, with at most 32 findings. Test/example paths, vendor, dependency trees and generated build directories are excluded before the file limit. Secret-named assignments containing a call to a proven stable Python random import (including supported aliases) or an unshadowed Math.random are reported, including template interpolation, destructuring bindings paired by exact slot or key correspondence, and one JS/TS helper hop: a name declared once as a function whose single return draws Math.random, called inside its declaring scope after the declaration. Parameters, destructuring, reassignment, generator, enum, namespace and import-alias declarations, conditional or multiple returns, deferred bodies (returned or assigned closures, generators, object/class methods and classes have not drawn), nested helper chains, Python helpers, rebound or ambiguous sources, cross-file provenance and actual security use of the result are unresolved. Comments, docstrings and literal text are not draws. secrets and SystemRandom are not insecure sources. Missing native grammars withhold this combined check; malformed or oversized source is reported in coverage. Vue/Svelte component script blocks are not covered by this randomness check.",
+        "command_injection": "Local FastAPI route handlers in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. Shell-invoking calls whose command is assembled from a value the request supplies are reported: os.system/os.popen (always a shell), the subprocess family when shell=True is a literal, and a [\"<shell>\", \"-c\", command] argument list (a shell command without shell=True). Positional and args= forms are recognized. Lists follow POSIX semantics: only args[0] under shell=True, or the command after -c, is shell code; subsequent positional parameters are data. Windows shell/list conventions, shell passed as a variable, an argument list assigned to a variable before the call, os.exec*/os.spawn* and TS/JS are not covered. Whether the route is reachable, whether a check elsewhere constrains the value, and whether the call executes are not verified.",
+        "session_cookie": "Cookie-setting calls and settings whose cookie name says it carries identity: Python `set_cookie`/`set_signed_cookie` with the name as a literal or a unambiguous module-level constant, the Django settings that decide the session cookie's flags, and in TypeScript/JavaScript `res.cookie`, a Next.js cookie store, an express-session nested cookie options, cookie-session top-level options and `document.cookie` writes. JavaScript names and option objects resolve one hop only when stable, unambiguous and visible in the current scope. Option keys are case-sensitive. Which default each API has decides whether an absent option is reported: `res.cookie` defaults HttpOnly to false, express-session defaults it to true. Not covered: a missing `secure` attribute (a developer's localhost is the ordinary reason, and browsers treat localhost as secure), a missing SameSite (browsers default to Lax; only an explicit SameSite=None removes the protection), `csrf`/`xsrf`/`state` cookie names (the double-submit pattern requires script access), raw Set-Cookie header strings, framework config files, dependency and test paths, generated build directories (.next, dist, build), cookies set through a wrapper, Python positional flag arguments, unknown option spreads, and any option whose value is a variable rather than a literal",
+        "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; runtime fetch bindings and HTTP failures are not verified. Vue/Svelte templates and handlers are not covered. Parser limits: none"
+      },
+      "rule_coverage": {
+        "outbound_url": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "tls_verification": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "unsafe_deserialization": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "path_traversal": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "xss": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 0,
+          "attempted_files": 0,
+          "analyzed_files": 0,
+          "excluded_files": 1,
+          "skipped_files": 0,
+          "exclusion_reasons": {
+            "unsupported_extension": 1
+          },
+          "skip_reasons": {},
+          "partial": false
+        },
+        "open_redirect": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "insecure_randomness": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "unsafe_xml_parse": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "command_injection": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "archive_extraction": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "sql_injection": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "sql_injection_js": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 0,
+          "attempted_files": 0,
+          "analyzed_files": 0,
+          "excluded_files": 1,
+          "skipped_files": 0,
+          "exclusion_reasons": {
+            "unsupported_extension": 1
+          },
+          "skip_reasons": {},
+          "partial": false
+        }
+      },
+      "limitations": [
+        "llm_not_run_browser",
+        "dependency_check_not_run",
+        "runtime_tests_not_run",
+        "static_source_only"
+      ],
+      "runtime_verified": false,
+      "security_agent": {
+        "version": 1,
+        "mode": "deterministic_static",
+        "source": {
+          "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+          "engine_version": "2026-09-20-1"
+        },
+        "catalog": {
+          "version": "2026-09-20.1",
+          "sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded",
+          "cards": 3
+        },
+        "status": "completed",
+        "plan": [
+          {
+            "pattern_id": "python-outbound-request-input",
+            "title": "Python outbound address influenced by a request",
+            "check": "outbound_url",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-sql-string-assembly",
+            "title": "SQL text assembled from Python values",
+            "check": "sql_injection",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-unsafe-deserialization",
+            "title": "Python deserialization requiring trusted input",
+            "check": "unsafe_deserialization",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          }
+        ],
+        "observations": [
+          {
+            "id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 3,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/checkpoints.py",
+            "line": 7,
+            "state": "source_evidence_collected",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_line": 7,
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ],
+                "sink_method": "load",
+                "loader": "pickle.load",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "review_runtime_contract",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 3,
+              "status": "completed",
+              "stop_reason": "source_goal_reached",
+              "source": {
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ]
+              },
+              "facts": [
+                {
+                  "id": "file_input_source",
+                  "method": "python_ast_file_binding",
+                  "sources": [
+                    {
+                      "function": "read_primary",
+                      "parameter": "path",
+                      "handle": "handle",
+                      "mode": "rb",
+                      "function_span": [
+                        3,
+                        0,
+                        7,
+                        34
+                      ],
+                      "parameter_span": [
+                        3,
+                        17,
+                        3,
+                        21
+                      ],
+                      "open_span": [
+                        6,
+                        9,
+                        6,
+                        25
+                      ],
+                      "handle_span": [
+                        6,
+                        29,
+                        6,
+                        35
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "local_input_flow",
+                  "method": "python_ast_file_flow",
+                  "locations": [
+                    [
+                      3,
+                      17,
+                      3,
+                      21
+                    ],
+                    [
+                      6,
+                      9,
+                      6,
+                      25
+                    ],
+                    [
+                      6,
+                      29,
+                      6,
+                      35
+                    ],
+                    [
+                      7,
+                      15,
+                      7,
+                      34
+                    ]
+                  ]
+                }
+              ],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_file_input",
+                  "result": "established",
+                  "reason": "file_flow_established",
+                  "produced": [
+                    "file_input_source",
+                    "local_input_flow"
+                  ],
+                  "detail": "file_parameter_open_binding"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 391
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "369ee46d886d35453a8c91cc3a4de2e4246379fc01790324f7c7a3c755f05a1d",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "0bf413814997ee1ad109e326b2d3f95a8951e08149d89e3ef96714584405ddc9",
+                  "output_sha256": "0bf413814997ee1ad109e326b2d3f95a8951e08149d89e3ef96714584405ddc9",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "df30efda8ba9f8e3313a06f3591c27d4209e6a571e9fa1faa2817e8ea45a3e8a",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "369ee46d886d35453a8c91cc3a4de2e4246379fc01790324f7c7a3c755f05a1d"
+                  ],
+                  "input_sha256": "0bf413814997ee1ad109e326b2d3f95a8951e08149d89e3ef96714584405ddc9",
+                  "output_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "source_evidence_collected"
+                },
+                {
+                  "id": "8922974fe2abc1fdd7711e34e1ebc38ae83fd173c934bdc60e4c88b1cf3d48f4",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "df30efda8ba9f8e3313a06f3591c27d4209e6a571e9fa1faa2817e8ea45a3e8a"
+                  ],
+                  "input_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "output_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "a5c45d79f6ff343ed17905aff18c48a9e6b495dba7890de2569bcb3371512dfa",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "8922974fe2abc1fdd7711e34e1ebc38ae83fd173c934bdc60e4c88b1cf3d48f4"
+                  ],
+                  "input_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "output_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          },
+          {
+            "id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 3,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/checkpoints.py",
+            "line": 11,
+            "state": "source_evidence_collected",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_line": 11,
+                "sink_span": [
+                  11,
+                  15,
+                  11,
+                  34
+                ],
+                "sink_method": "load",
+                "loader": "pickle.load",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "review_runtime_contract",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 3,
+              "status": "completed",
+              "stop_reason": "source_goal_reached",
+              "source": {
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_span": [
+                  11,
+                  15,
+                  11,
+                  34
+                ]
+              },
+              "facts": [
+                {
+                  "id": "file_input_source",
+                  "method": "python_ast_file_binding",
+                  "sources": [
+                    {
+                      "function": "read_secondary",
+                      "parameter": "path",
+                      "handle": "handle",
+                      "mode": "rb",
+                      "function_span": [
+                        9,
+                        0,
+                        11,
+                        34
+                      ],
+                      "parameter_span": [
+                        9,
+                        19,
+                        9,
+                        23
+                      ],
+                      "open_span": [
+                        10,
+                        9,
+                        10,
+                        25
+                      ],
+                      "handle_span": [
+                        10,
+                        29,
+                        10,
+                        35
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "local_input_flow",
+                  "method": "python_ast_file_flow",
+                  "locations": [
+                    [
+                      9,
+                      19,
+                      9,
+                      23
+                    ],
+                    [
+                      10,
+                      9,
+                      10,
+                      25
+                    ],
+                    [
+                      10,
+                      29,
+                      10,
+                      35
+                    ],
+                    [
+                      11,
+                      15,
+                      11,
+                      34
+                    ]
+                  ]
+                }
+              ],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_file_input",
+                  "result": "established",
+                  "reason": "file_flow_established",
+                  "produced": [
+                    "file_input_source",
+                    "local_input_flow"
+                  ],
+                  "detail": "file_parameter_open_binding"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 304
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "35ed85761709c9f886a3f9dafc6d4ca5083d189953e55c699ec1b776d438923c",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "83eea6d20f279ffa294f017855760433e09723c403e0b268619d4b93c2eb1467",
+                  "output_sha256": "83eea6d20f279ffa294f017855760433e09723c403e0b268619d4b93c2eb1467",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "f4cd04025d83ca3883ed4de491dc2e267cf106229cc78d23bd0db9f1c6c82948",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "35ed85761709c9f886a3f9dafc6d4ca5083d189953e55c699ec1b776d438923c"
+                  ],
+                  "input_sha256": "83eea6d20f279ffa294f017855760433e09723c403e0b268619d4b93c2eb1467",
+                  "output_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "source_evidence_collected"
+                },
+                {
+                  "id": "397da6b23a8d2ebbbea7872beecc520fc6fdc5229e6e383af0ba3526e6b6280f",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "f4cd04025d83ca3883ed4de491dc2e267cf106229cc78d23bd0db9f1c6c82948"
+                  ],
+                  "input_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "output_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "794572da688435495940e8c0edbcaadc29db1107eb6bec7a3af522f3275eee25",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "397da6b23a8d2ebbbea7872beecc520fc6fdc5229e6e383af0ba3526e6b6280f"
+                  ],
+                  "input_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "output_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          }
+        ],
+        "budget": {
+          "max_candidates": 128,
+          "candidates_found": 2,
+          "processed": 2,
+          "candidates_omitted": 0,
+          "evidence_actions": 4,
+          "max_evidence_actions": 512,
+          "evidence_work": 695,
+          "max_evidence_work": 640000
+        },
+        "stop_reason": "bounded_review_completed",
+        "runtime_verified": false,
+        "automatic_patch": false,
+        "limitations": [
+          "catalog_covers_selected_patterns",
+          "static_observations_only",
+          "attacker_control_not_checked",
+          "runtime_driver_identity_not_checked",
+          "runtime_tests_not_run",
+          "automatic_patch_not_run"
+        ]
+      }
+    }
+  },
+  {
+    "name": "unsupported",
+    "report": {
+      "engine_version": "2026-09-20-1",
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 11,
+          "masked": "",
+          "explanation": "Line 11 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+              "sink_line": 11,
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "gitignore-missing-secrets",
+          "title": "Environment ignore coverage needs review",
+          "severity": "medium",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "Archive-local ignore coverage was not established for candidate paths: .env. Rules were evaluated for each path, including nested files and negations. Global Git excludes and runtime configuration were not checked. This does not establish that credentials were committed.",
+          "fix_hint": "For paths used for private configuration, add appropriate ignore rules in their directory or the repository root. Keep intentional public build configuration and templates. Ignore rules do not remove files already tracked by Git.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        },
+        {
+          "rule_id": "no-tests",
+          "title": "No test files found",
+          "severity": "medium",
+          "confidence": 0.8,
+          "category": "Testing",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "There is nothing that checks your app still works after a change. Right now the only way to find out you broke signup or checkout is a user hitting it in production. That risk grows every time you ask an AI assistant to modify code you are not reading line by line.",
+          "fix_hint": "Start with one test for the thing that would hurt most if it silently broke \u2014 usually payment or login. One test that runs on every change is worth far more than a suite you plan to write later.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        },
+        {
+          "rule_id": "no-dockerfile",
+          "title": "No Dockerfile found in the archive",
+          "severity": "low",
+          "confidence": 0.9,
+          "category": "Deploy",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "A Dockerfile is one deployment option. Its absence does not establish that the app cannot run on a server; systemd and managed platforms are other options.",
+          "fix_hint": "Review existing deployment instructions; add a Dockerfile only if containers are needed.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        },
+        {
+          "rule_id": "no-ci",
+          "title": "No recognized CI configuration found in the archive",
+          "severity": "low",
+          "confidence": 0.9,
+          "category": "Deploy",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "No recognized GitHub Actions, GitLab CI, CircleCI, Jenkins, Azure Pipelines, Bitbucket Pipelines, Travis, Drone or Buildkite configuration was found. External automation and CI settings outside the archive were not checked.",
+          "fix_hint": "Check whether external CI already builds and tests this project. If it does not, add a workflow appropriate to the project's build and test commands. Configuration presence alone does not verify successful execution.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        }
+      ],
+      "checks_run": [
+        "secrets",
+        "rls",
+        "schema_drift",
+        "project_files",
+        "ci_deploy_source",
+        "service_role",
+        "error_boundary",
+        "auth_read_consistency",
+        "auth_write_consistency",
+        "http_success",
+        "sql_injection",
+        "sql_injection_js",
+        "outbound_url",
+        "tls_verification",
+        "unsafe_deserialization",
+        "open_redirect",
+        "path_traversal",
+        "xss",
+        "archive_extraction",
+        "insecure_randomness",
+        "unsafe_xml_parse",
+        "command_injection",
+        "session_cookie"
+      ],
+      "checks_not_run": [],
+      "coverage": {
+        "secrets": "1/1 files scanned; excluded: none; files with invalid UTF-8 bytes omitted: 0. Exclusions are outside this check; no finding does not establish that excluded content is safe.",
+        "sql_injection": "Python statements whose SQL text is assembled from a value the function received, across expression branches, telling a fixed conditional fragment apart from an input-built query; a single import-resolved sqlalchemy text() wrapper is transparent to the sink, so the query text inside it is what is read. A parameterized call is silent. Whether the value is attacker-controlled, and any database-side policy, is not verified. At most 400 eligible files up to 400 KB each and 32 findings per check; test/example paths, dependency trees, generated builds, symbolic links and Git metadata are excluded. File, finding, decoding, parsing and expression-analysis gaps are recorded explicitly.",
+        "sql_injection_js": "TypeScript/JavaScript statements whose SQL text is assembled from values, which is the half that runs on the Next.js repositories Drydock audits in the main. Template literals and concatenation at the call site are read; cross-file builders, ORM query construction and runtime reachability are not resolved. At most 400 eligible files up to 400 KB each and 32 findings per check; test/example paths, dependency trees, generated builds, symbolic links and Git metadata are excluded. File, finding, decoding, parsing and expression-analysis gaps are recorded explicitly.",
+        "error_boundary": "complete",
+        "tls_verification": "At most 400 Python and JS/TS files, each up to 400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Recognized test/example/documentation paths are skipped, except migration paths; vendor and dependency trees plus generated build directories (.next, dist, build) are excluded before the file limit. Local imports and client/context aliases identify supported requests/httpx/aiohttp, ssl, urllib3, Tornado and Elasticsearch settings; JS/TS recognises Node https/tls options and process.env. Literal False/false, imported ssl.CERT_NONE and exact Node env 0 are read; hostname and certificate-chain checks have distinct explanations. Comments, strings, types, malformed/oversized files, unknown wrappers, cross-file and dynamic configuration, shell/CI YAML and runtime connections are unresolved. Vue/Svelte component script blocks are not covered by this TLS check. A clean result does not establish that every connection is verified",
+        "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; object lookups compared with protected reads on the same router and repository binding, including recognized identity dependencies and imported aliases; ASCII dependency, guard and witness names are decomposed through camelCase humps, so getAuthorized reads as get_authorized; non-ASCII name parts are preserved; test/vendor files excluded; middleware and runtime access not resolved",
+        "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in parseable Python files up to 2 MB, compared with sibling routes on the same router; potential writes are recognized by leading call-name tokens or literal mutating SQL; actual storage effects, conventionally public paths, test/vendor files, router-level dependencies and middleware are not resolved",
+        "outbound_url": "Known HTTP clients in locally declared FastAPI routes; at most 400 eligible Python files up to 400 KB each. Recognized test/example/documentation paths are skipped, except migration paths; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit; 20,000 AST nodes and depth 100 per file, 16,000 template characters and 256 slots, 32 findings total. Supported Request fields, locally declared Pydantic string fields, known-string strip(), URL expressions and preceding local checks are traced within one handler; complex control flow, unknown calls/helpers, validation correctness, DNS, redirects, network policy and TS/JS are not resolved",
+        "open_redirect": "Local FastAPI routes in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. The Starlette/FastAPI RedirectResponse constructor whose target authority (between :// and the first /, ? or #) is built from a value the request supplies is reported. A caller value that fills only the path stays silent, except an input immediately after a leading slash that can form //host. Only an exact literal destination allowlist on the accepting branch suppresses the signal. Prefix/scheme checks, assertions and unknown validators do not establish that allowlist. Flask/Django redirect(), HTTPResponse/HTTPException Location headers, meta-refresh and JS/TS are not covered, and a helper that assembles the URL is not followed. Whether the route is reachable is not verified; parsed-host and cross-function validators are unresolved.",
+        "unsafe_deserialization": "At most 400 Python files up to 400 KB, 20,000 AST nodes and depth 100. Recognized test/example/documentation paths are skipped, except migration paths; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. Import-resolved loads with lexical shadowing and stable outer bindings. Unsafe YAML classes must have confirmed library provenance; Base/Safe/Full loaders are silent. Marshal and missing YAML Loader produce separate, conditional risk descriptions. Input trust and dependency versions are not verified. Assignment aliases, conditional imports, mutated modules, custom YAML loaders, stored Unpickler instances, cross-file resolution, bare torch.load and TS/JS are not covered; at most 32 findings are reported",
+        "unsafe_xml_parse": "Import-resolved Python XML parses in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories are excluded before the file limit. Reports lxml.etree parse/fromstring calls with an inline XMLParser that explicitly sets resolve_entities=True, passed by keyword or position, and iterparse calls with direct resolve_entities=True in XML mode. Defaults, version inference, parser variables, set_default_parser, custom resolvers, XInclude, feed parsing and cross-file resolution are outside this check. Input trust and runtime access are not verified. No finding does not establish safe parsing.",
+        "archive_extraction": "Import-resolved Python tarfile extraction in parseable Python files up to 400 KB; at most 400 files and 32 findings; vendor, dependency trees and generated build directories are excluded before the file limit. Only a literal filter=\"fully_trusted\" on extract or extractall of an object proven to come from tarfile.open (a direct chain, or a name bound once before extraction in the same lexical scope and control branch) is reported: the explicit opt-out is unsafe on every Python with the parameter (measured on 3.12.13: fully_trusted writes outside the destination where the data and tar filters refuse the same member). A missing filter is version-dependent (3.14 defaults to data) and is not a finding; data and tar filters refuse escaping members, zipfile sanitizes paths itself, and variable filters, ** spreads, rebound or mutated receivers, modified tarfile modules, deferred closures/type aliases, generic declarations, zipfile calls and cross-file provenance are unresolved. Where the archive bytes come from and actual exposure are not verified.",
+        "path_traversal": "Local FastAPI route handlers in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. Imported file operations and proven pathlib receivers are traced locally with bounded expansion. Path construction alone is not a sink. A same-file module-level helper declared exactly once and never rebound is followed through one transition: its body is traced, and a single-return helper's value is read as the call's. Helpers from other files, nested defs, decorated or rebound names, coroutines, generators, unpacked or assignment-expression arguments, keyword-only parameters and second hops remain opaque. Containment recognizes imported secure_filename results and a resolved Path checked against a fixed absolute base on the branch reaching the operation. General control-flow joins, other validation patterns, runtime symlinks and TS/JS file handling are NOT covered",
+        "xss": "JavaScript/TypeScript/JSX/TSX parsed with the bundled native grammar, plus bounded Vue single-file components with HTML templates and JS/TS scripts; at most 400 files up to 400 KB each, 20,000 syntax nodes and depth 100, with at most 32 findings. Test/example paths, vendor, dependency trees and generated build directories are excluded before the file limit. DOM innerHTML/outerHTML assignments, document.write/writeln, insertAdjacentHTML and React dangerouslySetInnerHTML are reported for nonliteral values. Vue v-html expressions are also reported unless they are fixed literals; helpers and sanitizers are unresolved. Unsupported Vue template/script languages and malformed components are recorded as coverage gaps. A complete literal or an earlier visible, globally unambiguous const literal stays silent; concatenation, shadowed names and comments do not establish a static value. Sanitization, input trust, DOM receiver provenance, cross-file resolution and other framework template bindings are unresolved. Missing native grammars withhold the check; malformed or oversized source is reported in coverage rather than treated as analyzed.",
+        "insecure_randomness": "Python AST and JavaScript/TypeScript/JSX/TSX syntax; at most 400 files up to 400 KB each, 20,000 syntax nodes and depth 100, with at most 32 findings. Test/example paths, vendor, dependency trees and generated build directories are excluded before the file limit. Secret-named assignments containing a call to a proven stable Python random import (including supported aliases) or an unshadowed Math.random are reported, including template interpolation, destructuring bindings paired by exact slot or key correspondence, and one JS/TS helper hop: a name declared once as a function whose single return draws Math.random, called inside its declaring scope after the declaration. Parameters, destructuring, reassignment, generator, enum, namespace and import-alias declarations, conditional or multiple returns, deferred bodies (returned or assigned closures, generators, object/class methods and classes have not drawn), nested helper chains, Python helpers, rebound or ambiguous sources, cross-file provenance and actual security use of the result are unresolved. Comments, docstrings and literal text are not draws. secrets and SystemRandom are not insecure sources. Missing native grammars withhold this combined check; malformed or oversized source is reported in coverage. Vue/Svelte component script blocks are not covered by this randomness check.",
+        "command_injection": "Local FastAPI route handlers in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. Shell-invoking calls whose command is assembled from a value the request supplies are reported: os.system/os.popen (always a shell), the subprocess family when shell=True is a literal, and a [\"<shell>\", \"-c\", command] argument list (a shell command without shell=True). Positional and args= forms are recognized. Lists follow POSIX semantics: only args[0] under shell=True, or the command after -c, is shell code; subsequent positional parameters are data. Windows shell/list conventions, shell passed as a variable, an argument list assigned to a variable before the call, os.exec*/os.spawn* and TS/JS are not covered. Whether the route is reachable, whether a check elsewhere constrains the value, and whether the call executes are not verified.",
+        "session_cookie": "Cookie-setting calls and settings whose cookie name says it carries identity: Python `set_cookie`/`set_signed_cookie` with the name as a literal or a unambiguous module-level constant, the Django settings that decide the session cookie's flags, and in TypeScript/JavaScript `res.cookie`, a Next.js cookie store, an express-session nested cookie options, cookie-session top-level options and `document.cookie` writes. JavaScript names and option objects resolve one hop only when stable, unambiguous and visible in the current scope. Option keys are case-sensitive. Which default each API has decides whether an absent option is reported: `res.cookie` defaults HttpOnly to false, express-session defaults it to true. Not covered: a missing `secure` attribute (a developer's localhost is the ordinary reason, and browsers treat localhost as secure), a missing SameSite (browsers default to Lax; only an explicit SameSite=None removes the protection), `csrf`/`xsrf`/`state` cookie names (the double-submit pattern requires script access), raw Set-Cookie header strings, framework config files, dependency and test paths, generated build directories (.next, dist, build), cookies set through a wrapper, Python positional flag arguments, unknown option spreads, and any option whose value is a variable rather than a literal",
+        "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; runtime fetch bindings and HTTP failures are not verified. Vue/Svelte templates and handlers are not covered. Parser limits: none"
+      },
+      "rule_coverage": {
+        "outbound_url": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "tls_verification": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "unsafe_deserialization": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "path_traversal": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "xss": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 0,
+          "attempted_files": 0,
+          "analyzed_files": 0,
+          "excluded_files": 1,
+          "skipped_files": 0,
+          "exclusion_reasons": {
+            "unsupported_extension": 1
+          },
+          "skip_reasons": {},
+          "partial": false
+        },
+        "open_redirect": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "insecure_randomness": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "unsafe_xml_parse": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "command_injection": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "archive_extraction": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "sql_injection": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 1,
+          "attempted_files": 1,
+          "analyzed_files": 1,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "sql_injection_js": {
+          "version": 1,
+          "files_total": 1,
+          "eligible_files": 0,
+          "attempted_files": 0,
+          "analyzed_files": 0,
+          "excluded_files": 1,
+          "skipped_files": 0,
+          "exclusion_reasons": {
+            "unsupported_extension": 1
+          },
+          "skip_reasons": {},
+          "partial": false
+        }
+      },
+      "limitations": [
+        "llm_not_run_browser",
+        "dependency_check_not_run",
+        "runtime_tests_not_run",
+        "static_source_only"
+      ],
+      "runtime_verified": false,
+      "security_agent": {
+        "version": 1,
+        "mode": "deterministic_static",
+        "source": {
+          "archive_sha256": "e23f6045b8e73299afbc0446ce24c9968968bc0817f103002de3e4e77b20d038",
+          "engine_version": "2026-09-20-1"
+        },
+        "catalog": {
+          "version": "2026-09-20.1",
+          "sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded",
+          "cards": 3
+        },
+        "status": "completed",
+        "plan": [
+          {
+            "pattern_id": "python-outbound-request-input",
+            "title": "Python outbound address influenced by a request",
+            "check": "outbound_url",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-sql-string-assembly",
+            "title": "SQL text assembled from Python values",
+            "check": "sql_injection",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-unsafe-deserialization",
+            "title": "Python deserialization requiring trusted input",
+            "check": "unsafe_deserialization",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 1,
+              "eligible_files": 1,
+              "attempted_files": 1,
+              "analyzed_files": 1,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          }
+        ],
+        "observations": [
+          {
+            "id": "17e5be70dfff838728c99d2d1f247503e653261fee41c8e520ea3eb1031eabe7",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 3,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/checkpoints.py",
+            "line": 7,
+            "state": "needs_evidence",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/checkpoints.py",
+                "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                "sink_line": 7,
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ],
+                "sink_method": "load",
+                "loader": "pickle.load",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "local_input_flow",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "manual_review",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 3,
+              "status": "unsupported",
+              "stop_reason": "no_further_action",
+              "source": {
+                "file": "src/checkpoints.py",
+                "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ]
+              },
+              "facts": [],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_file_input",
+                  "result": "unknown",
+                  "reason": "file_flow_not_established",
+                  "produced": [],
+                  "detail": "file_binding_not_established"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 329
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "5b8904ba24e54a902a6b798d7970b45bfab68cfe0f9a65f1306ca51525cc258d",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "e23f6045b8e73299afbc0446ce24c9968968bc0817f103002de3e4e77b20d038",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                    "observation_id": "17e5be70dfff838728c99d2d1f247503e653261fee41c8e520ea3eb1031eabe7",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "ef04e237d03ad6e5af1e63827074be7c779609093f0a8363af976d2cc672a79b",
+                  "output_sha256": "ef04e237d03ad6e5af1e63827074be7c779609093f0a8363af976d2cc672a79b",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "ec2e8ae841afd627d547635b6c81281d350ae8d06f04520cef98e0c17265a75c",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "e23f6045b8e73299afbc0446ce24c9968968bc0817f103002de3e4e77b20d038",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                    "observation_id": "17e5be70dfff838728c99d2d1f247503e653261fee41c8e520ea3eb1031eabe7",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "5b8904ba24e54a902a6b798d7970b45bfab68cfe0f9a65f1306ca51525cc258d"
+                  ],
+                  "input_sha256": "ef04e237d03ad6e5af1e63827074be7c779609093f0a8363af976d2cc672a79b",
+                  "output_sha256": "13c0acd37d08f0b8bef1f460c12c4315c154dcd4720f2b67654b21d7fc3196ac",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "source_evidence_incomplete"
+                },
+                {
+                  "id": "8e493209fa70412d3ed77ef34b586b328ca89496f974942c9fedd75fcb2ce1ef",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "e23f6045b8e73299afbc0446ce24c9968968bc0817f103002de3e4e77b20d038",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                    "observation_id": "17e5be70dfff838728c99d2d1f247503e653261fee41c8e520ea3eb1031eabe7",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "ec2e8ae841afd627d547635b6c81281d350ae8d06f04520cef98e0c17265a75c"
+                  ],
+                  "input_sha256": "13c0acd37d08f0b8bef1f460c12c4315c154dcd4720f2b67654b21d7fc3196ac",
+                  "output_sha256": "13c0acd37d08f0b8bef1f460c12c4315c154dcd4720f2b67654b21d7fc3196ac",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "cab37a5471289fb2777f9f1964d97614c44f88738d39d3d352f7d4c622009afc",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "e23f6045b8e73299afbc0446ce24c9968968bc0817f103002de3e4e77b20d038",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                    "observation_id": "17e5be70dfff838728c99d2d1f247503e653261fee41c8e520ea3eb1031eabe7",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "8e493209fa70412d3ed77ef34b586b328ca89496f974942c9fedd75fcb2ce1ef"
+                  ],
+                  "input_sha256": "13c0acd37d08f0b8bef1f460c12c4315c154dcd4720f2b67654b21d7fc3196ac",
+                  "output_sha256": "13c0acd37d08f0b8bef1f460c12c4315c154dcd4720f2b67654b21d7fc3196ac",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          },
+          {
+            "id": "881400f8dab7fe5310e04836ec70f7de37a170f6516f492c9dc639ec7c976006",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 3,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/checkpoints.py",
+            "line": 11,
+            "state": "needs_evidence",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/checkpoints.py",
+                "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                "sink_line": 11,
+                "sink_span": [
+                  11,
+                  15,
+                  11,
+                  34
+                ],
+                "sink_method": "load",
+                "loader": "pickle.load",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "local_input_flow",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "manual_review",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 3,
+              "status": "unsupported",
+              "stop_reason": "no_further_action",
+              "source": {
+                "file": "src/checkpoints.py",
+                "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                "sink_span": [
+                  11,
+                  15,
+                  11,
+                  34
+                ]
+              },
+              "facts": [],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_file_input",
+                  "result": "unknown",
+                  "reason": "file_flow_not_established",
+                  "produced": [],
+                  "detail": "file_binding_not_established"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 267
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "8b7e768b4148f5aad526327286729974e7da53bd5140b4ebfac19a0dc326a041",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "e23f6045b8e73299afbc0446ce24c9968968bc0817f103002de3e4e77b20d038",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                    "observation_id": "881400f8dab7fe5310e04836ec70f7de37a170f6516f492c9dc639ec7c976006",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "0ce10595a3c7e7af98ce0358831d88f4b90d1e9e5a7caad62bd9f9f99d0c7dc5",
+                  "output_sha256": "0ce10595a3c7e7af98ce0358831d88f4b90d1e9e5a7caad62bd9f9f99d0c7dc5",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "35d8a134ea99787cfc86f19159a8e07cbff09cf8da83cfc4488e8dde033e66cb",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "e23f6045b8e73299afbc0446ce24c9968968bc0817f103002de3e4e77b20d038",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                    "observation_id": "881400f8dab7fe5310e04836ec70f7de37a170f6516f492c9dc639ec7c976006",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "8b7e768b4148f5aad526327286729974e7da53bd5140b4ebfac19a0dc326a041"
+                  ],
+                  "input_sha256": "0ce10595a3c7e7af98ce0358831d88f4b90d1e9e5a7caad62bd9f9f99d0c7dc5",
+                  "output_sha256": "9b6fad3435713e683aff668a2fa21c5016f508dd0ed5c272b76f78e3e83b771d",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "source_evidence_incomplete"
+                },
+                {
+                  "id": "83181ea91f2ce803daabc7bfb44406eadd041bf74cc9a749a1bf39950d9aaa2a",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "e23f6045b8e73299afbc0446ce24c9968968bc0817f103002de3e4e77b20d038",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                    "observation_id": "881400f8dab7fe5310e04836ec70f7de37a170f6516f492c9dc639ec7c976006",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "35d8a134ea99787cfc86f19159a8e07cbff09cf8da83cfc4488e8dde033e66cb"
+                  ],
+                  "input_sha256": "9b6fad3435713e683aff668a2fa21c5016f508dd0ed5c272b76f78e3e83b771d",
+                  "output_sha256": "9b6fad3435713e683aff668a2fa21c5016f508dd0ed5c272b76f78e3e83b771d",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "0e03818a730b25182e9805844903aec61569c20c48d93f5f9ab9de27f81f4ecf",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "e23f6045b8e73299afbc0446ce24c9968968bc0817f103002de3e4e77b20d038",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "1dcc1d07fc11af80ef917153c6bbe8ab31165e4f2b4b1311e5f0a208a9a76886",
+                    "observation_id": "881400f8dab7fe5310e04836ec70f7de37a170f6516f492c9dc639ec7c976006",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "83181ea91f2ce803daabc7bfb44406eadd041bf74cc9a749a1bf39950d9aaa2a"
+                  ],
+                  "input_sha256": "9b6fad3435713e683aff668a2fa21c5016f508dd0ed5c272b76f78e3e83b771d",
+                  "output_sha256": "9b6fad3435713e683aff668a2fa21c5016f508dd0ed5c272b76f78e3e83b771d",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          }
+        ],
+        "budget": {
+          "max_candidates": 128,
+          "candidates_found": 2,
+          "processed": 2,
+          "candidates_omitted": 0,
+          "evidence_actions": 4,
+          "max_evidence_actions": 512,
+          "evidence_work": 596,
+          "max_evidence_work": 640000
+        },
+        "stop_reason": "bounded_review_completed",
+        "runtime_verified": false,
+        "automatic_patch": false,
+        "limitations": [
+          "catalog_covers_selected_patterns",
+          "static_observations_only",
+          "attacker_control_not_checked",
+          "runtime_driver_identity_not_checked",
+          "runtime_tests_not_run",
+          "automatic_patch_not_run"
+        ]
+      }
+    }
+  },
+  {
+    "name": "shadowed",
+    "report": {
+      "engine_version": "2026-09-20-1",
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 11,
+          "masked": "",
+          "explanation": "Line 11 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 11,
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "gitignore-missing-secrets",
+          "title": "Environment ignore coverage needs review",
+          "severity": "medium",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "Archive-local ignore coverage was not established for candidate paths: .env. Rules were evaluated for each path, including nested files and negations. Global Git excludes and runtime configuration were not checked. This does not establish that credentials were committed.",
+          "fix_hint": "For paths used for private configuration, add appropriate ignore rules in their directory or the repository root. Keep intentional public build configuration and templates. Ignore rules do not remove files already tracked by Git.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        },
+        {
+          "rule_id": "no-tests",
+          "title": "No test files found",
+          "severity": "medium",
+          "confidence": 0.8,
+          "category": "Testing",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "There is nothing that checks your app still works after a change. Right now the only way to find out you broke signup or checkout is a user hitting it in production. That risk grows every time you ask an AI assistant to modify code you are not reading line by line.",
+          "fix_hint": "Start with one test for the thing that would hurt most if it silently broke \u2014 usually payment or login. One test that runs on every change is worth far more than a suite you plan to write later.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        },
+        {
+          "rule_id": "no-dockerfile",
+          "title": "No Dockerfile found in the archive",
+          "severity": "low",
+          "confidence": 0.9,
+          "category": "Deploy",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "A Dockerfile is one deployment option. Its absence does not establish that the app cannot run on a server; systemd and managed platforms are other options.",
+          "fix_hint": "Review existing deployment instructions; add a Dockerfile only if containers are needed.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        },
+        {
+          "rule_id": "no-ci",
+          "title": "No recognized CI configuration found in the archive",
+          "severity": "low",
+          "confidence": 0.9,
+          "category": "Deploy",
+          "file": "",
+          "line": 0,
+          "masked": "",
+          "explanation": "No recognized GitHub Actions, GitLab CI, CircleCI, Jenkins, Azure Pipelines, Bitbucket Pipelines, Travis, Drone or Buildkite configuration was found. External automation and CI settings outside the archive were not checked.",
+          "fix_hint": "Check whether external CI already builds and tests this project. If it does not, add a workflow appropriate to the project's build and test commands. Configuration presence alone does not verify successful execution.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked"
+          }
+        }
+      ],
+      "checks_run": [
+        "secrets",
+        "rls",
+        "schema_drift",
+        "project_files",
+        "ci_deploy_source",
+        "service_role",
+        "error_boundary",
+        "auth_read_consistency",
+        "auth_write_consistency",
+        "http_success",
+        "sql_injection",
+        "sql_injection_js",
+        "outbound_url",
+        "tls_verification",
+        "unsafe_deserialization",
+        "open_redirect",
+        "path_traversal",
+        "xss",
+        "archive_extraction",
+        "insecure_randomness",
+        "unsafe_xml_parse",
+        "command_injection",
+        "session_cookie"
+      ],
+      "checks_not_run": [],
+      "coverage": {
+        "secrets": "2/2 files scanned; excluded: none; files with invalid UTF-8 bytes omitted: 0. Exclusions are outside this check; no finding does not establish that excluded content is safe.",
+        "sql_injection": "Python statements whose SQL text is assembled from a value the function received, across expression branches, telling a fixed conditional fragment apart from an input-built query; a single import-resolved sqlalchemy text() wrapper is transparent to the sink, so the query text inside it is what is read. A parameterized call is silent. Whether the value is attacker-controlled, and any database-side policy, is not verified. At most 400 eligible files up to 400 KB each and 32 findings per check; test/example paths, dependency trees, generated builds, symbolic links and Git metadata are excluded. File, finding, decoding, parsing and expression-analysis gaps are recorded explicitly.",
+        "sql_injection_js": "TypeScript/JavaScript statements whose SQL text is assembled from values, which is the half that runs on the Next.js repositories Drydock audits in the main. Template literals and concatenation at the call site are read; cross-file builders, ORM query construction and runtime reachability are not resolved. At most 400 eligible files up to 400 KB each and 32 findings per check; test/example paths, dependency trees, generated builds, symbolic links and Git metadata are excluded. File, finding, decoding, parsing and expression-analysis gaps are recorded explicitly.",
+        "error_boundary": "complete",
+        "tls_verification": "At most 400 Python and JS/TS files, each up to 400 KB and 20,000 syntax nodes / depth 100; at most 32 findings. Recognized test/example/documentation paths are skipped, except migration paths; vendor and dependency trees plus generated build directories (.next, dist, build) are excluded before the file limit. Local imports and client/context aliases identify supported requests/httpx/aiohttp, ssl, urllib3, Tornado and Elasticsearch settings; JS/TS recognises Node https/tls options and process.env. Literal False/false, imported ssl.CERT_NONE and exact Node env 0 are read; hostname and certificate-chain checks have distinct explanations. Comments, strings, types, malformed/oversized files, unknown wrappers, cross-file and dynamic configuration, shell/CI YAML and runtime connections are unresolved. Vue/Svelte component script blocks are not covered by this TLS check. A clean result does not establish that every connection is verified",
+        "auth_read_consistency": "Local FastAPI routes in parseable Python files up to 2 MB; object lookups compared with protected reads on the same router and repository binding, including recognized identity dependencies and imported aliases; ASCII dependency, guard and witness names are decomposed through camelCase humps, so getAuthorized reads as get_authorized; non-ASCII name parts are preserved; test/vendor files excluded; middleware and runtime access not resolved",
+        "auth_write_consistency": "Local FastAPI write routes (POST/PUT/PATCH/DELETE) in parseable Python files up to 2 MB, compared with sibling routes on the same router; potential writes are recognized by leading call-name tokens or literal mutating SQL; actual storage effects, conventionally public paths, test/vendor files, router-level dependencies and middleware are not resolved",
+        "outbound_url": "Known HTTP clients in locally declared FastAPI routes; at most 400 eligible Python files up to 400 KB each. Recognized test/example/documentation paths are skipped, except migration paths; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit; 20,000 AST nodes and depth 100 per file, 16,000 template characters and 256 slots, 32 findings total. Supported Request fields, locally declared Pydantic string fields, known-string strip(), URL expressions and preceding local checks are traced within one handler; complex control flow, unknown calls/helpers, validation correctness, DNS, redirects, network policy and TS/JS are not resolved",
+        "open_redirect": "Local FastAPI routes in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. The Starlette/FastAPI RedirectResponse constructor whose target authority (between :// and the first /, ? or #) is built from a value the request supplies is reported. A caller value that fills only the path stays silent, except an input immediately after a leading slash that can form //host. Only an exact literal destination allowlist on the accepting branch suppresses the signal. Prefix/scheme checks, assertions and unknown validators do not establish that allowlist. Flask/Django redirect(), HTTPResponse/HTTPException Location headers, meta-refresh and JS/TS are not covered, and a helper that assembles the URL is not followed. Whether the route is reachable is not verified; parsed-host and cross-function validators are unresolved.",
+        "unsafe_deserialization": "At most 400 Python files up to 400 KB, 20,000 AST nodes and depth 100. Recognized test/example/documentation paths are skipped, except migration paths; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. Import-resolved loads with lexical shadowing and stable outer bindings. Unsafe YAML classes must have confirmed library provenance; Base/Safe/Full loaders are silent. Marshal and missing YAML Loader produce separate, conditional risk descriptions. Input trust and dependency versions are not verified. Assignment aliases, conditional imports, mutated modules, custom YAML loaders, stored Unpickler instances, cross-file resolution, bare torch.load and TS/JS are not covered; at most 32 findings are reported",
+        "unsafe_xml_parse": "Import-resolved Python XML parses in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories are excluded before the file limit. Reports lxml.etree parse/fromstring calls with an inline XMLParser that explicitly sets resolve_entities=True, passed by keyword or position, and iterparse calls with direct resolve_entities=True in XML mode. Defaults, version inference, parser variables, set_default_parser, custom resolvers, XInclude, feed parsing and cross-file resolution are outside this check. Input trust and runtime access are not verified. No finding does not establish safe parsing.",
+        "archive_extraction": "Import-resolved Python tarfile extraction in parseable Python files up to 400 KB; at most 400 files and 32 findings; vendor, dependency trees and generated build directories are excluded before the file limit. Only a literal filter=\"fully_trusted\" on extract or extractall of an object proven to come from tarfile.open (a direct chain, or a name bound once before extraction in the same lexical scope and control branch) is reported: the explicit opt-out is unsafe on every Python with the parameter (measured on 3.12.13: fully_trusted writes outside the destination where the data and tar filters refuse the same member). A missing filter is version-dependent (3.14 defaults to data) and is not a finding; data and tar filters refuse escaping members, zipfile sanitizes paths itself, and variable filters, ** spreads, rebound or mutated receivers, modified tarfile modules, deferred closures/type aliases, generic declarations, zipfile calls and cross-file provenance are unresolved. Where the archive bytes come from and actual exposure are not verified.",
+        "path_traversal": "Local FastAPI route handlers in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. Imported file operations and proven pathlib receivers are traced locally with bounded expansion. Path construction alone is not a sink. A same-file module-level helper declared exactly once and never rebound is followed through one transition: its body is traced, and a single-return helper's value is read as the call's. Helpers from other files, nested defs, decorated or rebound names, coroutines, generators, unpacked or assignment-expression arguments, keyword-only parameters and second hops remain opaque. Containment recognizes imported secure_filename results and a resolved Path checked against a fixed absolute base on the branch reaching the operation. General control-flow joins, other validation patterns, runtime symlinks and TS/JS file handling are NOT covered",
+        "xss": "JavaScript/TypeScript/JSX/TSX parsed with the bundled native grammar, plus bounded Vue single-file components with HTML templates and JS/TS scripts; at most 400 files up to 400 KB each, 20,000 syntax nodes and depth 100, with at most 32 findings. Test/example paths, vendor, dependency trees and generated build directories are excluded before the file limit. DOM innerHTML/outerHTML assignments, document.write/writeln, insertAdjacentHTML and React dangerouslySetInnerHTML are reported for nonliteral values. Vue v-html expressions are also reported unless they are fixed literals; helpers and sanitizers are unresolved. Unsupported Vue template/script languages and malformed components are recorded as coverage gaps. A complete literal or an earlier visible, globally unambiguous const literal stays silent; concatenation, shadowed names and comments do not establish a static value. Sanitization, input trust, DOM receiver provenance, cross-file resolution and other framework template bindings are unresolved. Missing native grammars withhold the check; malformed or oversized source is reported in coverage rather than treated as analyzed.",
+        "insecure_randomness": "Python AST and JavaScript/TypeScript/JSX/TSX syntax; at most 400 files up to 400 KB each, 20,000 syntax nodes and depth 100, with at most 32 findings. Test/example paths, vendor, dependency trees and generated build directories are excluded before the file limit. Secret-named assignments containing a call to a proven stable Python random import (including supported aliases) or an unshadowed Math.random are reported, including template interpolation, destructuring bindings paired by exact slot or key correspondence, and one JS/TS helper hop: a name declared once as a function whose single return draws Math.random, called inside its declaring scope after the declaration. Parameters, destructuring, reassignment, generator, enum, namespace and import-alias declarations, conditional or multiple returns, deferred bodies (returned or assigned closures, generators, object/class methods and classes have not drawn), nested helper chains, Python helpers, rebound or ambiguous sources, cross-file provenance and actual security use of the result are unresolved. Comments, docstrings and literal text are not draws. secrets and SystemRandom are not insecure sources. Missing native grammars withhold this combined check; malformed or oversized source is reported in coverage. Vue/Svelte component script blocks are not covered by this randomness check.",
+        "command_injection": "Local FastAPI route handlers in parseable Python files up to 400 KB; recognized test/example/documentation paths are skipped, except migration paths. At most 400 files and 32 findings; vendor, dependency trees and generated build directories (.next, dist, build) are excluded before the file limit. Shell-invoking calls whose command is assembled from a value the request supplies are reported: os.system/os.popen (always a shell), the subprocess family when shell=True is a literal, and a [\"<shell>\", \"-c\", command] argument list (a shell command without shell=True). Positional and args= forms are recognized. Lists follow POSIX semantics: only args[0] under shell=True, or the command after -c, is shell code; subsequent positional parameters are data. Windows shell/list conventions, shell passed as a variable, an argument list assigned to a variable before the call, os.exec*/os.spawn* and TS/JS are not covered. Whether the route is reachable, whether a check elsewhere constrains the value, and whether the call executes are not verified.",
+        "session_cookie": "Cookie-setting calls and settings whose cookie name says it carries identity: Python `set_cookie`/`set_signed_cookie` with the name as a literal or a unambiguous module-level constant, the Django settings that decide the session cookie's flags, and in TypeScript/JavaScript `res.cookie`, a Next.js cookie store, an express-session nested cookie options, cookie-session top-level options and `document.cookie` writes. JavaScript names and option objects resolve one hop only when stable, unambiguous and visible in the current scope. Option keys are case-sensitive. Which default each API has decides whether an absent option is reported: `res.cookie` defaults HttpOnly to false, express-session defaults it to true. Not covered: a missing `secure` attribute (a developer's localhost is the ordinary reason, and browsers treat localhost as secure), a missing SameSite (browsers default to Lax; only an explicit SameSite=None removes the protection), `csrf`/`xsrf`/`state` cookie names (the double-submit pattern requires script access), raw Set-Cookie header strings, framework config files, dependency and test paths, generated build directories (.next, dist, build), cookies set through a wrapper, Python positional flag arguments, unknown option spreads, and any option whose value is a variable rather than a literal",
+        "http_success": "Bounded React handlers with direct success effects after an unchecked fetch; runtime fetch bindings and HTTP failures are not verified. Vue/Svelte templates and handlers are not covered. Parser limits: none"
+      },
+      "rule_coverage": {
+        "outbound_url": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "tls_verification": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "unsafe_deserialization": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "path_traversal": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "xss": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 0,
+          "attempted_files": 0,
+          "analyzed_files": 0,
+          "excluded_files": 2,
+          "skipped_files": 0,
+          "exclusion_reasons": {
+            "unsupported_extension": 2
+          },
+          "skip_reasons": {},
+          "partial": false
+        },
+        "open_redirect": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "insecure_randomness": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "unsafe_xml_parse": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "command_injection": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "archive_extraction": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "sql_injection": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 2,
+          "attempted_files": 2,
+          "analyzed_files": 2,
+          "excluded_files": 0,
+          "skipped_files": 0,
+          "exclusion_reasons": {},
+          "skip_reasons": {},
+          "partial": false
+        },
+        "sql_injection_js": {
+          "version": 1,
+          "files_total": 2,
+          "eligible_files": 0,
+          "attempted_files": 0,
+          "analyzed_files": 0,
+          "excluded_files": 2,
+          "skipped_files": 0,
+          "exclusion_reasons": {
+            "unsupported_extension": 2
+          },
+          "skip_reasons": {},
+          "partial": false
+        }
+      },
+      "limitations": [
+        "llm_not_run_browser",
+        "dependency_check_not_run",
+        "runtime_tests_not_run",
+        "static_source_only"
+      ],
+      "runtime_verified": false,
+      "security_agent": {
+        "version": 1,
+        "mode": "deterministic_static",
+        "source": {
+          "archive_sha256": "989d095f7fd382156096a640e95078a22add9ac06a47c57e5385bb6257e55142",
+          "engine_version": "2026-09-20-1"
+        },
+        "catalog": {
+          "version": "2026-09-20.1",
+          "sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded",
+          "cards": 3
+        },
+        "status": "completed",
+        "plan": [
+          {
+            "pattern_id": "python-outbound-request-input",
+            "title": "Python outbound address influenced by a request",
+            "check": "outbound_url",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 2,
+              "eligible_files": 2,
+              "attempted_files": 2,
+              "analyzed_files": 2,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-sql-string-assembly",
+            "title": "SQL text assembled from Python values",
+            "check": "sql_injection",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 2,
+              "eligible_files": 2,
+              "attempted_files": 2,
+              "analyzed_files": 2,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          },
+          {
+            "pattern_id": "python-unsafe-deserialization",
+            "title": "Python deserialization requiring trusted input",
+            "check": "unsafe_deserialization",
+            "status": "analyzed",
+            "coverage": {
+              "version": 1,
+              "files_total": 2,
+              "eligible_files": 2,
+              "attempted_files": 2,
+              "analyzed_files": 2,
+              "excluded_files": 0,
+              "skipped_files": 0,
+              "exclusion_reasons": {},
+              "skip_reasons": {},
+              "partial": false
+            }
+          }
+        ],
+        "observations": [
+          {
+            "id": "9066b39e15bcb9615e57be8d46e53783303e3a7ce062b20d7202357b42211455",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 3,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/checkpoints.py",
+            "line": 7,
+            "state": "needs_evidence",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_line": 7,
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ],
+                "sink_method": "load",
+                "loader": "pickle.load",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "local_input_flow",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "manual_review",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 3,
+              "status": "unsupported",
+              "stop_reason": "no_further_action",
+              "source": {
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ]
+              },
+              "facts": [],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_file_input",
+                  "result": "unknown",
+                  "reason": "file_flow_not_established",
+                  "produced": [],
+                  "detail": "loader_import_shadowed"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 391
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "3c694f707619599033de8a0bbde20f3a1995bc452ea78567c92922fe58f177cf",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "989d095f7fd382156096a640e95078a22add9ac06a47c57e5385bb6257e55142",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "9066b39e15bcb9615e57be8d46e53783303e3a7ce062b20d7202357b42211455",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "1c21f8b91c9f8991146241f9c9e73fa4b8786e18c74836f292c2db41e61141e3",
+                  "output_sha256": "1c21f8b91c9f8991146241f9c9e73fa4b8786e18c74836f292c2db41e61141e3",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "0703d0d3f04e35e7b576778a7fed1d77b72b14ba49567fecb6d25b8b07a1aebc",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "989d095f7fd382156096a640e95078a22add9ac06a47c57e5385bb6257e55142",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "9066b39e15bcb9615e57be8d46e53783303e3a7ce062b20d7202357b42211455",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "3c694f707619599033de8a0bbde20f3a1995bc452ea78567c92922fe58f177cf"
+                  ],
+                  "input_sha256": "1c21f8b91c9f8991146241f9c9e73fa4b8786e18c74836f292c2db41e61141e3",
+                  "output_sha256": "cfc7cf6c259d2f2d5764d9ecf9fa2dfbcf4e95c1416e851df732707f45c1af82",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "source_evidence_incomplete"
+                },
+                {
+                  "id": "91b4d8ef07a68d9e261a4290ae3393fb11784254a428911fe64be54623f085f3",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "989d095f7fd382156096a640e95078a22add9ac06a47c57e5385bb6257e55142",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "9066b39e15bcb9615e57be8d46e53783303e3a7ce062b20d7202357b42211455",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "0703d0d3f04e35e7b576778a7fed1d77b72b14ba49567fecb6d25b8b07a1aebc"
+                  ],
+                  "input_sha256": "cfc7cf6c259d2f2d5764d9ecf9fa2dfbcf4e95c1416e851df732707f45c1af82",
+                  "output_sha256": "cfc7cf6c259d2f2d5764d9ecf9fa2dfbcf4e95c1416e851df732707f45c1af82",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "176cbbc77a2132fb2fa40ebd4fb6086c5345124c9b1340272ea3035334a2ad84",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "989d095f7fd382156096a640e95078a22add9ac06a47c57e5385bb6257e55142",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "9066b39e15bcb9615e57be8d46e53783303e3a7ce062b20d7202357b42211455",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "91b4d8ef07a68d9e261a4290ae3393fb11784254a428911fe64be54623f085f3"
+                  ],
+                  "input_sha256": "cfc7cf6c259d2f2d5764d9ecf9fa2dfbcf4e95c1416e851df732707f45c1af82",
+                  "output_sha256": "cfc7cf6c259d2f2d5764d9ecf9fa2dfbcf4e95c1416e851df732707f45c1af82",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          },
+          {
+            "id": "75f538db632142c37fc4aef0f42c136ef4bb319476cdaf6224d08e8375404808",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 3,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/checkpoints.py",
+            "line": 11,
+            "state": "needs_evidence",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_line": 11,
+                "sink_span": [
+                  11,
+                  15,
+                  11,
+                  34
+                ],
+                "sink_method": "load",
+                "loader": "pickle.load",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "local_input_flow",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "manual_review",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 3,
+              "status": "unsupported",
+              "stop_reason": "no_further_action",
+              "source": {
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_span": [
+                  11,
+                  15,
+                  11,
+                  34
+                ]
+              },
+              "facts": [],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_file_input",
+                  "result": "unknown",
+                  "reason": "file_flow_not_established",
+                  "produced": [],
+                  "detail": "loader_import_shadowed"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 304
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "a9343dc278d1b6fabed6637be9588d8a15cb254d8caa28bf18aeeab58613c674",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "989d095f7fd382156096a640e95078a22add9ac06a47c57e5385bb6257e55142",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "75f538db632142c37fc4aef0f42c136ef4bb319476cdaf6224d08e8375404808",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "7f1b7d1c8b6beb7cf2cfeed72041ab08f0a072e321a37df7286c7dd6ffd2168b",
+                  "output_sha256": "7f1b7d1c8b6beb7cf2cfeed72041ab08f0a072e321a37df7286c7dd6ffd2168b",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "2ed4b81b1a6c07680f69d06d905cb1b95e6ded7b06f609a84b3ee1f556cc1071",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "989d095f7fd382156096a640e95078a22add9ac06a47c57e5385bb6257e55142",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "75f538db632142c37fc4aef0f42c136ef4bb319476cdaf6224d08e8375404808",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "a9343dc278d1b6fabed6637be9588d8a15cb254d8caa28bf18aeeab58613c674"
+                  ],
+                  "input_sha256": "7f1b7d1c8b6beb7cf2cfeed72041ab08f0a072e321a37df7286c7dd6ffd2168b",
+                  "output_sha256": "b69578c4a96e6af5e06dee9e24d5387fcfd041ba175bf78ea6b191c54cee232f",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "source_evidence_incomplete"
+                },
+                {
+                  "id": "d9f3be25baeceb47fa53c293092474a122d3c88b6085914c652dc23773b56bda",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "989d095f7fd382156096a640e95078a22add9ac06a47c57e5385bb6257e55142",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "75f538db632142c37fc4aef0f42c136ef4bb319476cdaf6224d08e8375404808",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "2ed4b81b1a6c07680f69d06d905cb1b95e6ded7b06f609a84b3ee1f556cc1071"
+                  ],
+                  "input_sha256": "b69578c4a96e6af5e06dee9e24d5387fcfd041ba175bf78ea6b191c54cee232f",
+                  "output_sha256": "b69578c4a96e6af5e06dee9e24d5387fcfd041ba175bf78ea6b191c54cee232f",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "e241e5ddab035b2dd20944c6fcd26b075586c47f169ac85e007b8774c64a96ac",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "989d095f7fd382156096a640e95078a22add9ac06a47c57e5385bb6257e55142",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "75f538db632142c37fc4aef0f42c136ef4bb319476cdaf6224d08e8375404808",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "d9f3be25baeceb47fa53c293092474a122d3c88b6085914c652dc23773b56bda"
+                  ],
+                  "input_sha256": "b69578c4a96e6af5e06dee9e24d5387fcfd041ba175bf78ea6b191c54cee232f",
+                  "output_sha256": "b69578c4a96e6af5e06dee9e24d5387fcfd041ba175bf78ea6b191c54cee232f",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          }
+        ],
+        "budget": {
+          "max_candidates": 128,
+          "candidates_found": 2,
+          "processed": 2,
+          "candidates_omitted": 0,
+          "evidence_actions": 4,
+          "max_evidence_actions": 512,
+          "evidence_work": 695,
+          "max_evidence_work": 640000
+        },
+        "stop_reason": "bounded_review_completed",
+        "runtime_verified": false,
+        "automatic_patch": false,
+        "limitations": [
+          "catalog_covers_selected_patterns",
+          "static_observations_only",
+          "attacker_control_not_checked",
+          "runtime_driver_identity_not_checked",
+          "runtime_tests_not_run",
+          "automatic_patch_not_run"
+        ]
+      }
+    }
+  }
+]

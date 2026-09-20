@@ -35,6 +35,7 @@ from __future__ import annotations
 from app.report.evidence import is_non_production
 from app.scan.rls import RULE_ID as RLS_READ_RULE_ID
 from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
+from app.scan.security_agent import deserialization_observation
 
 # Rules whose repeats are one finding about many tables. Deliberately a small
 # explicit set: a rule that fires once per genuinely distinct issue must keep
@@ -42,6 +43,38 @@ from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
 GROUPABLE = frozenset({RLS_READ_RULE_ID, RLS_WRITE_RULE_ID})
 
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def related_finding_groups(findings: list[dict]) -> list[list[dict]]:
+    """Render related file-loader locations together, retaining every original.
+
+    Unlike the RLS display projection below, no representative finding is
+    created. These groups are only consumed by renderers, never by scoring,
+    API records or exports. Missing or invalid source evidence stays separate.
+    """
+    groups: dict[tuple, list[dict]] = {}
+    result: list[list[dict]] = []
+    for finding in findings:
+        trace = deserialization_observation(finding)
+        if trace is None or trace["loader"] != "pickle.load":
+            result.append([finding])
+            continue
+        source_context = (finding.get("claim_evidence") or {}).get("source_context")
+        source_kind = source_context.get("kind") if isinstance(source_context, dict) else None
+        key = (finding["rule_id"], trace["file"], trace["source_sha256"], trace["loader"],
+               str(finding.get("context") or ""), str(source_kind or ""),
+               str(finding.get("severity") or ""), str(finding.get("verification_status") or ""),
+               str(finding.get("verification_method") or ""))
+        if key not in groups:
+            groups[key] = []
+            result.append(groups[key])
+        elif any(member["claim_evidence"]["deserialization_observation"]["sink_span"] == trace["sink_span"]
+                 for member in groups[key]):
+            # Repeated records at one span are not additional locations.
+            result.append([finding])
+            continue
+        groups[key].append(finding)
+    return result
 
 
 def group_for_display(findings: list[dict]) -> list[dict]:

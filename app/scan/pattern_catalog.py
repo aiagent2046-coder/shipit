@@ -17,7 +17,7 @@ from app.capabilities import CAPABILITIES
 
 _CATALOG = {
     "schema_version": 1,
-    "catalog_version": "2026-09-19.3",
+    "catalog_version": "2026-09-20.1",
     "cards": [
         {
             "id": "python-sql-string-assembly",
@@ -107,7 +107,7 @@ _CATALOG = {
         },
         {
             "id": "python-unsafe-deserialization",
-            "revision": 2,
+            "revision": 3,
             "title": "Python deserialization requiring trusted input",
             "languages": ["Python"],
             "weaknesses": [{
@@ -126,7 +126,8 @@ _CATALOG = {
                 "evidence_descriptions": {
                     "source_pattern": "The check observed a supported import-resolved deserialization operation.",
                     "request_input_source": "Resolve a supported FastAPI Body bytes declaration in the source.",
-                    "local_input_flow": "Trace that body through local assignments to the exact pickle.loads argument.",
+                    "local_input_flow": "Trace a supported body or opened-file binding "
+                                        "to the exact pickle loader argument.",
                     "input_trust_boundary": "Establish the producer, authentication and ability to alter the bytes.",
                     "loader_runtime_contract": "Establish the loader, version, options and expected object types.",
                 },
@@ -136,6 +137,8 @@ _CATALOG = {
                     "Unknown wrappers, cross-file provenance and application trust policy require separate evidence.",
                     "A bounded Body-to-pickle source trace does not establish caller authentication, "
                     "deployed reachability, byte integrity or runtime loader behavior.",
+                    "A parameter-to-open-to-pickle.load binding does not establish file origin, "
+                    "calling code, format selection, trust or runtime reachability.",
                     "A safe-format replacement requires an application schema and compatibility decisions.",
                 ],
             },

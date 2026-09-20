@@ -9,6 +9,14 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = resolve(root, 'src');
 const base = 'http://scanner.test';
+const fileReports = JSON.parse(await readFile(resolve(root, '../tests/fixtures/deserialization-file-agent.json'), 'utf8'));
+const fileReport = fileReports.find(item => item.name === 'completed').report;
+const fileSarif = { version: '2.1.0', runs: [{ results: fileReport.findings.map(f => ({
+  ruleId: f.rule_id, message: { text: f.title },
+  ...(f.file && f.line > 0 ? { locations: [{ physicalLocation: {
+    artifactLocation: { uri: f.file }, region: { startLine: f.line },
+  } }] } : {}),
+})) }] };
 const finding = (title, overrides = {}) => ({
   title, rule_id: 'test-rule', severity: 'medium', confidence: 0.4,
   file: 'src/config.py', line: 1, verification_status: 'unverified', ...overrides,
@@ -154,8 +162,8 @@ try {
     for await (const chunk of stream) chunks.push(chunk);
     assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()), expected, 'Presentation must not modify exports');
   }
-  async function scanControlled(nextReport) {
-    await page.evaluate(next => { window.scanResponse = next; }, { report: nextReport, sarif });
+  async function scanControlled(nextReport, nextSarif = sarif) {
+    await page.evaluate(next => { window.scanResponse = next; }, { report: nextReport, sarif: nextSarif });
     await page.getByRole('button', { name: 'Scan locally', exact: true }).click();
     await patternReview.locator('summary').click();
   }
@@ -221,9 +229,45 @@ try {
     assert.match(await patternReview.innerText(), /1 records could not be displayed within the supported schema and limit/);
     assert.doesNotMatch(await patternReview.innerText(), /Review the runtime contract:|query parameter user_id/);
   }
-  await scanControlled(acquiredReport);
+  // Actual scanner-produced file evidence: group two loader locations while
+  // retaining each card and the original JSON/SARIF download records.
+  await scanControlled(fileReport, fileSarif);
+  const fileGroup = page.locator('#findings details').filter({
+    has: page.locator('summary', { hasText: 'Pickle file loading · 2 locations' }),
+  });
+  await fileGroup.waitFor({ state: 'visible' });
+  assert.equal(await fileGroup.locator('article').count(), 2);
+  assert.equal(await page.locator('#findings article').count(), fileReport.findings.length);
+  assert.match(await page.locator('#findings-summary').innerText(), new RegExp(`^${fileReport.findings.length} total findings`));
+  for (const evidence of await fileGroup.locator('article details').all()) {
+    await evidence.locator(':scope > summary').click();
+  }
+  const fileGroupText = await fileGroup.innerText();
+  for (const line of [7, 11]) assert.ok(fileGroupText.includes(`src/checkpoints.py:${line}`));
+  assert.match(fileGroupText, /Detector confidence: 0\.80/);
+  assert.match(fileGroupText, /Verification: unverified/);
+  assert.match(fileGroupText, /Deserialization source SHA-256/);
+  const fileReviewText = await patternReview.innerText();
+  assert.match(fileReviewText, /Function read_primary/);
+  assert.match(fileReviewText, /Function read_secondary/);
+  assert.match(fileReviewText, /Calling code and origin of the file[\s\S]*not checked/i);
+  assert.doesNotMatch(fileReviewText, /body parameter|pickle\.loads\(\)/);
+  await fileGroup.locator(':scope > summary').focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await fileGroup.locator('article').first().isVisible(), false);
+  await page.keyboard.press('Enter');
+  assert.equal(await fileGroup.locator('article').first().isVisible(), true);
+  for (const [label, expected] of [['Export JSON', fileReport], ['Export SARIF', fileSarif]]) {
+    const pending = page.waitForEvent('download');
+    await page.getByRole('button', { name: label }).click();
+    const stream = await (await pending).createReadStream();
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()), expected, 'File grouping must preserve exports');
+  }
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+  await scanControlled(acquiredReport);
   await page.evaluate(() => {
     window.scanResponse.report.findings = window.scanResponse.report.findings.filter(f => f.context === 'test_fixture');
     delete window.scanResponse.report.security_agent;

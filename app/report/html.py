@@ -19,7 +19,7 @@ from app.report.evidence import (
     observation_summary, review_contribution_rows,
     model_acceptance_notice,
 )
-from app.report.grouping import group_for_display
+from app.report.grouping import group_for_display, related_finding_groups
 from app.report.plain_language import plain_fields, tier
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -167,10 +167,18 @@ _is_non_production = is_non_production
 
 def _findings_table(findings: list[dict], *, historical: bool = False, included: bool = False,
                     refreshed: bool = False) -> str:
-    rows = "".join(_finding_row(f, historical=historical, included=included, refreshed=refreshed) for f in findings)
+    rows = ""
+    for group in related_finding_groups(findings):
+        rows += '<tbody>'
+        if len(group) > 1:
+            rows += ('<tr><th colspan="2" scope="rowgroup">'
+                     f'Pickle file loading · {len(group)} locations</th></tr>')
+        rows += "".join(_finding_row(f, historical=historical, included=included, refreshed=refreshed)
+                        for f in group)
+        rows += '</tbody>'
     return (
         '<table><thead><tr><th></th><th>Finding</th></tr></thead>'
-        f'<tbody>{rows}</tbody></table>'
+        f'{rows}</table>'
     )
 
 

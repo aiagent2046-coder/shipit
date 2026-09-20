@@ -3,6 +3,7 @@ import type { Finding, Score, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
 import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, narrativeProjection, partialContradicted, sourceSeverityCounts, syntaxContradicted, unsupportedTransport } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
+import { relatedFindingGroups } from "@/lib/findingGroups";
 
 function SeverityBadge({ severity }: { severity: Severity }) {
   const meta = SEVERITY_META[severity] ?? SEVERITY_META.low;
@@ -187,6 +188,19 @@ export function PreviewHistory({ score }: { score: Score }) {
   );
 }
 
+function RelatedFindingCards({ findings }: { findings: Finding[] }) {
+  return relatedFindingGroups(findings).map((group, index) => group.length === 1
+    ? <FindingCard key={index} finding={group[0]} />
+    : <li key={index} className="rounded-lg border border-border p-3">
+      <details open>
+        <summary className="mb-3 font-semibold">Pickle file loading · {group.length} locations</summary>
+        <ul className="flex flex-col gap-3">
+          {group.map((finding, location) => <FindingCard key={location} finding={finding} />)}
+        </ul>
+      </details>
+    </li>);
+}
+
 export function FindingsList({ findings }: { findings: Finding[] }) {
   if (!findings || findings.length === 0) {
     return (
@@ -208,9 +222,7 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
   return (
     <>
       <ul className="flex flex-col gap-3">
-        {production.map((f, i) => (
-          <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />
-        ))}
+        <RelatedFindingCards findings={production} />
       </ul>
       {examples.length > 0 && (
         <section className="mt-6" aria-label="In tests, examples and scaffolding">
@@ -222,9 +234,7 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
             committed in a test.
           </p>
           <ul className="flex flex-col gap-3">
-            {examples.map((f, i) => (
-              <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />
-            ))}
+            <RelatedFindingCards findings={examples} />
           </ul>
         </section>
       )}

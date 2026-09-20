@@ -47,6 +47,8 @@ def _next_action(record, trace, analysis):
         return "locate_source"
     if "sink_span" not in record["source"]:
         return None
+    if record["version"] == 3:
+        return "trace_file_input" if "trace_file_input" not in attempted else None
     if "trace_request_input" not in attempted:
         return "trace_request_input"
     if record["version"] == 2:
@@ -74,15 +76,18 @@ def _acquire_evidence(trace, snapshot, budget, *, deserialization):
            trace.get("driver_status"), tuple(trace.get("sink_span", ())))
     if snapshot is not None and key in snapshot.acquisitions:
         return deepcopy(snapshot.acquisitions[key])
+    file_input = deserialization and trace["loader"] == "pickle.load"
     record = {
-        "version": 2 if deserialization else 1, "status": "unsupported", "stop_reason": "no_further_action",
+        "version": 3 if file_input else 2 if deserialization else 1,
+        "status": "unsupported", "stop_reason": "no_further_action",
         "source": {"file": trace["file"], "source_sha256": trace["source_sha256"]},
         "facts": [], "attempts": [],
         "budget": {"max_steps": 2 if deserialization else MAX_CANDIDATE_STEPS, "steps": 0, "work_units": 0},
     }
     if deserialization:
         record["source"]["sink_span"] = list(trace["sink_span"])
-    goals = {"request_input_source", "local_input_flow"} if deserialization else SOURCE_GOALS
+    goals = ({"file_input_source", "local_input_flow"} if file_input else
+             {"request_input_source", "local_input_flow"} if deserialization else SOURCE_GOALS)
     initial_work = budget.remaining
     analysis = {}
     document = sink = None
@@ -102,8 +107,12 @@ def _acquire_evidence(trace, snapshot, budget, *, deserialization):
                 record["source"]["sink_span"] = source_span(sink)
                 result = {"status": "established", "facts": []}
                 reason = "source_snapshot_matched"
-            elif action == "trace_request_input":
-                if deserialization:
+            elif action in {"trace_request_input", "trace_file_input"}:
+                if file_input:
+                    from app.scan.deserialization_file_evidence import analyze_deserialization_file_input
+                    analysis = analyze_deserialization_file_input(document.tree, sink, spend=budget.spend)
+                    shadowed = snapshot.file_deserialization_import_shadowed
+                elif deserialization:
                     from app.scan.deserialization_input_evidence import analyze_deserialization_input
                     analysis = analyze_deserialization_input(document.tree, sink, spend=budget.spend)
                     shadowed = snapshot.deserialization_import_shadowed
@@ -112,13 +121,16 @@ def _acquire_evidence(trace, snapshot, budget, *, deserialization):
                     analysis = analyze_query_input(document.tree, sink, spend=budget.spend)
                     shadowed = snapshot.framework_shadowed
                 if shadowed and analysis.get("reason") not in COLLECTOR_LIMITS:
-                    # Visible local modules prevent claiming the imported
-                    # framework's HTTP semantics. Symbolic SQL remains usable.
-                    analysis = {**analysis, "status": "unknown", "reason": "framework_import_shadowed",
+                    # Visible local modules prevent assigning library semantics
+                    # to source imports. Symbolic SQL remains usable.
+                    analysis = {**analysis, "status": "unknown", "reason": (
+                                    "loader_import_shadowed" if file_input else "framework_import_shadowed"),
                                 "facts": [], "constraints": [], "constraint_status": "unknown"}
                 result = analysis
-                reason = ("request_flow_established" if result["status"] == "established"
-                          else "request_flow_not_established")
+                reason = (("file_flow_established" if result["status"] == "established"
+                           else "file_flow_not_established") if file_input else
+                          ("request_flow_established" if result["status"] == "established"
+                           else "request_flow_not_established"))
             elif action == "inspect_sql_slots":
                 from app.scan.sql_slot_evidence import classify_sql_slots
 
@@ -134,7 +146,7 @@ def _acquire_evidence(trace, snapshot, budget, *, deserialization):
                 budget.spend(len(constraints) + 1)
                 reason = "value_constraints_recorded" if established else "value_constraints_unknown"
             step.update(result=result["status"], reason=reason)
-            if action in {"trace_request_input", "inspect_sql_slots"}:
+            if action in {"trace_request_input", "trace_file_input", "inspect_sql_slots"}:
                 step["detail"] = result["reason"]
             if result["status"] == "established":
                 step["produced"] = [fact["id"] for fact in result["facts"]]

@@ -64,15 +64,18 @@ export function sqlEvidenceRows(finding: Finding): Rows {
 }
 
 type AcquisitionSpan = [number, number, number, number];
+type RequestInputSource = { parameter: string; channel: string; span: AcquisitionSpan };
+type FileInputSource = { function: string; parameter: string; handle: string; mode: "rb";
+  function_span: AcquisitionSpan; parameter_span: AcquisitionSpan; open_span: AcquisitionSpan; handle_span: AcquisitionSpan };
 type AcquisitionFact = {
   id: string; method: string;
-  sources?: { parameter: string; channel: string; span: AcquisitionSpan }[];
+  sources?: (RequestInputSource | FileInputSource)[];
   locations?: AcquisitionSpan[];
   slots?: { index: number; role: string }[];
   constraints?: { slot: number; kind: string; type: string; span: AcquisitionSpan }[];
 };
 export interface SourceAcquisition {
-  version: 1 | 2; status: "completed" | "partial" | "unsupported"; stop_reason: string;
+  version: 1 | 2 | 3; status: "completed" | "partial" | "unsupported"; stop_reason: string;
   source: { file: string; source_sha256: string; sink_span?: AcquisitionSpan };
   facts: AcquisitionFact[];
   attempts: { action: string; result: string; reason: string; produced: string[]; detail?: string }[];
@@ -89,6 +92,9 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
     obj(v) && required.every(k => Object.hasOwn(v, k)) && Object.keys(v).every(k => required.includes(k) || optional.includes(k));
   const span = (v: unknown): v is AcquisitionSpan => Array.isArray(v) && v.length === 4
     && v.every(n => integer(n)) && v[0] > 0 && (v[2] > v[0] || v[2] === v[0] && v[3] > v[1]);
+  const positionBefore = (left: number[], right: number[]) => left[0] < right[0] || left[0] === right[0] && left[1] <= right[1];
+  const containsSpan = (outer: AcquisitionSpan, inner: AcquisitionSpan) => positionBefore(outer.slice(0, 2), inner.slice(0, 2))
+    && positionBefore(inner.slice(2), outer.slice(2));
   const identifier = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(v);
   // Python uses Unicode identifier rules and counts code points, not UTF-16
   // units. Join controls are not Python identifiers; require absolute end too.
@@ -98,24 +104,29 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
   const choice = (v: unknown, options: string[]): v is string => typeof v === "string" && options.includes(v);
   const sha = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
   const deserialization = normalizeDeserializationObservation(trace) !== null;
-  const actions = deserialization ? ["locate_source", "trace_request_input"]
+  const fileInput = deserialization && obj(trace) && trace.sink_method === "load";
+  const sourceFact = fileInput ? "file_input_source" : "request_input_source";
+  const actions = fileInput ? ["locate_source", "trace_file_input"] : deserialization ? ["locate_source", "trace_request_input"]
     : ["locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints"];
   const methods: Record<string, string> = { request_input_source: "fastapi_ast_binding",
-    local_input_flow: "python_ast_straight_line", sql_value_position: "postgresql_ast_slot_context",
+    file_input_source: "python_ast_file_binding",
+    local_input_flow: fileInput ? "python_ast_file_flow" : "python_ast_straight_line", sql_value_position: "postgresql_ast_slot_context",
     value_constraints: "python_ast_constraints" };
-  const fields: Record<string, string> = { request_input_source: "sources", local_input_flow: "locations",
+  const fields: Record<string, string> = { request_input_source: "sources", file_input_source: "sources", local_input_flow: "locations",
     sql_value_position: "slots", value_constraints: "constraints" };
   const produces: Record<string, string[]> = { locate_source: [], trace_request_input: ["request_input_source", "local_input_flow"],
+    trace_file_input: ["file_input_source", "local_input_flow"],
     inspect_sql_slots: ["sql_value_position"], collect_value_constraints: ["value_constraints"] };
   const stops = ["source_goal_reached", "no_further_action", "source_unavailable", "source_changed", "source_parse_error",
     "source_limit", "ambiguous_sink", "sink_not_found", "budget_exhausted", "collector_error"];
   const reasons = ["source_snapshot_matched", "source_unavailable", "source_changed", "source_limit", "source_parse_error",
     "sink_not_found", "ambiguous_sink", "request_flow_established", "request_flow_not_established",
+    "file_flow_established", "file_flow_not_established",
     "sql_value_positions_established", "sql_slots_not_established", "value_constraints_recorded",
     "value_constraints_unknown", "collector_failed", "work_budget_exhausted", "step_budget_exhausted"];
   if (!obj(trace) || !integer(trace.sink_line, 1)
     || !keys(value, ["version", "status", "stop_reason", "source", "facts", "attempts", "budget"])
-    || value.version !== (deserialization ? 2 : 1) || !choice(value.status, ["completed", "partial", "unsupported"])
+    || value.version !== (fileInput ? 3 : deserialization ? 2 : 1) || !choice(value.status, ["completed", "partial", "unsupported"])
     || !choice(value.stop_reason, stops)) return null;
   const driver = trace.driver_provenance;
   const validDriver = trace.driver_status === "source_resolved" && choice(trace.sink_method, ["execute", "executemany"])
@@ -146,13 +157,23 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
   for (const fact of facts) {
     if (!obj(fact) || typeof fact.id !== "string" || !Object.hasOwn(methods, fact.id) || found.has(fact.id)
       || fact.method !== methods[fact.id]
-      || deserialization && !["request_input_source", "local_input_flow"].includes(fact.id)) return null;
+      || deserialization && ![sourceFact, "local_input_flow"].includes(fact.id)
+      || !deserialization && fact.id === "file_input_source") return null;
     const field = fields[fact.id], entries = fact[field];
     if (!keys(fact, ["id", "method", field]) || !Array.isArray(entries) || !entries.length
       || entries.length > (["locations", "constraints"].includes(field) ? 128 : 64)) return null;
     if (field === "sources") {
       if (deserialization && entries.length !== 1) return null;
-      if (entries.some(item => !keys(item, ["parameter", "channel", "span"]) || !parameter(item.parameter)
+      if (fileInput) {
+        if (entries.some(item => !keys(item, ["function", "parameter", "handle", "mode", "function_span", "parameter_span", "open_span", "handle_span"])
+          || !parameter(item.function) || !parameter(item.parameter) || !parameter(item.handle) || item.mode !== "rb"
+          || !span(item.function_span) || !span(item.parameter_span) || !span(item.open_span) || !span(item.handle_span)
+          || ![item.parameter_span, item.open_span, item.handle_span, trace.sink_span].every(location =>
+            span(location) && containsSpan(item.function_span as AcquisitionSpan, location))
+          || !positionBefore(item.parameter_span.slice(2), item.open_span.slice(0, 2))
+          || !positionBefore(item.open_span.slice(2), item.handle_span.slice(0, 2))
+          || !positionBefore(item.handle_span.slice(2), (trace.sink_span as AcquisitionSpan).slice(0, 2)))) return null;
+      } else if (entries.some(item => !keys(item, ["parameter", "channel", "span"]) || !parameter(item.parameter)
         || !choice(item.channel, deserialization ? ["body"] : ["query", "path"]) || !span(item.span))) return null;
     } else if (field === "locations") {
       if (!entries.every(span)) return null;
@@ -165,13 +186,17 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
       || item.kind === "int_conversion" && item.type !== "int" || item.kind === "request_string" && item.type !== "str")) return null;
     found.set(fact.id, fact as unknown as AcquisitionFact);
   }
-  if (found.has("request_input_source") !== found.has("local_input_flow")) return null;
+  if (found.has(sourceFact) !== found.has("local_input_flow")) return null;
   if (deserialization && found.has("local_input_flow")) {
     const locations = found.get("local_input_flow")!.locations!;
-    const origin = found.get("request_input_source")!.sources![0].span;
+    const source = found.get(sourceFact)!.sources![0];
+    const origin = "parameter_span" in source ? source.parameter_span : source.span;
     if (JSON.stringify(locations[0]) !== JSON.stringify(origin)
       || JSON.stringify(locations.at(-1)) !== JSON.stringify(trace.sink_span)
       || new Set(locations.map(location => JSON.stringify(location))).size !== locations.length) return null;
+    if (fileInput && "function_span" in source && (
+      ![source.open_span, source.handle_span].every(required => locations.some(location => JSON.stringify(location) === JSON.stringify(required)))
+      || !locations.every(location => containsSpan(source.function_span, location)))) return null;
   }
   if (found.has("value_constraints")) {
     if (!found.has("local_input_flow")) return null;
@@ -190,6 +215,7 @@ export function normalizeAcquisition(value: unknown, trace: unknown): SourceAcqu
       || !choice(attempt.reason, reasons) || !Array.isArray(attempt.produced)
       || attempt.produced.some(id => typeof id !== "string")) return null;
     const establishedReasons: Record<string, string> = { locate_source: "source_snapshot_matched", trace_request_input: "request_flow_established",
+      trace_file_input: "file_flow_established",
       inspect_sql_slots: "sql_value_positions_established", collect_value_constraints: "value_constraints_recorded" };
     if (attempt.result === "established" && attempt.reason !== establishedReasons[attempt.action]
       || attempt.action === "locate_source" && attempt.result === "established" && !("sink_span" in source)) return null;
@@ -219,7 +245,7 @@ export function normalizeDeserializationObservation(value: unknown): Record<stri
     || typeof record.source_sha256 !== "string" || !/^[a-f0-9]{64}(?![\s\S])/.test(record.source_sha256)
     || !integer(record.sink_line) || record.sink_line < 1 || !Array.isArray(span) || span.length !== 4 || !span.every(integer)
     || span[0] !== record.sink_line || !(span[2] > span[0] || span[2] === span[0] && span[3] > span[1])
-    || record.sink_method !== "loads" || record.loader !== "pickle.loads" || record.input_control_status !== "not_checked") return null;
+    || (record.sink_method !== "loads" && record.sink_method !== "load") || record.loader !== `pickle.${record.sink_method}` || record.input_control_status !== "not_checked") return null;
   return structuredClone(record);
 }
 
@@ -332,7 +358,7 @@ function normalizeDeserializationAgent(value: unknown): unknown {
 function deserializationTraceRows(value: unknown, file: unknown, line: unknown): Rows {
   const trace = normalizeDeserializationObservation(value);
   if (!trace || trace.file !== file || trace.sink_line !== line) return [];
-  return [["Deserialization source trace", `Import-resolved pickle.loads() at line ${trace.sink_line}. `
+  return [["Deserialization source trace", `Import-resolved ${trace.loader}() at line ${trace.sink_line}. `
     + "Input trust and loader runtime behavior were not checked."],
     ["Deserialization source SHA-256", String(trace.source_sha256)]];
 }
@@ -349,10 +375,13 @@ export function acquisitionRows(value: unknown, trace: unknown): [string, string
   const rows: [string, string][] = [["Source investigation", `${record.status}; ${human(record.stop_reason)}. `
     + "Source evidence only; runtime exploitability and repair behavior remain unverified."]];
   const labels: Record<string, string> = { locate_source: "Locate the source", trace_request_input: "Trace request input",
+    trace_file_input: "Trace file input",
     inspect_sql_slots: "Check SQL value positions", collect_value_constraints: "Check value constraints" };
   for (const step of record.attempts) rows.push([`Investigation: ${labels[step.action]}`, `${human(step.result)}; ${human(step.reason)}`]);
   for (const fact of record.facts) {
-    const detail = fact.sources ? fact.sources.map(item => `${item.channel} parameter ${item.parameter} at line ${item.span[0]}`).join("; ")
+    const detail = fact.sources ? fact.sources.map(item => "open_span" in item
+      ? `Function ${item.function}: parameter ${item.parameter} at line ${item.parameter_span[0]} → open(..., "rb") at line ${item.open_span[0]} → handle ${item.handle}. File producer, caller and input trust were not established.`
+      : `${item.channel} parameter ${item.parameter} at line ${item.span[0]}`).join("; ")
       : fact.locations ? `Local flow at lines ${fact.locations.map(item => item[0]).join(", ")}`
       : fact.slots ? `${fact.slots.length} substitution(s) in SQL value positions.`
       : fact.constraints!.map(item => `slot ${item.slot + 1}: ${human(item.kind)} ${item.type} at line ${item.span[0]}`).join("; ");
@@ -530,10 +559,13 @@ export function patternReview(value: unknown): PatternReviewView | null {
       ...(synthetic ? syntheticContractRows(synthetic) : []),
       ...("synthetic_contract" in item && !synthetic ? [["Synthetic evidence unavailable", "The saved synthetic evidence could not be validated. Customer project runtime behavior remains unverified."]] as Rows : []),
       ...("acquisition" in item && !acquisition ? [["Source investigation unavailable", "The saved evidence could not be validated. Do not treat missing source facts as established."]] as Rows : []),
-      ["Missing evidence", missing.length ? missing.map(label).join("; ") : "Not recorded; prerequisites are not established."],
+      ["Missing evidence", missing.length ? missing.map(key => key === "request_input_source"
+        && normalizeDeserializationObservation(trace)?.sink_method === "load" ? "Calling code and origin of the file (not checked)" : label(key)).join("; ") : "Not recorded; prerequisites are not established."],
       ["Next step", verified ? "Review the customer project runtime contract: confirm authorization, deployed reachability, intended value types and expected query behavior before choosing a repair."
         : collected ? (deserialization
-          ? "Review the runtime contract: confirm input trust, loader options and expected object types before choosing a repair."
+          ? (acquisition?.version === 3
+            ? "Review caller-supplied paths and file producers. Require authenticated, trusted bytes or reject unsupported serialization formats; confirm loader options and expected object types before choosing a repair. File input does not establish an HTTP or CLI entry point."
+            : "Review the runtime contract: confirm input trust, loader options and expected object types before choosing a repair.")
           : "Review the runtime contract: confirm reachability, input control and expected query behavior before choosing a repair.")
         : "Manual review: gather the missing evidence before choosing a repair."],
       ["Repair guidance", recipe.status === "manual_guidance" && recipe.automatic_apply === false
