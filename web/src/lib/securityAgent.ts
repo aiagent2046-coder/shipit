@@ -322,7 +322,7 @@ function validDeserializationChain(observation: Record<string, unknown>, source:
 
 // Revoke inconsistent deserialization proof before building either summary or
 // observation rows, preserving the detector candidate and the caller's record.
-function normalizeDeserializationAgent(value: unknown): unknown {
+export function normalizeDeserializationAgent(value: unknown): unknown {
   const obj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
   if (!obj(value) || !Array.isArray(value.observations)) return value;
   let invalid = false;

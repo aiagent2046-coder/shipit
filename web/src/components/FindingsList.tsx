@@ -4,6 +4,44 @@ import { SEVERITY_META, sortFindings } from "@/lib/format";
 import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, narrativeProjection, partialContradicted, sourceSeverityCounts, syntaxContradicted, unsupportedTransport } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 import { relatedFindingGroups } from "@/lib/findingGroups";
+import { projectOwnerReport, type OwnerReportCard, type OwnerReportContext, type OwnerReportProjection } from "@/lib/ownerReport";
+
+function revealOwnerFinding(index: number) {
+  const target = document.getElementById(`owner-finding-${index}`);
+  for (let parent = target?.parentElement; parent; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement) parent.open = true;
+  }
+  target?.focus();
+}
+
+export function OwnerReportSummary({ projection }: { projection: OwnerReportProjection }) {
+  const { summary } = projection;
+  if (!summary) return null;
+  return <section aria-label="Report in brief" className="my-6 space-y-3 rounded-lg border border-border bg-surface p-4">
+    <h2 className="text-lg font-semibold">{summary.title}</h2>
+    <p>{summary.text}</p>
+    <p className="text-sm"><strong>First step: </strong>{summary.next_action}</p>
+    <ul className="list-disc space-y-1 pl-5 text-sm text-muted">
+      {summary.coverage_notes.map(note => <li key={note}>{note}</li>)}
+    </ul>
+    {projection.cards.length > 0 && <a className="inline-block text-sm underline underline-offset-4"
+      href={`#owner-finding-${projection.cards[0].finding_index}`}
+      onClick={() => revealOwnerFinding(projection.cards[0].finding_index)}>See the file-loading question</a>}
+  </section>;
+}
+
+function OwnerFindingDetails({ card }: { card: OwnerReportCard }) {
+  return <dl className="space-y-3 text-sm">
+    <div><dt className="font-semibold">What we know</dt><dd><ul className="list-disc space-y-1 pl-5 text-muted">
+      {card.known.map(fact => <li key={fact}>{fact}</li>)}
+    </ul></dd></div>
+    <div><dt className="font-semibold">What needs checking</dt><dd><ul className="list-disc space-y-1 pl-5 text-muted">
+      {card.unknown.map(gap => <li key={gap}>{gap}</li>)}
+    </ul></dd></div>
+    <div><dt className="font-semibold">What to do next</dt><dd>{card.next_action}</dd></div>
+    <div><dt className="font-semibold">This step is complete when</dt><dd className="text-muted">{card.done_when}</dd></div>
+  </dl>;
+}
 
 function SeverityBadge({ severity }: { severity: Severity }) {
   const meta = SEVERITY_META[severity] ?? SEVERITY_META.low;
@@ -51,8 +89,8 @@ export function SeveritySummary({ findings }: { findings: Finding[] }) {
   );
 }
 
-function FindingCard({ finding, historical = false, included = false, refreshed = false }: {
-  finding: Finding; historical?: boolean; included?: boolean; refreshed?: boolean;
+function FindingCard({ finding, historical = false, included = false, refreshed = false, ownerCard }: {
+  finding: Finding; historical?: boolean; included?: boolean; refreshed?: boolean; ownerCard?: OwnerReportCard;
 }) {
   const { what, risk, fix } = plainFields(finding);
   const projection = narrativeProjection(finding);
@@ -83,8 +121,7 @@ function FindingCard({ finding, historical = false, included = false, refreshed 
       <div key={`${label}-${index}`}><dt className="font-medium">{label}</dt><dd className="text-muted">{value}</dd></div>
     ))}
   </dl>;
-  return (
-    <li className="rounded-lg border border-border bg-surface p-4">
+  const original = <>
       <div className="mb-2 flex items-start justify-between gap-3">
         <p className="font-medium">{unsupported ? "Credential transport — exposure not established"
           : partial && !projection ? "Source checks contradict part of this finding" : what}</p>
@@ -135,8 +172,22 @@ function FindingCard({ finding, historical = false, included = false, refreshed 
       {tech && (
         <p className="break-all font-mono text-xs text-muted">{tech}</p>
       )}
-    </li>
-  );
+  </>;
+  return <li className="rounded-lg border border-border bg-surface p-4 scroll-mt-6"
+    id={ownerCard ? `owner-finding-${ownerCard.finding_index}` : undefined} tabIndex={ownerCard ? -1 : undefined}>
+    {ownerCard ? <>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <h3 className="font-semibold">{ownerCard.title}</h3><SeverityBadge severity={finding.severity} />
+      </div>
+      <p className="mb-3 text-sm text-muted">{ownerCard.impact}</p>
+      <p className="mb-3 break-all font-mono text-xs text-muted">{loc}</p>
+      <OwnerFindingDetails card={ownerCard} />
+      <details className="mt-4 text-sm">
+        <summary>Details for a developer</summary>
+        <div className="mt-3">{original}</div>
+      </details>
+    </> : original}
+  </li>;
 }
 
 export function PreviewHistory({ score }: { score: Score }) {
@@ -188,20 +239,22 @@ export function PreviewHistory({ score }: { score: Score }) {
   );
 }
 
-function RelatedFindingCards({ findings }: { findings: Finding[] }) {
+function RelatedFindingCards({ findings, ownerCards }: { findings: Finding[]; ownerCards?: Map<Finding, OwnerReportCard> }) {
   return relatedFindingGroups(findings).map((group, index) => group.length === 1
-    ? <FindingCard key={index} finding={group[0]} />
+    ? <FindingCard key={index} finding={group[0]} ownerCard={ownerCards?.get(group[0])} />
     : <li key={index} className="rounded-lg border border-border p-3">
       <details open>
         <summary className="mb-3 font-semibold">Pickle file loading · {group.length} locations</summary>
         <ul className="flex flex-col gap-3">
-          {group.map((finding, location) => <FindingCard key={location} finding={finding} />)}
+          {group.map((finding, location) => <FindingCard key={location} finding={finding} ownerCard={ownerCards?.get(finding)} />)}
         </ul>
       </details>
     </li>);
 }
 
-export function FindingsList({ findings }: { findings: Finding[] }) {
+export function FindingsList({ findings, context, projection }: {
+  findings: Finding[]; context?: OwnerReportContext; projection?: OwnerReportProjection;
+}) {
   if (!findings || findings.length === 0) {
     return (
       <div className="rounded-lg border border-border bg-surface p-6 text-center">
@@ -213,6 +266,13 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
     );
   }
   const sorted = sortFindings(findings);
+  // Keep preview/demo/legacy callers unchanged; current report adapters supply
+  // the saved scan context. Map by original object before sorting and grouping.
+  const ownerCards = new Map<Finding, OwnerReportCard>();
+  const ownerProjection = projection ?? (context ? projectOwnerReport(findings, context) : null);
+  if (ownerProjection) for (const card of ownerProjection.cards) {
+    ownerCards.set(findings[card.finding_index], card);
+  }
   const contradicted = sorted.filter(syntaxContradicted);
   const informational = sorted.filter(isInformational);
   const unsupported = sorted.filter((f) => !syntaxContradicted(f) && !isInformational(f) && unsupportedTransport(f));
@@ -222,7 +282,7 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
   return (
     <>
       <ul className="flex flex-col gap-3">
-        <RelatedFindingCards findings={production} />
+        <RelatedFindingCards findings={production} ownerCards={ownerCards} />
       </ul>
       {examples.length > 0 && (
         <section className="mt-6" aria-label="In tests, examples and scaffolding">
@@ -234,7 +294,7 @@ export function FindingsList({ findings }: { findings: Finding[] }) {
             committed in a test.
           </p>
           <ul className="flex flex-col gap-3">
-            <RelatedFindingCards findings={examples} />
+            <RelatedFindingCards findings={examples} ownerCards={ownerCards} />
           </ul>
         </section>
       )}

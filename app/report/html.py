@@ -20,6 +20,7 @@ from app.report.evidence import (
     model_acceptance_notice,
 )
 from app.report.grouping import group_for_display, related_finding_groups
+from app.report.owner_report import build_owner_report, owner_report_context
 from app.report.plain_language import plain_fields, tier
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -39,7 +40,7 @@ def _category_label(f: dict) -> str:
 
 
 def _finding_row(f: dict, *, historical: bool = False, included: bool = False,
-                 refreshed: bool = False) -> str:
+                 refreshed: bool = False, owner_card: dict | None = None) -> str:
     sev = str(f.get("severity", "low"))
     color = _SEVERITY_COLOR.get(sev, "#8b8d98")
     loc = escape(str(f.get("file", "")))
@@ -142,9 +143,33 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False,
         _category_label(f),
         ("" if (partial or unsupported or review) and not projection else escape(str(f.get("title", "")))), loc,
         escape(str(f.get("masked", "")))) if x)
+    if owner_card is not None and not historical:
+        source_details = ''.join(
+            '<p class="tech">Source: ' + escape(ref["file"]) + ':' + str(ref["line"])
+            + ' · SHA-256: ' + escape(ref["sha256"])
+            + ' · call span: ' + escape(str(ref["sink_span"]))
+            + ' · acquisition version: ' + str(ref["acquisition_version"]) + '</p>'
+            for ref in owner_card["source_refs"]
+        )
+        developer_details = (
+            '<details class="owner-developer"><summary>Details for a developer</summary>'
+            f'<p>{escape(what)}</p>{risk_html}{evidence}{fix_html}'
+            f'<div class="tech">{tech_bits}</div>{source_details}</details>'
+        )
+        what = owner_card["title"]
+        risk_html = f'<div class="risk">{escape(owner_card["impact"])}</div>'
+        evidence = '<dl class="owner-evidence">' + ''.join(
+            '<dt>' + label + '</dt><dd><ul>'
+            + ''.join('<li>' + escape(item) + '</li>' for item in owner_card[key])
+            + '</ul></dd>' for label, key in (("What we know", "known"), ("What needs checking", "unknown"))
+        ) + ('<dt>What to do next</dt><dd>' + escape(owner_card["next_action"])
+             + '</dd><dt>This step is complete when</dt><dd>' + escape(owner_card["done_when"]) + '</dd></dl>')
+        fix_html = developer_details
+        tech_bits = loc
     return (
-        '<tr>'
-        f'<td class="tiercell"><span class="sev" style="background:{color}">'
+        (f'<tr id="owner-finding-{owner_card["finding_index"]}" tabindex="-1">'
+         if owner_card is not None and not historical else '<tr>')
+        + f'<td class="tiercell"><span class="sev" style="background:{color}">'
         f'{emoji} {escape(tier_label)}</span></td>'
         f'<td class="title"><div class="what">{escape(what)}</div>'
         f'<div class="tech">{escape(evidence_label(f, historical))}</div>'
@@ -166,14 +191,15 @@ NON_PRODUCTION_NOTE = (
 _is_non_production = is_non_production
 
 def _findings_table(findings: list[dict], *, historical: bool = False, included: bool = False,
-                    refreshed: bool = False) -> str:
+                    refreshed: bool = False, owner_cards: dict[int, dict] | None = None) -> str:
     rows = ""
     for group in related_finding_groups(findings):
         rows += '<tbody>'
         if len(group) > 1:
             rows += ('<tr><th colspan="2" scope="rowgroup">'
                      f'Pickle file loading · {len(group)} locations</th></tr>')
-        rows += "".join(_finding_row(f, historical=historical, included=included, refreshed=refreshed)
+        rows += "".join(_finding_row(f, historical=historical, included=included, refreshed=refreshed,
+                                    owner_card=(owner_cards or {}).get(id(f)))
                         for f in group)
         rows += '</tbody>'
     return (
@@ -247,6 +273,19 @@ def _free_baseline(score: dict) -> str:
 def render_report(result: dict, project_name: str = "your app") -> str:
     score = result["score"]
     raw_findings = result.get("findings", [])
+    owner_report = build_owner_report(raw_findings, owner_report_context(result))
+    owner_cards = {id(raw_findings[card["finding_index"]]): card for card in owner_report["cards"]}
+    owner_summary = owner_report["summary"]
+    owner_summary_html = ""
+    if owner_summary:
+        owner_summary_html = (
+            '<section class="owner-summary" aria-label="Report in brief">'
+            '<h2>' + escape(owner_summary["title"]) + '</h2><p>' + escape(owner_summary["text"])
+            + '</p><p><strong>Next action:</strong> ' + escape(owner_summary["next_action"]) + '</p><ul>'
+            + ''.join('<li>' + escape(note) + '</li>' for note in owner_summary["coverage_notes"])
+            + '</ul><a href="#owner-finding-' + str(owner_report["cards"][0]["finding_index"])
+            + '">See the file-loading question</a></section>'
+        )
     findings = sorted(
         group_for_display(raw_findings),
         key=lambda f: (_SEVERITY_ORDER.get(str(f.get("severity")), 9),
@@ -315,7 +354,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     non_production = [f for f in unresolved if _is_non_production(f)]
 
     if production:
-        body = _findings_table(production)
+        body = _findings_table(production, owner_cards=owner_cards)
     elif non_production:
         body = ('<p class="clean">No findings outside the test and example '
                 'section. This does not establish safety.</p>')
@@ -329,7 +368,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         body += (
             f'<h2 class="sechead">{NON_PRODUCTION_HEADING}</h2>'
             f'<p class="secnote">{NON_PRODUCTION_NOTE}</p>'
-            + _findings_table(non_production)
+            + _findings_table(non_production, owner_cards=owner_cards)
         )
     if informational:
         body += '<h2 class="sechead">Deployment inventory</h2>' + _findings_table(informational)
@@ -416,6 +455,12 @@ def render_report(result: dict, project_name: str = "your app") -> str:
 .risk{{color:#b4b4bc;margin-bottom:4px}}
 .fix{{color:#0a7d33;margin-bottom:4px}}
 .tech{{color:#8b8d98;font-size:12px;font-family:monospace}}
+.owner-summary{{border:1px solid #4a4b52;border-radius:8px;padding:16px;margin:20px 0}}
+.owner-summary h2{{font-size:18px;margin:0 0 8px}}
+.owner-evidence dt{{font-weight:600;margin-top:10px}}
+.owner-evidence dd{{margin:4px 0;overflow-wrap:anywhere}}
+.owner-evidence ul{{margin:0;padding-left:20px}}
+.owner-developer{{margin-top:12px;overflow-wrap:anywhere}}
 .tiercell{{white-space:nowrap;vertical-align:top}}
 .sev{{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;
       color:#111113;text-transform:uppercase}}
@@ -434,6 +479,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     <div class="sub">stack: {escape(str(result.get("stack", "?")))} · {escape(summary)}</div>
   </div>
 </header>
+{owner_summary_html}
 {tier_note}
 {status_note}
 {acceptance_note}

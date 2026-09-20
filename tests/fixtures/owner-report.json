@@ -1,0 +1,2204 @@
+[
+  {
+    "name": "completed",
+    "fixture": "completed",
+    "changes": [],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 7,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "unsupported",
+    "fixture": "unsupported",
+    "changes": [],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "shadowed",
+    "fixture": "shadowed",
+    "changes": [],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "legacy-no-agent",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "delete",
+        "path": [
+          "context",
+          "security_agent"
+        ]
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "legacy-no-trace",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "delete",
+        "path": [
+          "findings",
+          0,
+          "claim_evidence",
+          "deserialization_observation"
+        ]
+      },
+      {
+        "op": "delete",
+        "path": [
+          "findings",
+          1,
+          "claim_evidence",
+          "deserialization_observation"
+        ]
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [],
+      "summary": null
+    }
+  },
+  {
+    "name": "outer-archive-mismatch",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "context",
+          "archive_sha256"
+        ],
+        "value": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "outer-engine-mismatch",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "context",
+          "engine_version"
+        ],
+        "value": "other-engine"
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "missing-receipt",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "delete",
+        "path": [
+          "context",
+          "security_agent",
+          "observations",
+          0,
+          "agent_chain"
+        ]
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "missing-flow-fact",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "context",
+          "security_agent",
+          "observations",
+          0,
+          "acquisition",
+          "facts"
+        ],
+        "value": [
+          {
+            "id": "file_input_source",
+            "method": "python_ast_file_binding",
+            "sources": [
+              {
+                "function": "read_primary",
+                "parameter": "path",
+                "handle": "handle",
+                "mode": "rb",
+                "function_span": [
+                  3,
+                  0,
+                  7,
+                  34
+                ],
+                "parameter_span": [
+                  3,
+                  17,
+                  3,
+                  21
+                ],
+                "open_span": [
+                  6,
+                  9,
+                  6,
+                  25
+                ],
+                "handle_span": [
+                  6,
+                  29,
+                  6,
+                  35
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "neighbor-acquisition",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "context",
+          "security_agent",
+          "observations",
+          0,
+          "acquisition"
+        ],
+        "value": {
+          "version": 3,
+          "status": "completed",
+          "stop_reason": "source_goal_reached",
+          "source": {
+            "file": "src/checkpoints.py",
+            "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+            "sink_span": [
+              11,
+              15,
+              11,
+              34
+            ]
+          },
+          "facts": [
+            {
+              "id": "file_input_source",
+              "method": "python_ast_file_binding",
+              "sources": [
+                {
+                  "function": "read_secondary",
+                  "parameter": "path",
+                  "handle": "handle",
+                  "mode": "rb",
+                  "function_span": [
+                    9,
+                    0,
+                    11,
+                    34
+                  ],
+                  "parameter_span": [
+                    9,
+                    19,
+                    9,
+                    23
+                  ],
+                  "open_span": [
+                    10,
+                    9,
+                    10,
+                    25
+                  ],
+                  "handle_span": [
+                    10,
+                    29,
+                    10,
+                    35
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "local_input_flow",
+              "method": "python_ast_file_flow",
+              "locations": [
+                [
+                  9,
+                  19,
+                  9,
+                  23
+                ],
+                [
+                  10,
+                  9,
+                  10,
+                  25
+                ],
+                [
+                  10,
+                  29,
+                  10,
+                  35
+                ],
+                [
+                  11,
+                  15,
+                  11,
+                  34
+                ]
+              ]
+            }
+          ],
+          "attempts": [
+            {
+              "action": "locate_source",
+              "result": "established",
+              "reason": "source_snapshot_matched",
+              "produced": []
+            },
+            {
+              "action": "trace_file_input",
+              "result": "established",
+              "reason": "file_flow_established",
+              "produced": [
+                "file_input_source",
+                "local_input_flow"
+              ],
+              "detail": "file_parameter_open_binding"
+            }
+          ],
+          "budget": {
+            "max_steps": 2,
+            "steps": 2,
+            "work_units": 304
+          }
+        }
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "different-finding-sha",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "findings",
+          0,
+          "claim_evidence",
+          "deserialization_observation",
+          "source_sha256"
+        ],
+        "value": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "different-finding-span",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "findings",
+          0,
+          "claim_evidence",
+          "deserialization_observation",
+          "sink_span"
+        ],
+        "value": [
+          7,
+          16,
+          7,
+          34
+        ]
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "llm-cannot-borrow-source-facts",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "findings",
+          0,
+          "source"
+        ],
+        "value": "llm"
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "1 file-loading location needs a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "ambiguous-duplicate-observation",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "context",
+          "security_agent",
+          "observations"
+        ],
+        "value": [
+          {
+            "id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 3,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/checkpoints.py",
+            "line": 7,
+            "state": "source_evidence_collected",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_line": 7,
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ],
+                "sink_method": "load",
+                "loader": "pickle.load",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "review_runtime_contract",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 3,
+              "status": "completed",
+              "stop_reason": "source_goal_reached",
+              "source": {
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ]
+              },
+              "facts": [
+                {
+                  "id": "file_input_source",
+                  "method": "python_ast_file_binding",
+                  "sources": [
+                    {
+                      "function": "read_primary",
+                      "parameter": "path",
+                      "handle": "handle",
+                      "mode": "rb",
+                      "function_span": [
+                        3,
+                        0,
+                        7,
+                        34
+                      ],
+                      "parameter_span": [
+                        3,
+                        17,
+                        3,
+                        21
+                      ],
+                      "open_span": [
+                        6,
+                        9,
+                        6,
+                        25
+                      ],
+                      "handle_span": [
+                        6,
+                        29,
+                        6,
+                        35
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "local_input_flow",
+                  "method": "python_ast_file_flow",
+                  "locations": [
+                    [
+                      3,
+                      17,
+                      3,
+                      21
+                    ],
+                    [
+                      6,
+                      9,
+                      6,
+                      25
+                    ],
+                    [
+                      6,
+                      29,
+                      6,
+                      35
+                    ],
+                    [
+                      7,
+                      15,
+                      7,
+                      34
+                    ]
+                  ]
+                }
+              ],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_file_input",
+                  "result": "established",
+                  "reason": "file_flow_established",
+                  "produced": [
+                    "file_input_source",
+                    "local_input_flow"
+                  ],
+                  "detail": "file_parameter_open_binding"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 391
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "369ee46d886d35453a8c91cc3a4de2e4246379fc01790324f7c7a3c755f05a1d",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "0bf413814997ee1ad109e326b2d3f95a8951e08149d89e3ef96714584405ddc9",
+                  "output_sha256": "0bf413814997ee1ad109e326b2d3f95a8951e08149d89e3ef96714584405ddc9",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "df30efda8ba9f8e3313a06f3591c27d4209e6a571e9fa1faa2817e8ea45a3e8a",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "369ee46d886d35453a8c91cc3a4de2e4246379fc01790324f7c7a3c755f05a1d"
+                  ],
+                  "input_sha256": "0bf413814997ee1ad109e326b2d3f95a8951e08149d89e3ef96714584405ddc9",
+                  "output_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "source_evidence_collected"
+                },
+                {
+                  "id": "8922974fe2abc1fdd7711e34e1ebc38ae83fd173c934bdc60e4c88b1cf3d48f4",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "df30efda8ba9f8e3313a06f3591c27d4209e6a571e9fa1faa2817e8ea45a3e8a"
+                  ],
+                  "input_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "output_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "a5c45d79f6ff343ed17905aff18c48a9e6b495dba7890de2569bcb3371512dfa",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "8922974fe2abc1fdd7711e34e1ebc38ae83fd173c934bdc60e4c88b1cf3d48f4"
+                  ],
+                  "input_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "output_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          },
+          {
+            "id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 3,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/checkpoints.py",
+            "line": 7,
+            "state": "source_evidence_collected",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_line": 7,
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ],
+                "sink_method": "load",
+                "loader": "pickle.load",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "review_runtime_contract",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 3,
+              "status": "completed",
+              "stop_reason": "source_goal_reached",
+              "source": {
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_span": [
+                  7,
+                  15,
+                  7,
+                  34
+                ]
+              },
+              "facts": [
+                {
+                  "id": "file_input_source",
+                  "method": "python_ast_file_binding",
+                  "sources": [
+                    {
+                      "function": "read_primary",
+                      "parameter": "path",
+                      "handle": "handle",
+                      "mode": "rb",
+                      "function_span": [
+                        3,
+                        0,
+                        7,
+                        34
+                      ],
+                      "parameter_span": [
+                        3,
+                        17,
+                        3,
+                        21
+                      ],
+                      "open_span": [
+                        6,
+                        9,
+                        6,
+                        25
+                      ],
+                      "handle_span": [
+                        6,
+                        29,
+                        6,
+                        35
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "local_input_flow",
+                  "method": "python_ast_file_flow",
+                  "locations": [
+                    [
+                      3,
+                      17,
+                      3,
+                      21
+                    ],
+                    [
+                      6,
+                      9,
+                      6,
+                      25
+                    ],
+                    [
+                      6,
+                      29,
+                      6,
+                      35
+                    ],
+                    [
+                      7,
+                      15,
+                      7,
+                      34
+                    ]
+                  ]
+                }
+              ],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_file_input",
+                  "result": "established",
+                  "reason": "file_flow_established",
+                  "produced": [
+                    "file_input_source",
+                    "local_input_flow"
+                  ],
+                  "detail": "file_parameter_open_binding"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 391
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "369ee46d886d35453a8c91cc3a4de2e4246379fc01790324f7c7a3c755f05a1d",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "0bf413814997ee1ad109e326b2d3f95a8951e08149d89e3ef96714584405ddc9",
+                  "output_sha256": "0bf413814997ee1ad109e326b2d3f95a8951e08149d89e3ef96714584405ddc9",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "df30efda8ba9f8e3313a06f3591c27d4209e6a571e9fa1faa2817e8ea45a3e8a",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "369ee46d886d35453a8c91cc3a4de2e4246379fc01790324f7c7a3c755f05a1d"
+                  ],
+                  "input_sha256": "0bf413814997ee1ad109e326b2d3f95a8951e08149d89e3ef96714584405ddc9",
+                  "output_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "source_evidence_collected"
+                },
+                {
+                  "id": "8922974fe2abc1fdd7711e34e1ebc38ae83fd173c934bdc60e4c88b1cf3d48f4",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "df30efda8ba9f8e3313a06f3591c27d4209e6a571e9fa1faa2817e8ea45a3e8a"
+                  ],
+                  "input_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "output_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "a5c45d79f6ff343ed17905aff18c48a9e6b495dba7890de2569bcb3371512dfa",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "87a11a4e72940da1071bc9a7189e470e8312c44c62df585aef0c2828a5ed1e87",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "8922974fe2abc1fdd7711e34e1ebc38ae83fd173c934bdc60e4c88b1cf3d48f4"
+                  ],
+                  "input_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "output_sha256": "d2bcd5bc0c54dd49502d8c5cc6ea2e9fe50f01dcb21a5a14d9c967336e0c3a05",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          },
+          {
+            "id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+            "pattern_id": "python-unsafe-deserialization",
+            "pattern_revision": 3,
+            "title": "Python deserialization requiring trusted input",
+            "weaknesses": [
+              "CWE-502"
+            ],
+            "rule_id": "unsafe-deserialization",
+            "file": "src/checkpoints.py",
+            "line": 11,
+            "state": "source_evidence_collected",
+            "evidence": {
+              "deserialization_observation": {
+                "version": 1,
+                "method": "python_ast_import_resolved",
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_line": 11,
+                "sink_span": [
+                  11,
+                  15,
+                  11,
+                  34
+                ],
+                "sink_method": "load",
+                "loader": "pickle.load",
+                "input_control_status": "not_checked"
+              }
+            },
+            "missing_evidence": [
+              "request_input_source",
+              "input_trust_boundary",
+              "loader_runtime_contract"
+            ],
+            "next_action": "review_runtime_contract",
+            "recipe": {
+              "id": null,
+              "status": "not_available",
+              "automatic_apply": false
+            },
+            "steps": [
+              {
+                "action": "classify_observation",
+                "result": "candidate_weakness_class"
+              },
+              {
+                "action": "check_source_evidence",
+                "result": "deserialization_source_observation"
+              },
+              {
+                "action": "assess_recipe",
+                "result": "missing_preconditions"
+              }
+            ],
+            "acquisition": {
+              "version": 3,
+              "status": "completed",
+              "stop_reason": "source_goal_reached",
+              "source": {
+                "file": "src/checkpoints.py",
+                "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                "sink_span": [
+                  11,
+                  15,
+                  11,
+                  34
+                ]
+              },
+              "facts": [
+                {
+                  "id": "file_input_source",
+                  "method": "python_ast_file_binding",
+                  "sources": [
+                    {
+                      "function": "read_secondary",
+                      "parameter": "path",
+                      "handle": "handle",
+                      "mode": "rb",
+                      "function_span": [
+                        9,
+                        0,
+                        11,
+                        34
+                      ],
+                      "parameter_span": [
+                        9,
+                        19,
+                        9,
+                        23
+                      ],
+                      "open_span": [
+                        10,
+                        9,
+                        10,
+                        25
+                      ],
+                      "handle_span": [
+                        10,
+                        29,
+                        10,
+                        35
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "local_input_flow",
+                  "method": "python_ast_file_flow",
+                  "locations": [
+                    [
+                      9,
+                      19,
+                      9,
+                      23
+                    ],
+                    [
+                      10,
+                      9,
+                      10,
+                      25
+                    ],
+                    [
+                      10,
+                      29,
+                      10,
+                      35
+                    ],
+                    [
+                      11,
+                      15,
+                      11,
+                      34
+                    ]
+                  ]
+                }
+              ],
+              "attempts": [
+                {
+                  "action": "locate_source",
+                  "result": "established",
+                  "reason": "source_snapshot_matched",
+                  "produced": []
+                },
+                {
+                  "action": "trace_file_input",
+                  "result": "established",
+                  "reason": "file_flow_established",
+                  "produced": [
+                    "file_input_source",
+                    "local_input_flow"
+                  ],
+                  "detail": "file_parameter_open_binding"
+                }
+              ],
+              "budget": {
+                "max_steps": 2,
+                "steps": 2,
+                "work_units": 304
+              }
+            },
+            "agent_chain": {
+              "version": 1,
+              "mode": "in_process_queue",
+              "scope": "source_evidence",
+              "status": "waiting_for_evidence",
+              "max_tasks": 4,
+              "tasks": [
+                {
+                  "id": "35ed85761709c9f886a3f9dafc6d4ca5083d189953e55c699ec1b776d438923c",
+                  "agent": "detector",
+                  "goal": "classify_static_deserialization_observation",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [],
+                  "input_sha256": "83eea6d20f279ffa294f017855760433e09723c403e0b268619d4b93c2eb1467",
+                  "output_sha256": "83eea6d20f279ffa294f017855760433e09723c403e0b268619d4b93c2eb1467",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "static_deserialization_observation"
+                },
+                {
+                  "id": "f4cd04025d83ca3883ed4de491dc2e267cf106229cc78d23bd0db9f1c6c82948",
+                  "agent": "researcher",
+                  "goal": "collect_missing_deserialization_source_facts",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "35ed85761709c9f886a3f9dafc6d4ca5083d189953e55c699ec1b776d438923c"
+                  ],
+                  "input_sha256": "83eea6d20f279ffa294f017855760433e09723c403e0b268619d4b93c2eb1467",
+                  "output_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "completed",
+                  "reason": "source_evidence_collected"
+                },
+                {
+                  "id": "397da6b23a8d2ebbbea7872beecc520fc6fdc5229e6e383af0ba3526e6b6280f",
+                  "agent": "experimenter",
+                  "goal": "obtain_selected_synthetic_contract",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "f4cd04025d83ca3883ed4de491dc2e267cf106229cc78d23bd0db9f1c6c82948"
+                  ],
+                  "input_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "output_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "contract_prerequisites_missing"
+                },
+                {
+                  "id": "794572da688435495940e8c0edbcaadc29db1107eb6bec7a3af522f3275eee25",
+                  "agent": "verifier",
+                  "goal": "validate_evidence_and_identify_remaining_gaps",
+                  "source": {
+                    "archive_sha256": "73130329c802566b3b0544d221718c894dd39af835a2b97abe9e8167c931fd62",
+                    "engine_version": "2026-09-20-1",
+                    "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                    "observation_id": "b330e85edea2886fc60d0a3fe7745db6720c37fbb72367a7f3c35642bedd4cf9",
+                    "catalog_sha256": "f4538b51257536fc97ebfcc24cc35c14a467ecf08da0f3d4c9abacbcfea10ded"
+                  },
+                  "depends_on": [
+                    "397da6b23a8d2ebbbea7872beecc520fc6fdc5229e6e383af0ba3526e6b6280f"
+                  ],
+                  "input_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "output_sha256": "9510012b22a17e5a38fd6a1ba5872ccbb2739844b64883f6ec472213fbaabb3b",
+                  "attempts": 1,
+                  "max_attempts": 1,
+                  "status": "blocked",
+                  "reason": "synthetic_evidence_missing"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "bad-agent-shape",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "context",
+          "security_agent",
+          "version"
+        ],
+        "value": true
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file."
+          ],
+          "unknown": [
+            "The file path and handle flow have not been established for this call.",
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": []
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "partial-dependencies",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "context",
+          "dependency_cve"
+        ],
+        "value": {
+          "status": "partial"
+        }
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 7,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix.",
+          "Dependency checking is incomplete; see the recorded coverage gaps.",
+          "Application behavior has not been verified by this report."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "unknown-runtime",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "delete",
+        "path": [
+          "context",
+          "runtime_verified"
+        ]
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [
+        {
+          "finding_index": 0,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 7,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        },
+        {
+          "finding_index": 1,
+          "title": "File loading needs a trust check",
+          "impact": "If an untrusted file reaches this loader, it may run commands with the application’s permissions.",
+          "known": [
+            "The code uses a file-loading method that can execute instructions stored in the file.",
+            "The code opens the file at the supplied path and passes its contents to this loader."
+          ],
+          "unknown": [
+            "Where the file comes from and who can change it.",
+            "Whether the application checks the file’s trust before loading it.",
+            "Whether the possible command execution can occur in the running application."
+          ],
+          "next_action": "Identify where this file comes from and who can replace or modify it.",
+          "done_when": "Record the file’s producer, everyone who can change it, and the trust check used before loading; then have a developer review whether that check is sufficient.",
+          "source_refs": [
+            {
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "acquisition_version": 3
+            }
+          ]
+        }
+      ],
+      "summary": {
+        "title": "File loading: the next question",
+        "text": "2 file-loading locations need a trust check. This summary covers those locations; other observations remain below.",
+        "coverage_notes": [
+          "Source review does not establish exploitation or a verified fix."
+        ],
+        "next_action": "Identify where this file comes from and who can replace or modify it."
+      }
+    }
+  },
+  {
+    "name": "empty-findings",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "findings"
+        ],
+        "value": []
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [],
+      "summary": null
+    }
+  },
+  {
+    "name": "contradicted-premise",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "findings",
+          0,
+          "claim_evidence",
+          "syntax_check"
+        ],
+        "value": {
+          "result": "contradicted"
+        }
+      },
+      {
+        "op": "set",
+        "path": [
+          "findings",
+          1,
+          "claim_evidence",
+          "syntax_check"
+        ],
+        "value": {
+          "result": "contradicted"
+        }
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [],
+      "summary": null
+    }
+  },
+  {
+    "name": "source-assessment-owned-by-existing-renderer",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "findings",
+          0,
+          "claim_evidence",
+          "source_assessments"
+        ],
+        "value": [
+          {
+            "result": "observed"
+          }
+        ]
+      },
+      {
+        "op": "set",
+        "path": [
+          "findings",
+          1,
+          "claim_evidence",
+          "source_assessments"
+        ],
+        "value": [
+          {
+            "result": "observed"
+          }
+        ]
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [],
+      "summary": null
+    }
+  },
+  {
+    "name": "premise-check-owned-by-existing-renderer",
+    "fixture": "completed",
+    "changes": [
+      {
+        "op": "set",
+        "path": [
+          "findings",
+          0,
+          "claim_evidence",
+          "premise_checks"
+        ],
+        "value": [
+          {
+            "result": "contradicted"
+          }
+        ]
+      },
+      {
+        "op": "set",
+        "path": [
+          "findings",
+          1,
+          "claim_evidence",
+          "premise_checks"
+        ],
+        "value": [
+          {
+            "result": "contradicted"
+          }
+        ]
+      }
+    ],
+    "expected": {
+      "version": 1,
+      "cards": [],
+      "summary": null
+    }
+  }
+]
