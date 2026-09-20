@@ -1,4 +1,4 @@
-"""The screen goes blank: a React/Next app with no error boundary above its routes.
+"""Look for recognized error boundaries in a mounted React/Next app's source.
 
 Question 1 of the frontend rubric in app/scan/llm_scan.py, lifted out of the
 model and settled by reading lines — which the rubric itself says is all it
@@ -14,19 +14,17 @@ currently lists in LLM_ONLY_CATEGORIES. Wiring it into the pipeline and dropping
 Frontend from that set is a scoring decision this module does not make; it
 reports what it found and how much of the repository it managed to look at.
 
-WHAT IT CLAIMS. A fact fully readable from the repository: this is a routed
-React or Next application, and NO error-boundary mechanism appears anywhere in
-its source — not an app-router error.tsx/global-error.tsx, not a class boundary
-(getDerivedStateFromError / componentDidCatch), not react-error-boundary, not an
-<ErrorBoundary> in the tree. It does NOT claim a specific render will throw; it
-claims that when one does, nothing above the routes catches it.
+WHAT IT CLAIMS. Selected source indicates a mounted React or Next application,
+but the bounded static check found none of its recognized boundary filenames,
+dependency names or source tokens. File selection and per-file read limits
+apply. This does not establish that no other boundary exists or that the
+application fails at runtime; component-tree behavior is not executed.
 
 PRECISION OVER RECALL. The finding fires only when BOTH halves hold: this is a
-UI app that can blank, AND not one recognized boundary token exists outside
-dependency and build directories. A custom boundary that avoids every standard
-name is a MISS, not a false positive, and a miss is the acceptable direction: a
-false "you have no boundary" on an app that has one is what makes a free tier's
-list untrustworthy.
+UI entry point is recognized, AND no recognized boundary is found in the
+selected source, dependency declarations and root router filenames. A custom
+boundary using unrecognized names can be missed, so the finding asks for
+review rather than claiming all error handling is absent.
 
 A RENDER ROOT IS A RENDER CALL, NOT A FILENAME. The first version of this module
 decided "can this blank?" from path shapes, and one of them was
@@ -403,7 +401,7 @@ class _Budget:
 def _finding(where: str, read: int) -> CheckFinding:
     return CheckFinding(
         rule_id=RULE_ID,
-        title="No error boundary above the app's routes",
+        title="No recognized error boundary found in the inspected application source",
         severity="high",
         # The fact -- no boundary token in a mounted react/next app -- is
         # certain over what was read. The residual doubt is whether a boundary
@@ -412,20 +410,18 @@ def _finding(where: str, read: int) -> CheckFinding:
         category="Frontend",
         file=where,
         explanation=(
-            "Your app has no error boundary above its pages. In React, when "
-            "any single component hits an error while rendering, there is "
-            "nothing to contain it — so instead of one broken section, the "
-            "entire app is replaced with a blank white page, and the person "
-            "using it has no way forward except to reload and hope. One small "
-            "bug anywhere becomes a total outage of the screen."
+            f"The static check inspected {read} selected source files and found "
+            "an application entry point, but no recognized error-boundary "
+            "filename, dependency or source token. File selection and per-file "
+            "read limits apply; custom boundaries may not be recognized. If a "
+            "rendering error reaches the root without a working boundary, the "
+            "affected screen may go blank. Runtime behavior was not tested."
         ),
         fix_hint=(
-            "Add an error boundary above your routes so a render error shows a "
-            "fallback instead of a blank page. In the Next.js app router, "
-            "create an app/error.tsx (and app/global-error.tsx for the root "
-            "layout). In a plain React app, wrap your top-level component in "
-            "an <ErrorBoundary> — the react-error-boundary package gives you "
-            "one — with a small fallback that offers a reload."
+            "Check how the reported application entry point handles rendering "
+            "errors. If a suitable boundary is missing, add one for the relevant "
+            "routes or root layout. Then trigger a controlled rendering error "
+            "and verify that the user sees a recovery option."
         ),
     )
 

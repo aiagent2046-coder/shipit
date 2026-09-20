@@ -102,9 +102,9 @@ const PLAIN: Record<string, { what: string; risk: string; fix: string }> = {
     "fix": "Start with a few tests for the money paths — signup, login, checkout."
   },
   "dependency-dir-committed": {
-    "what": "Installed libraries are stored in your repository as if you wrote them.",
-    "risk": "Every clone downloads all of it, every update to a library lands in your history, and what is stored slowly stops matching what your lockfile says the project needs — so the versions running in production drift away from the ones you think you have.",
-    "fix": "Add the folder to .gitignore and untrack it with `git rm -r --cached <folder>`. Your local copy stays; anyone cloning reinstalls from your lockfile, which is what it is for."
+    "what": "The archive includes a folder commonly used for installed libraries or generated files.",
+    "risk": "These files can make a source archive larger and harder to review. Folder names alone do not establish Git tracking, how the files were created, or whether they are intentional copies of third-party source.",
+    "fix": "Check whether the folder can be recreated from the project's installation instructions. If so, exclude it from future source archives. Check Git tracking separately before removing tracked copies or adding ignore rules. Keep intentional third-party source and test data when needed."
   },
   "no-dockerfile": {
     "what": "No Dockerfile was found in the supplied archive.",
@@ -112,9 +112,9 @@ const PLAIN: Record<string, { what: string; risk: string; fix: string }> = {
     "fix": "Review the existing deployment instructions. Add a Dockerfile only if container deployment is needed."
   },
   "missing-error-boundary": {
-    "what": "Your app has no error boundary above its pages.",
-    "risk": "When any single component hits an error while rendering, there is nothing to contain it: the whole screen goes blank and the person using it can only reload and hope. One small bug anywhere becomes a total outage of the page.",
-    "fix": "Add an error boundary above your routes. In the Next.js app router, create app/error.tsx and app/global-error.tsx; in a plain React app, wrap the top-level component in an <ErrorBoundary> with a small fallback that offers a reload."
+    "what": "The static check did not find a recognized error boundary in the inspected app source.",
+    "risk": "If a rendering error reaches the root without a working boundary, the affected screen may go blank. This check uses selected files and known names within read limits; custom boundaries may not be recognized. Runtime behavior was not tested.",
+    "fix": "Check how the reported application entry point handles rendering errors. If a suitable boundary is missing, add one for the relevant routes or root layout. Then trigger a controlled rendering error and verify that the user sees a recovery option."
   },
   "no-ci": {
     "what": "No automated checks run when the code changes (no CI).",
@@ -123,6 +123,22 @@ const PLAIN: Record<string, { what: string; risk: string; fix: string }> = {
   }
 };
 const CREDENTIAL_RULES = new Set(["connection-string-dev-password", "telegram-bot-token", "aws-access-key-id", "stripe-live-key", "private-key-block", "connection-string-password", "github-pat", "jwt-in-code", "connection-string-local-host", "anthropic-api-key", "generic-assignment", "sql-secret-assignment"]);
+
+function usesBoundedStaticCopy(finding: Finding): boolean {
+  if (finding.source !== "static" || (finding.verification_status as string | undefined) === "contradicted"
+    || finding.context != null && finding.context !== "") return false;
+  const object = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value);
+  const evidence = finding.claim_evidence;
+  if (evidence != null) {
+    if (!object(evidence)) return false;
+    const syntax = evidence.syntax_check;
+    if (syntax != null && !object(syntax) || object(syntax) && syntax.result === "contradicted"
+      || [evidence.source_assessments, evidence.premise_checks]
+        .some(value => value != null && !(Array.isArray(value) && value.length === 0))) return false;
+  }
+  return true;
+}
 
 export function plainFields(finding: Finding): { what: string; risk: string; fix: string } {
   const rid = finding.rule_id || "";
@@ -145,6 +161,10 @@ export function plainFields(finding: Finding): { what: string; risk: string; fix
   }
   if (rid === "no-dockerfile") return finding.context === "deployment_inventory"
     ? { ...base, risk: finding.explanation || base.risk, fix: finding.fix_hint || base.fix } : base;
+  // Stored prose for these rules overstated Git tracking or runtime failure.
+  // The unmodified original remains available in technical details.
+  if (rid === "dependency-dir-committed" || rid === "missing-error-boundary") return usesBoundedStaticCopy(finding)
+    ? base : { what: finding.title || "Recorded observation", risk: finding.explanation || "", fix: finding.fix_hint || "" };
   if (base) return { ...base, risk: finding.explanation || base.risk, fix: finding.fix_hint || base.fix };
   return { what: finding.title || "", risk: finding.explanation || "", fix: finding.fix_hint || "" };
 }

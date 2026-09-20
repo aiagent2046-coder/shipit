@@ -94,6 +94,9 @@ export interface ScanManifest {
   dependency_cve?: unknown;
   dependency_snapshot?: unknown;
   sca_skipped_reason?: string | null;
+  sca_dependencies?: unknown;
+  sca_coverage_incomplete?: unknown;
+  sca_incomplete_lockfiles?: unknown;
   source_facts?: {
     guards?: ReviewContextIndex;
     cost_context?: ReviewContextIndex;

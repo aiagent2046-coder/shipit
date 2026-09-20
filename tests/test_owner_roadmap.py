@@ -165,3 +165,78 @@ def test_html_escapes_dependency_paths_in_action_details():
     assert path not in html
     assert escape(path) in html
     assert "href=\"#roadmap-coverage\"" in html
+
+
+@pytest.mark.parametrize(('context', 'status', 'unresolved'), [
+    ({'limitations': ['dependency_coverage_incomplete'], 'sca_skipped_reason': 'no_resolvable_lockfile',
+      'sca_incomplete_lockfiles': {'requirements.txt': 'unresolved', 'go.mod': 'unsupported'}},
+     'partial', ['requirements.txt']),
+    ({'sca_skipped_reason': 'no_client', 'sca_dependencies': 3}, 'unavailable', []),
+    ({'sca_skipped_reason': 'no_client', 'sca_dependencies': 1.0}, 'unavailable', []),
+    ({'sca_skipped_reason': 'no_client', 'sca_dependencies': 9_007_199_254_740_991}, 'unavailable', []),
+    ({'sca_skipped_reason': 'no_client', 'sca_dependencies': 9_007_199_254_740_992}, None, []),
+    ({'sca_skipped_reason': 'no_client', 'sca_dependencies': 1.5}, None, []),
+    ({'sca_skipped_reason': 'no_client', 'sca_dependencies': float('inf')}, None, []),
+    ({'sca_skipped_reason': 'no_client', 'sca_dependencies': True}, None, []),
+    ({'sca_skipped_reason': 'no_client', 'sca_dependencies': '3'}, None, []),
+    ({'sca_skipped_reason': 'no_client'}, None, []),
+    ({'sca_coverage_incomplete': True}, 'partial', []),
+    ({'sca_skipped_reason': 'osv_unavailable:timeout'}, 'unavailable', []),
+    ({'sca_skipped_reason': 'lockfile_unreadable:syntax'}, 'partial', []),
+    ({'dependency_cve': {'status': 'partial', 'incomplete_manifests': {'go.mod': 'unsupported'}},
+      'sca_incomplete_lockfiles': {'requirements.txt': 'unresolved'}}, 'partial', []),
+    ({'dependency_cve': {'status': {}}, 'limitations': [{'dependency_coverage_incomplete': True}]}, None, []),
+    ({'dependency_cve': {'status': 'partial', 'incomplete_manifests': ['requirements.txt']}}, 'partial', []),
+    ({'dependency_cve': {'status': 'partial', 'incomplete_manifests': {
+        'requirements.txt': ['unresolved'], '': 'unresolved', ' \t': 'unresolved'}}}, 'partial', []),
+])
+def test_dependency_scope_uses_explicit_facts_and_types(context, status, unresolved):
+    from app.report.owner_report import dependency_coverage_gap
+
+    before = deepcopy(context)
+    expected = {'status': status, 'unresolved_manifests': unresolved} if status else None
+    assert dependency_coverage_gap(context) == expected
+    tasks = build_owner_roadmap([], context)['tasks']
+    assert len(tasks) == int(status is not None)
+    if tasks:
+        assert tasks[0]['needs'][1:] == ['Unresolved manifest: ' + path for path in unresolved]
+        assert ('exact installed versions' in tasks[0]['action']) == bool(unresolved)
+    assert context == before
+
+
+def test_known_review_directions_retain_every_original_reference_without_certifying_a_fix():
+    case = next(case for case in CASES if case['name'] == 'five-review-directions')
+    findings = deepcopy(case['input']['findings'])
+    before = deepcopy(findings)
+    tasks = build_owner_roadmap(findings)['tasks']
+    assert len(tasks) == 5
+    refs = [index for task in tasks for index in task['finding_indices']]
+    assert sorted(refs) == list(range(len(findings)))
+    assert len(refs) == len(set(refs))
+    dependency = tasks[0]
+    assert dependency['finding_indices'] == [0, 1, 2, 3]
+    assert 'library, ecosystem, and installed version' in dependency['action']
+    assert 'development dependencies, and unknown use' in dependency['action']
+    assert 'before choosing an update' in dependency['action']
+    assert all(task['kind'] == 'review' and not task['depends_on'] for task in tasks)
+    assert 'synthetic fixtures do not require account-level rotation' in tasks[2]['action']
+    assert 'Git tracking' in tasks[4]['needs'][1]
+    assert findings == before
+
+
+def test_html_specialized_review_directions_keep_escaped_links_and_immutable_exports():
+    case = next(case for case in CASES if case['name'] == 'five-review-directions')
+    findings = [{**finding, 'title': '<script>unsafe label</script>', 'severity': 'high',
+                 'category': 'Security', 'confidence': 0.7, 'file': 'example.py', 'line': 1}
+                for finding in deepcopy(case['input']['findings'])]
+    report = {'findings': findings, 'score': {}}
+    before = deepcopy(report)
+    original_sarif = build_sarif(findings, score=report['score'], engine_version='test-engine')
+    html = render_report(report)
+    anchors = Anchors(html)
+    assert '<script>unsafe label</script>' not in html
+    assert '&lt;script&gt;unsafe label&lt;/script&gt;' in html
+    assert set(anchors.links) <= set(anchors.ids)
+    assert all(anchors.ids.count(f'roadmap-finding-{index}') == 1 for index in range(len(findings)))
+    assert report == before
+    assert build_sarif(findings, score=report['score'], engine_version='test-engine') == original_sarif
