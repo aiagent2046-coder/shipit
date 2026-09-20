@@ -296,6 +296,82 @@ function renderOwnerSummary(summary, cards) {
   }
 }
 
+function roadmapLink(label, targetId) {
+  const link = node('a', label);
+  link.href = `#${targetId}`;
+  link.addEventListener('click', () => {
+    const target = byId(targetId);
+    for (let parent = target?.parentElement; parent; parent = parent.parentElement) {
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    }
+    target?.focus();
+  });
+  return link;
+}
+
+function renderOwnerRoadmap(roadmap, findings) {
+  const container = byId('owner-roadmap');
+  container.replaceChildren(node('h3', 'Project roadmap'), node('p',
+    'Suggested next steps from this report. These tasks have not been carried out or verified.', 'hint'));
+  if (!roadmap.tasks.length) {
+    container.append(node('p', 'No next steps can be generated from the recorded findings and coverage. This does not establish that the project is ready or safe.'));
+    return;
+  }
+  const taskTitles = new Map(roadmap.tasks.map(task => [task.id, task.title]));
+  for (const [stage, label] of [['first', 'First'], ['after', 'After clarification'], ['when_needed', 'If needed']]) {
+    const tasks = roadmap.tasks.filter(task => task.stage === stage);
+    if (!tasks.length) continue;
+    const section = node('section', undefined, 'roadmap-stage');
+    section.append(node('h4', label));
+    for (const task of tasks) {
+      const card = node('article', undefined, 'roadmap-task');
+      card.id = `roadmap-task-${task.id}`;
+      card.tabIndex = -1;
+      card.append(node('h5', task.title), node('p', task.why, 'hint'));
+      for (const [field, value] of [['Action', task.action], ['Suggested owner', task.owner]]) {
+        const row = node('p');
+        row.append(node('strong', `${field}: `), node('span', value));
+        card.append(row);
+      }
+      const details = node('details');
+      details.append(node('summary', 'Completion criteria and references'));
+      const body = node('dl', undefined, 'owner-card-fields');
+      const inputs = node('ul');
+      inputs.append(...task.needs.map(value => node('li', value)));
+      const needs = node('dd');
+      needs.append(inputs);
+      body.append(node('dt', 'Needs'), needs);
+      if (task.depends_on.length) {
+        const dependencies = node('dd');
+        for (const id of task.depends_on) dependencies.append(roadmapLink(taskTitles.get(id) || id, `roadmap-task-${id}`));
+        body.append(node('dt', 'After'), dependencies);
+      }
+      body.append(node('dt', 'This step is complete when'), node('dd', task.done_when));
+      const sources = node('ul');
+      for (const index of task.finding_indices) {
+        const finding = findings[index];
+        const location = text(finding?.file);
+        const line = Number.isInteger(finding?.line) && finding.line > 0 ? `:${finding.line}` : '';
+        const item = node('li');
+        item.append(roadmapLink(`Observation ${index + 1}${location ? ` · ${location}${line}` : ''}`, `roadmap-finding-${index}`));
+        sources.append(item);
+      }
+      for (const ref of task.coverage_refs) {
+        const item = node('li');
+        item.append(roadmapLink(ref === 'dependency_cve' ? 'Dependency coverage' : 'Runtime verification scope', 'roadmap-coverage'));
+        sources.append(item);
+      }
+      const references = node('dd');
+      references.append(sources);
+      body.append(node('dt', 'Based on'), references);
+      details.append(body);
+      card.append(details);
+      section.append(card);
+    }
+    container.append(section);
+  }
+}
+
 function renderOwnerFinding(finding, card) {
   const article = node('article', undefined, 'finding owner-finding');
   article.id = `owner-finding-${card.finding_index}`;
@@ -327,10 +403,17 @@ function renderOwnerFinding(finding, card) {
   return article;
 }
 
-function renderFindingGroups(findings, ownerCards = new Map()) {
+function renderFindingGroups(findings, ownerCards = new Map(), findingIndices = new Map()) {
   return relatedFindingGroups(findings).map(group => {
-    const render = finding => ownerCards.has(finding)
-      ? renderOwnerFinding(finding, ownerCards.get(finding)) : renderFinding(finding);
+    const render = finding => {
+      const card = ownerCards.has(finding)
+        ? renderOwnerFinding(finding, ownerCards.get(finding)) : renderFinding(finding);
+      const wrapper = node('div', undefined, 'roadmap-finding-anchor');
+      wrapper.id = `roadmap-finding-${findingIndices.get(finding)}`;
+      wrapper.tabIndex = -1;
+      wrapper.append(card);
+      return wrapper;
+    };
     if (group.length === 1) return render(group[0]);
     const details = node('details', undefined, 'finding-group');
     details.open = true;
@@ -443,10 +526,12 @@ function renderReport(report) {
   }
   byId('partial-coverage').hidden = gaps.length === 0;
 
-  const findings = report.findings.filter(finding => finding && typeof finding === 'object');
-  const ownerReport = projectOwnerReport(findings, report);
-  const ownerCards = new Map(ownerReport.cards.map(card => [findings[card.finding_index], card]));
+  const findings = report.findings.filter(finding => finding && typeof finding === 'object' && !Array.isArray(finding));
+  const findingIndices = new Map(report.findings.map((finding, index) => [finding, index]));
+  const ownerReport = projectOwnerReport(report.findings, report);
+  const ownerCards = new Map(ownerReport.cards.map(card => [report.findings[card.finding_index], card]));
   renderOwnerSummary(ownerReport.summary, ownerReport.cards);
+  renderOwnerRoadmap(projectOwnerRoadmap(report.findings, report), report.findings);
   const contextual = findings.filter(isContextualFinding);
   const review = findings.filter(finding => !isContextualFinding(finding));
   byId('findings-summary').textContent = findings.length === 0
@@ -461,7 +546,7 @@ function renderReport(report) {
   reviewSection.append(reviewTitle);
   if (review.length) {
     reviewSection.append(node('p', 'Review these signals first. Priority does not establish that a vulnerability is present.', 'hint'));
-    reviewSection.append(...renderFindingGroups(review, ownerCards));
+    reviewSection.append(...renderFindingGroups(review, ownerCards, findingIndices));
   } else {
     reviewSection.append(node('p', contextual.length
       ? 'All reported signals are grouped below. This does not establish that the project is safe.'
@@ -472,7 +557,7 @@ function renderReport(report) {
     const details = node('details', undefined, 'finding-group contextual-findings');
     details.append(node('summary', `Tests, examples and informational signals (${contextual.length})`));
     details.append(node('p', 'Grouped by reported context, not dismissed as false positives. Real credentials can also appear in tests. Every finding remains in JSON and SARIF exports.', 'hint'));
-    details.append(...renderFindingGroups(contextual, ownerCards));
+    details.append(...renderFindingGroups(contextual, ownerCards, findingIndices));
     findingList.append(details);
   }
 
@@ -1321,3 +1406,104 @@ function projectOwnerReport(findings, contextValue = {}) {
         } };
 }
 // END OWNER REPORT PROJECTION
+
+// BEGIN OWNER ROADMAP PROJECTION
+// Generated by node scripts/sync_owner_report_browser.mjs.
+const roadmapObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+// Match Python's presentation contract explicitly; language-native trimming
+// differs for some Unicode characters that can occur in filenames or titles.
+const roadmapHasText = (value) => typeof value === "string" && /[^\t\n\v\f\r ]/.test(value);
+function roadmapCodepointOrder(left, right) {
+    const a = Array.from(left, char => char.codePointAt(0));
+    const b = Array.from(right, char => char.codePointAt(0));
+    for (let index = 0; index < Math.min(a.length, b.length); index++) {
+        if (a[index] !== b[index])
+            return a[index] - b[index];
+    }
+    return a.length - b.length;
+}
+// Follow-up work only: this projection cannot confirm vulnerabilities, apply
+// changes, or mark an earlier suggestion as completed by a later scan.
+function projectOwnerRoadmap(findings, contextValue = {}) {
+    const context = roadmapObject(contextValue) ? contextValue : {};
+    const records = Array.isArray(findings) ? findings : [];
+    const fileIndices = projectOwnerReport(records, context).cards.map(card => card.finding_index);
+    const deploymentIndices = records.flatMap((finding, index) => roadmapObject(finding) && finding.rule_id === "no-dockerfile" && finding.source === "static" ? [index] : []);
+    const covered = new Set([...fileIndices, ...deploymentIndices]);
+    const remainingIndices = records.flatMap((finding, index) => roadmapObject(finding)
+        && [finding.rule_id, finding.title].some(roadmapHasText)
+        && !covered.has(index) ? [index] : []);
+    const tasks = [];
+    if (fileIndices.length > 0)
+        tasks.push({
+            id: "file-loading-origin", stage: "first", kind: "investigate",
+            title: "Find out who supplies and can change loaded files",
+            why: "The recorded file-loading calls need a trust check; source review alone does not establish a runtime problem.",
+            action: "For every linked location, identify who produces the file, who can change it, and what checks happen before it is loaded.",
+            owner: "Project owner and developer",
+            needs: ["The linked file-loading observations.", "The people or services that create, store, and deliver these files."],
+            depends_on: [],
+            done_when: "Each linked location has a recorded file producer, write access, and trust check, or an explicitly named unanswered question.",
+            finding_indices: fileIndices, coverage_refs: [],
+        });
+    const dependency = context.dependency_cve;
+    if (roadmapObject(dependency) && (dependency.status === "partial" || dependency.status === "unavailable")) {
+        const manifests = dependency.incomplete_manifests;
+        const unresolved = roadmapObject(manifests) ? Object.entries(manifests)
+            .filter(([path, reason]) => roadmapHasText(path) && reason === "unresolved").map(([path]) => path)
+            .sort(roadmapCodepointOrder) : [];
+        tasks.push({
+            id: "dependency-coverage", stage: "first", kind: "provide_information",
+            title: "Clarify the gaps in dependency checking",
+            why: "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+            action: unresolved.length > 0
+                ? "Check the recorded dependency gaps and provide the exact installed versions or matching lockfiles for the unresolved manifests."
+                : "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+            owner: "Developer",
+            needs: ["The recorded dependency coverage and its limitations.", ...unresolved.map(path => `Unresolved manifest: ${path}`)],
+            depends_on: [],
+            done_when: "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+            finding_indices: [], coverage_refs: ["dependency_cve"],
+        });
+    }
+    if (remainingIndices.length > 0)
+        tasks.push({
+            id: "remaining-observations", stage: "first", kind: "review",
+            title: "Review the other recorded observations",
+            why: "These observations need their own evidence and context reviewed before deciding whether any action is warranted.",
+            action: "Review each linked observation with its original evidence, limits, and test or example context. Record what is supported, contradicted, or still unknown and decide the next step.",
+            owner: "Developer",
+            needs: ["The original linked observations and their evidence.", "Someone familiar with the affected part of the project."],
+            depends_on: [],
+            done_when: "Each linked observation has a documented assessment and a next step or a reason no change is needed; unverified claims remain marked as unverified.",
+            finding_indices: remainingIndices, coverage_refs: [],
+        });
+    if (fileIndices.length > 0)
+        tasks.push({
+            id: "file-loading-decision", stage: "after", kind: "review",
+            title: "Decide whether file-loading protection needs to change",
+            why: "The right decision depends on where the files come from, who can change them, and the checks already in place.",
+            action: "Review the file-origin answers with a developer. If protection needs to change, choose an approach compatible with existing files and plan a focused check of normal use and rejected input.",
+            owner: "Developer",
+            needs: ["The file-origin answers, including unresolved questions.", "Examples of legitimate files and their expected use."],
+            depends_on: ["file-loading-origin"],
+            done_when: "Document the decision and its evidence for each linked location. If a change is needed, record the compatibility requirements and how the change will be tested; this task does not certify a fix.",
+            finding_indices: [...fileIndices], coverage_refs: [],
+        });
+    const runtimeUnverified = context.runtime_verified === false;
+    if (runtimeUnverified || deploymentIndices.length > 0)
+        tasks.push({
+            id: "deployment-check", stage: "when_needed", kind: "verify",
+            title: "Check the intended way to run the project",
+            why: runtimeUnverified ? "The report records that application behavior has not been verified."
+                : "A deployment inventory observation describes files in the archive; it does not establish whether the application can run.",
+            action: "When preparing a deployment, confirm the intended hosting method, configuration, and startup steps, then run a basic user journey in an isolated test environment. Docker is only one possible hosting option.",
+            owner: "Developer or person responsible for deployment",
+            needs: ["The intended hosting method and required configuration.", "An isolated test environment and an agreed basic user journey."],
+            depends_on: [],
+            done_when: "Record the tested version, setup, steps, and actual results, including what was not tested. This does not verify every application behavior.",
+            finding_indices: deploymentIndices, coverage_refs: runtimeUnverified ? ["runtime_verified"] : [],
+        });
+    return { version: 1, tasks };
+}
+// END OWNER ROADMAP PROJECTION

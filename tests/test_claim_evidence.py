@@ -90,7 +90,13 @@ def test_report_escapes_model_conditions_and_keeps_them_visible():
     raw = {**CLAIM, "observation": "<script>bad()</script>", "required_conditions": ["<img src=x onerror=bad()>"]}
     scan = run_scan(make_zip(FILES).getvalue(), FakeLLM(response=json.dumps([raw])), llm_rubrics=("auth",))
     html = render_report({**scan, "findings": [f for f in scan["findings"] if f["source"] == "llm"]})
-    assert "&lt;script&gt;bad()&lt;/script&gt;" in html
+    anchor = html.index('id="roadmap-finding-0"')
+    row = html[html.rfind("<tr", 0, anchor):html.index("</tr>", anchor)]
+    assert "&lt;script&gt;bad()&lt;/script&gt;" in row
+    assert "&lt;img src=x onerror=bad()&gt;" in row
     assert "<script>bad()" not in html
-    assert "Required conditions — not checked" in html
-    assert "<details>" not in html  # Model conditions are visible before suggested fixes.
+    assert "<img src=x onerror=bad()>" not in html
+    # The roadmap has its own disclosures. The original model finding must
+    # still show its conditions openly, before any verification/fix suggestion.
+    assert "<details" not in row
+    assert row.index("Required conditions — not checked") < row.index("Suggested verification / fix:")

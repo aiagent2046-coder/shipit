@@ -19,7 +19,8 @@ from app.report.evidence import (
     observation_summary, review_contribution_rows,
     model_acceptance_notice,
 )
-from app.report.grouping import group_for_display, related_finding_groups
+from app.report.grouping import GROUPABLE, group_for_display, related_finding_groups
+from app.report.owner_roadmap import build_owner_roadmap
 from app.report.owner_report import build_owner_report, owner_report_context
 from app.report.plain_language import plain_fields, tier
 
@@ -40,7 +41,8 @@ def _category_label(f: dict) -> str:
 
 
 def _finding_row(f: dict, *, historical: bool = False, included: bool = False,
-                 refreshed: bool = False, owner_card: dict | None = None) -> str:
+                 refreshed: bool = False, owner_card: dict | None = None,
+                 roadmap_indices: list[int] | None = None) -> str:
     sev = str(f.get("severity", "low"))
     color = _SEVERITY_COLOR.get(sev, "#8b8d98")
     loc = escape(str(f.get("file", "")))
@@ -166,12 +168,16 @@ def _finding_row(f: dict, *, historical: bool = False, included: bool = False,
              + '</dd><dt>This step is complete when</dt><dd>' + escape(owner_card["done_when"]) + '</dd></dl>')
         fix_html = developer_details
         tech_bits = loc
+    roadmap_anchors = ''.join(
+        f'<span class="roadmap-anchor" id="roadmap-finding-{index}" tabindex="-1"></span>'
+        for index in (roadmap_indices or []) if not historical
+    )
     return (
         (f'<tr id="owner-finding-{owner_card["finding_index"]}" tabindex="-1">'
          if owner_card is not None and not historical else '<tr>')
         + f'<td class="tiercell"><span class="sev" style="background:{color}">'
         f'{emoji} {escape(tier_label)}</span></td>'
-        f'<td class="title"><div class="what">{escape(what)}</div>'
+        f'<td class="title">{roadmap_anchors}<div class="what">{escape(what)}</div>'
         f'<div class="tech">{escape(evidence_label(f, historical))}</div>'
         f'{risk_html}{evidence}{fix_html}'
         f'<div class="tech">{tech_bits}</div></td>'
@@ -191,7 +197,8 @@ NON_PRODUCTION_NOTE = (
 _is_non_production = is_non_production
 
 def _findings_table(findings: list[dict], *, historical: bool = False, included: bool = False,
-                    refreshed: bool = False, owner_cards: dict[int, dict] | None = None) -> str:
+                    refreshed: bool = False, owner_cards: dict[int, dict] | None = None,
+                    roadmap_indices: dict[int, list[int]] | None = None) -> str:
     rows = ""
     for group in related_finding_groups(findings):
         rows += '<tbody>'
@@ -199,13 +206,97 @@ def _findings_table(findings: list[dict], *, historical: bool = False, included:
             rows += ('<tr><th colspan="2" scope="rowgroup">'
                      f'Pickle file loading · {len(group)} locations</th></tr>')
         rows += "".join(_finding_row(f, historical=historical, included=included, refreshed=refreshed,
-                                    owner_card=(owner_cards or {}).get(id(f)))
+                                    owner_card=(owner_cards or {}).get(id(f)),
+                                    roadmap_indices=(roadmap_indices or {}).pop(id(f), []))
                         for f in group)
         rows += '</tbody>'
     return (
         '<table><thead><tr><th></th><th>Finding</th></tr></thead>'
         f'{rows}</table>'
     )
+
+
+def _roadmap_finding_indices(raw_findings: list[dict], displayed: list[dict]) -> dict[int, list[int]]:
+    """Keep original references even when RLS display rows are grouped copies."""
+    indices: dict[int, list[int]] = {}
+    grouped: dict[tuple[str, bool], list[int]] = {}
+    for index, finding in enumerate(raw_findings):
+        indices.setdefault(id(finding), []).append(index)
+        rule_id = str(finding.get("rule_id", ""))
+        if rule_id in GROUPABLE:
+            grouped.setdefault((rule_id, is_non_production(finding)), []).append(index)
+    return {id(finding): indices.get(id(finding), grouped.get(
+        (str(finding.get("rule_id", "")), is_non_production(finding)), []))
+        for finding in displayed}
+
+
+def _owner_roadmap_html(roadmap: dict, findings: list[dict]) -> str:
+    tasks = roadmap["tasks"]
+    parts = [
+        '<section class="owner-roadmap" aria-label="Project roadmap"><h2>Project roadmap</h2>',
+        '<p>Suggested next steps from this report. These tasks have not been carried out or verified.</p>',
+    ]
+    if not tasks:
+        parts.append('<p>No next steps can be generated from the recorded findings and coverage. '
+                     'This does not establish that the project is ready or safe.</p>')
+    task_titles = {task["id"]: task["title"] for task in tasks}
+    for stage, label in (("first", "First"), ("after", "After clarification"), ("when_needed", "If needed")):
+        group = [task for task in tasks if task["stage"] == stage]
+        if not group:
+            continue
+        parts.append('<h3>' + label + '</h3>')
+        for task in group:
+            references = []
+            for index in task["finding_indices"]:
+                finding = findings[index]
+                location = str(finding.get("file") or "")
+                if location and type(finding.get("line")) is int and finding["line"] > 0:
+                    location += ':' + str(finding["line"])
+                reference_label = "Observation " + str(index + 1) + (" · " + location if location else "")
+                references.append('<li><a href="#roadmap-finding-' + str(index) + '">'
+                                  + escape(reference_label) + '</a></li>')
+            for ref in task["coverage_refs"]:
+                label = {"dependency_cve": "Dependency coverage", "runtime_verified": "Runtime verification scope"}[ref]
+                references.append('<li><a href="#roadmap-coverage">' + label + '</a></li>')
+            after = ('<dt>After</dt><dd><ul>' + ''.join(
+                '<li><a href="#roadmap-task-' + escape(task_id) + '">'
+                + escape(task_titles[task_id]) + '</a></li>' for task_id in task["depends_on"]
+            ) + '</ul></dd>') if task["depends_on"] else ''
+            parts.append(
+                '<article class="roadmap-task" id="roadmap-task-' + escape(task["id"]) + '" tabindex="-1">'
+                '<h4>' + escape(task["title"]) + '</h4><p>' + escape(task["why"]) + '</p>'
+                '<p><strong>Action:</strong> ' + escape(task["action"]) + '</p>'
+                '<p><strong>Suggested owner:</strong> ' + escape(task["owner"]) + '</p>'
+                '<details><summary>Completion criteria and references</summary><dl><dt>Needs</dt><dd><ul>'
+                + ''.join('<li>' + escape(item) + '</li>' for item in task["needs"])
+                + '</ul></dd>' + after + '<dt>This step is complete when</dt><dd>'
+                + escape(task["done_when"]) + '</dd><dt>Based on</dt><dd><ul>'
+                + ''.join(references) + '</ul></dd></dl></details></article>'
+            )
+    return ''.join(parts) + '</section>'
+
+
+_REPORT_ANCHOR_SCRIPT = """<script>
+(() => {
+  function reveal(hash) {
+    if (!/^#(?:roadmap-(?:finding-\\d+|task-[a-z-]+|coverage)|owner-finding-\\d+)$/.test(hash)) return;
+    const target = document.getElementById(hash.slice(1));
+    if (!target) return;
+    for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    }
+    target.focus({preventScroll: true});
+    target.scrollIntoView({block: 'start'});
+  }
+  document.addEventListener('click', event => {
+    if (!(event.target instanceof Element)) return;
+    const link = event.target.closest('a[href^="#"]');
+    if (link) reveal(link.getAttribute('href'));
+  });
+  window.addEventListener('hashchange', () => reveal(window.location.hash));
+  reveal(window.location.hash);
+})();
+</script>"""
 
 
 def _preview_history(score: dict) -> str:
@@ -273,7 +364,9 @@ def _free_baseline(score: dict) -> str:
 def render_report(result: dict, project_name: str = "your app") -> str:
     score = result["score"]
     raw_findings = result.get("findings", [])
-    owner_report = build_owner_report(raw_findings, owner_report_context(result))
+    owner_context = owner_report_context(result)
+    owner_report = build_owner_report(raw_findings, owner_context)
+    owner_roadmap_html = _owner_roadmap_html(build_owner_roadmap(raw_findings, owner_context), raw_findings)
     owner_cards = {id(raw_findings[card["finding_index"]]): card for card in owner_report["cards"]}
     owner_summary = owner_report["summary"]
     owner_summary_html = ""
@@ -291,6 +384,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         key=lambda f: (_SEVERITY_ORDER.get(str(f.get("severity")), 9),
                        -float(f.get("confidence", 0))),
     )
+    roadmap_indices = _roadmap_finding_indices(raw_findings, findings)
     # The legacy numeric fields remain in storage for API compatibility.
     # No tier currently has a validated measure of production readiness.
     heading = f"Project audit — {escape(project_name)}"
@@ -354,7 +448,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     non_production = [f for f in unresolved if _is_non_production(f)]
 
     if production:
-        body = _findings_table(production, owner_cards=owner_cards)
+        body = _findings_table(production, owner_cards=owner_cards, roadmap_indices=roadmap_indices)
     elif non_production:
         body = ('<p class="clean">No findings outside the test and example '
                 'section. This does not establish safety.</p>')
@@ -368,22 +462,23 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         body += (
             f'<h2 class="sechead">{NON_PRODUCTION_HEADING}</h2>'
             f'<p class="secnote">{NON_PRODUCTION_NOTE}</p>'
-            + _findings_table(non_production, owner_cards=owner_cards)
+            + _findings_table(non_production, owner_cards=owner_cards, roadmap_indices=roadmap_indices)
         )
     if informational:
-        body += '<h2 class="sechead">Deployment inventory</h2>' + _findings_table(informational)
+        body += ('<h2 class="sechead">Deployment inventory</h2>'
+                 + _findings_table(informational, roadmap_indices=roadmap_indices))
     if unsupported:
         body += ('<h2 class="sechead">Credential transport requiring exposure evidence</h2>'
                  '<p class="secnote">These observations remain available for review. '
                  'Transport alone does not establish a leak; actual exposure paths require evidence.</p>'
-                 + _findings_table(unsupported))
+                 + _findings_table(unsupported, roadmap_indices=roadmap_indices))
 
     if contradicted:
         body += ('<h2 class="sechead">Contradicted syntax premises</h2>'
                  '<p class="secnote">These model claims contradict the bounded syntax check. '
                  'They are retained for traceability and excluded from unresolved finding counts '
                  'and score penalties. This does not establish that the surrounding code is safe.</p>'
-                 + _findings_table(contradicted))
+                 + _findings_table(contradicted, roadmap_indices=roadmap_indices))
 
     contribution = review_contribution_rows(score)
     if contribution:
@@ -406,7 +501,8 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         for label, value in manifest_rows(score)
     )
     body += (
-        '<section><h2 class="sechead">Scan record</h2><dl style="overflow-wrap:anywhere">'
+        '<section id="roadmap-coverage" tabindex="-1"><h2 class="sechead">Scan record</h2>'
+        '<dl style="overflow-wrap:anywhere">'
         + record + '</dl><p class="secnote">File presence is not a deployment check. '
         'Submitted files may be excerpted; submission does not prove full review. '
         'Model cost is not recorded in this report.</p></section>'
@@ -461,6 +557,17 @@ def render_report(result: dict, project_name: str = "your app") -> str:
 .owner-evidence dd{{margin:4px 0;overflow-wrap:anywhere}}
 .owner-evidence ul{{margin:0;padding-left:20px}}
 .owner-developer{{margin-top:12px;overflow-wrap:anywhere}}
+.owner-roadmap{{border:1px solid #4a4b52;border-radius:8px;padding:16px;margin:20px 0;overflow-wrap:anywhere}}
+.owner-roadmap h2{{font-size:18px;margin:0 0 8px}}
+.owner-roadmap h3{{font-size:16px;margin:24px 0 8px}}
+.roadmap-task{{border-top:1px solid #38393e;padding:12px 0;scroll-margin-top:16px}}
+.roadmap-task h4{{font-size:15px;margin:0 0 8px}}
+.roadmap-task p{{margin:8px 0}}
+.roadmap-task dt{{font-weight:600;margin-top:10px}}
+.roadmap-task dd{{margin:4px 0}}
+.roadmap-task ul{{padding-left:20px}}
+.roadmap-anchor{{display:block;scroll-margin-top:16px}}
+.owner-roadmap a{{color:#93c5fd}}
 .tiercell{{white-space:nowrap;vertical-align:top}}
 .sev{{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;
       color:#111113;text-transform:uppercase}}
@@ -471,6 +578,17 @@ def render_report(result: dict, project_name: str = "your app") -> str:
  .secnote{{color:#8b8d98;font-size:13px;margin:0}}
 .cat-skip{{color:#8b8d98;font-size:12px;width:auto;white-space:nowrap}}
  footer{{margin-top:36px;color:#5a5c66;font-size:12px}}
+ @media(max-width:600px){{
+   header{{flex-wrap:wrap;gap:12px}}
+   header>div{{min-width:0}}
+   .cat{{align-items:flex-start}}
+   .cat-name{{flex-shrink:0}}
+   .cat-skip{{white-space:normal;overflow-wrap:anywhere}}
+   table{{table-layout:fixed}}
+   th,td,.tech{{overflow-wrap:anywhere}}
+   .tiercell{{white-space:normal}}
+   .sev{{display:inline-block}}
+ }}
 </style></head><body><div class="wrap">
 <header>
   {header_left}
@@ -480,6 +598,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
   </div>
 </header>
 {owner_summary_html}
+{owner_roadmap_html}
 {tier_note}
 {status_note}
 {acceptance_note}
@@ -487,4 +606,4 @@ def render_report(result: dict, project_name: str = "your app") -> str:
 {body}
 {coverage_note}
 <footer>Generated by Drydock — source audit with verification limits.</footer>
-</div></body></html>"""
+</div>{_REPORT_ANCHOR_SCRIPT}</body></html>"""

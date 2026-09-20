@@ -10,6 +10,8 @@ import { findingCounts } from "@/lib/evidence";
 import { AuditCoverage } from "@/components/AuditCoverage";
 import { FindingsList, OwnerReportSummary, PreviewHistory, SeveritySummary } from "@/components/FindingsList";
 import { projectOwnerReport } from "@/lib/ownerReport";
+import { projectOwnerRoadmap } from "@/lib/ownerRoadmap";
+import { OwnerRoadmap } from "@/components/OwnerRoadmap";
 import { Spinner } from "@/components/Spinner";
 import { FixpackPurchase } from "@/components/FixpackPurchase";
 import { RlsCheck } from "@/components/RlsCheck";
@@ -135,6 +137,7 @@ function AuditPageInner() {
   }, [id, token]);
 
   const ownerProjection = projectOwnerReport(view?.findings, view?.score.scan_manifest ?? {});
+  const roadmapProjection = projectOwnerRoadmap(view?.findings, view?.score.scan_manifest ?? {});
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
@@ -212,7 +215,10 @@ function AuditPageInner() {
 
             <div className="my-6 border-t border-border" />
             <OwnerReportSummary projection={ownerProjection} />
-            <AuditCoverage score={view.score} findings={view.findings} />
+            <OwnerRoadmap projection={roadmapProjection} findings={view.findings} />
+            <div id="roadmap-coverage" tabIndex={-1} className="scroll-mt-6">
+              <AuditCoverage score={view.score} findings={view.findings} />
+            </div>
 
             <div className="mt-6 flex flex-wrap gap-3">
               <a

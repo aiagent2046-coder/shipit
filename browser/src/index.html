@@ -62,10 +62,11 @@
           <button id="continue-button" class="button secondary" type="button" hidden>Continue scanning remaining files</button>
         </div>
         <section id="owner-report-summary" class="owner-report-summary" aria-label="Report in brief" hidden></section>
+        <section id="owner-roadmap" class="owner-roadmap" aria-label="Project roadmap"></section>
         <p id="findings-summary" class="findings-summary"></p>
         <p class="hint result-caveat">No findings does not mean the project is secure. This report covers only the static checks and files listed below.</p>
         <div id="findings" class="findings"></div>
-        <section class="coverage-panel" aria-labelledby="coverage-title">
+        <section id="roadmap-coverage" tabindex="-1" class="coverage-panel" aria-labelledby="coverage-title">
           <h3 id="coverage-title">What this scan covered</h3>
           <h4>Checks run</h4><ul id="checks-run" class="checks-list"></ul>
           <div id="coverage-descriptions"></div>
