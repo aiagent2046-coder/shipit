@@ -9,6 +9,7 @@ from copy import deepcopy
 import re
 
 ACTIONS = ("locate_source", "trace_request_input", "inspect_sql_slots", "collect_value_constraints")
+FILE_ACTIONS = ("locate_source", "trace_file_input")
 FACT_METHODS = {
     "request_input_source": "fastapi_ast_binding",
     "local_input_flow": "python_ast_straight_line",
@@ -18,6 +19,7 @@ FACT_METHODS = {
 PRODUCES = {
     "locate_source": set(),
     "trace_request_input": {"request_input_source", "local_input_flow"},
+    "trace_file_input": {"file_input_source", "local_input_flow"},
     "inspect_sql_slots": {"sql_value_position"},
     "collect_value_constraints": {"value_constraints"},
 }
@@ -30,6 +32,7 @@ REASONS = {
     "sink_not_found", "ambiguous_sink", "request_flow_established", "request_flow_not_established",
     "sql_value_positions_established", "sql_slots_not_established", "value_constraints_recorded",
     "value_constraints_unknown", "collector_failed", "work_budget_exhausted", "step_budget_exhausted",
+    "file_flow_established", "file_flow_not_established",
 }
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
@@ -47,6 +50,26 @@ def _span(value: object) -> bool:
 
 def _keys(value: object, required: set[str], optional: set[str] = frozenset()) -> bool:
     return isinstance(value, dict) and required <= value.keys() <= required | optional
+
+
+def _contains_span(outer: list, inner: list) -> bool:
+    return tuple(outer[:2]) <= tuple(inner[:2]) and tuple(inner[2:]) <= tuple(outer[2:])
+
+
+def _file_source(value: object, sink_span: list) -> bool:
+    keys = {"function", "parameter", "handle", "mode", "function_span", "parameter_span",
+            "open_span", "handle_span"}
+    if (not _keys(value, keys) or value["mode"] != "rb"
+            or any(not isinstance(value[key], str) or not 0 < len(value[key]) <= 128
+                   or not value[key].isidentifier() for key in ("function", "parameter", "handle"))
+            or any(not _span(value[key]) for key in
+                   ("function_span", "parameter_span", "open_span", "handle_span"))):
+        return False
+    return (all(_contains_span(value["function_span"], span) for span in
+                (value["parameter_span"], value["open_span"], value["handle_span"], sink_span))
+            and tuple(value["parameter_span"][2:]) <= tuple(value["open_span"][:2])
+            and tuple(value["open_span"][2:]) <= tuple(value["handle_span"][:2])
+            and tuple(value["handle_span"][2:]) <= tuple(sink_span[:2]))
 
 
 def _driver(trace: dict) -> bool:
@@ -71,7 +94,8 @@ def normalize_deserialization_observation(value: object) -> dict | None:
             or not isinstance(value["source_sha256"], str) or not _SHA256.fullmatch(value["source_sha256"])
             or not _integer(value["sink_line"], 1) or not _span(value["sink_span"])
             or value["sink_span"][0] != value["sink_line"]
-            or value["sink_method"] != "loads" or value["loader"] != "pickle.loads"
+            or (value["sink_method"], value["loader"]) not in (
+                ("loads", "pickle.loads"), ("load", "pickle.load"))
             or value["input_control_status"] != "not_checked"):
         return None
     return deepcopy(value)
@@ -80,9 +104,11 @@ def normalize_deserialization_observation(value: object) -> dict | None:
 def normalize_acquisition(value: object, trace: object) -> dict | None:
     """Return a bounded copy only when facts, actions and source identities agree."""
     deserialization = normalize_deserialization_observation(trace) is not None
+    file_input = deserialization and trace["loader"] == "pickle.load"
     if (not isinstance(trace, dict)
             or not _keys(value, {"version", "status", "stop_reason", "source", "facts", "attempts", "budget"})
-            or type(value["version"]) is not int or value["version"] != (2 if deserialization else 1)
+            or type(value["version"]) is not int or value["version"] != (
+                3 if file_input else 2 if deserialization else 1)
             or value["status"] not in ("completed", "partial", "unsupported")
             or not isinstance(value["stop_reason"], str) or value["stop_reason"] not in STOP_REASONS):
         return None
@@ -98,8 +124,9 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
                 "concatenation", "percent_format", "f_string", "format_call", "join_call")
             or trace.get("sink_method") not in ("execute", "executemany", "executescript", "raw", "execute_sql")):
         return None
-    actions = ACTIONS[:2] if deserialization else ACTIONS
-    fact_methods = ({key: FACT_METHODS[key] for key in PRODUCES["trace_request_input"]}
+    actions = FILE_ACTIONS if file_input else ACTIONS[:2] if deserialization else ACTIONS
+    fact_methods = ({"file_input_source": "python_ast_file_binding", "local_input_flow": "python_ast_file_flow"}
+                    if file_input else {key: FACT_METHODS[key] for key in PRODUCES["trace_request_input"]}
                     if deserialization else FACT_METHODS)
     max_steps = len(actions)
     source = value["source"]
@@ -125,9 +152,9 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
     for fact in facts:
         if (not isinstance(fact, dict) or not isinstance(fact.get("id"), str)
                 or fact["id"] not in fact_methods or fact["id"] in found
-                or fact.get("method") != FACT_METHODS[fact["id"]]):
+                or fact.get("method") != fact_methods[fact["id"]]):
             return None
-        field = {"request_input_source": "sources", "local_input_flow": "locations",
+        field = {"request_input_source": "sources", "file_input_source": "sources", "local_input_flow": "locations",
                  "sql_value_position": "slots", "value_constraints": "constraints"}[fact["id"]]
         entries = fact.get(field)
         if (not _keys(fact, {"id", "method", field}) or not isinstance(entries, list)
@@ -137,7 +164,10 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
             if deserialization and len(entries) != 1:
                 return None
             for item in entries:
-                if (not _keys(item, {"parameter", "channel", "span"})
+                if file_input:
+                    if not _file_source(item, trace["sink_span"]):
+                        return None
+                elif (not _keys(item, {"parameter", "channel", "span"})
                         or not isinstance(item["parameter"], str) or len(item["parameter"]) > 128
                         or not item["parameter"].isidentifier()
                         or item["channel"] not in (("body",) if deserialization else ("query", "path"))
@@ -161,13 +191,18 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
                         or item["kind"] == "request_string" and item["type"] != "str"):
                     return None
         found[fact["id"]] = fact
-    if bool(found.get("request_input_source")) != bool(found.get("local_input_flow")):
+    source_fact = "file_input_source" if file_input else "request_input_source"
+    if bool(found.get(source_fact)) != bool(found.get("local_input_flow")):
         return None
     if deserialization and "local_input_flow" in found:
         locations = found["local_input_flow"]["locations"]
-        if (locations[0] != found["request_input_source"]["sources"][0]["span"]
+        source_item = found[source_fact]["sources"][0]
+        if (locations[0] != source_item["parameter_span" if file_input else "span"]
                 or locations[-1] != trace["sink_span"]
                 or len({tuple(location) for location in locations}) != len(locations)):
+            return None
+        if file_input and (any(source_item[key] not in locations for key in ("open_span", "handle_span"))
+                           or not all(_contains_span(source_item["function_span"], span) for span in locations)):
             return None
     if "value_constraints" in found:
         if "local_input_flow" not in found:
@@ -190,6 +225,7 @@ def normalize_acquisition(value: object, trace: object) -> dict | None:
             return None
         established_reasons = {"locate_source": "source_snapshot_matched",
                                "trace_request_input": "request_flow_established",
+                               "trace_file_input": "file_flow_established",
                                "inspect_sql_slots": "sql_value_positions_established",
                                "collect_value_constraints": "value_constraints_recorded"}
         if (attempt["result"] == "established"
@@ -226,12 +262,19 @@ def acquisition_rows(value: object, trace: object) -> list[tuple[str, str]]:
     rows = [("Source investigation", f"{record['status']}; {record['stop_reason'].replace('_', ' ')}. "
              "Source evidence only; runtime exploitability and repair behavior remain unverified.")]
     labels = {"locate_source": "Locate the source", "trace_request_input": "Trace request input",
+              "trace_file_input": "Trace file input",
               "inspect_sql_slots": "Check SQL value positions", "collect_value_constraints": "Check value constraints"}
     for step in record["attempts"]:
         rows.append((f"Investigation: {labels[step['action']]}",
                      f"{step['result'].replace('_', ' ')}; {step['reason'].replace('_', ' ')}"))
     for fact in record["facts"]:
-        if fact["id"] == "request_input_source":
+        if fact["id"] == "file_input_source":
+            item = fact["sources"][0]
+            detail = (f"Function {item['function']}: parameter {item['parameter']} at line "
+                      f"{item['parameter_span'][0]} → open(..., 'rb') at line {item['open_span'][0]} "
+                      f"→ handle {item['handle']} at line {item['handle_span'][0]}. "
+                      "Caller, path value and file trust are not established.")
+        elif fact["id"] == "request_input_source":
             detail = "; ".join(f"{item['channel']} parameter {item['parameter']} at line {item['span'][0]}"
                                for item in fact["sources"])
         elif fact["id"] == "local_input_flow":

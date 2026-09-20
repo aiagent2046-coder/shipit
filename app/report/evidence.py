@@ -671,7 +671,7 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
 
 
 def _deserialization_trace_rows(trace: dict) -> list[tuple[str, str]]:
-    return [("Deserialization source trace", f"Import-resolved pickle.loads() at line {trace['sink_line']}. "
+    return [("Deserialization source trace", f"Import-resolved {trace['loader']}() at line {trace['sink_line']}. "
              "Input trust and loader runtime behavior were not checked."),
             ("Deserialization source SHA-256", trace["source_sha256"])]
 
@@ -862,11 +862,21 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
             rows.append(("Source evidence", "Static rule observation only; no additional source trace recorded."
                          if deserialization else
                          "Static rule observation only; no additional SQL source trace recorded."))
-        rows.append(("Missing evidence", "; ".join(humanize(item) for item in missing) if missing else
+        rows.append(("Missing evidence", "; ".join(
+                     "Calling code and origin of the file (not checked)"
+                     if (item == "request_input_source" and deserialization and trace
+                         and trace.get("sink_method") == "load")
+                     else humanize(item) for item in missing) if missing else
                      "Not recorded; do not assume the repair preconditions are satisfied."))
         rows.append(("Next step", "Review the customer project runtime contract: confirm authorization, deployed "
                      "reachability, intended value types and expected query behavior before choosing a repair."
-                     if verified else "Review the runtime contract: confirm input trust, loader options and expected "
+                     if verified else "Review caller-supplied paths and file producers. Require authenticated, "
+                     "trusted bytes "
+                     "or reject unsupported serialization formats; confirm loader options and expected object types "
+                     "before choosing a repair. File input does not "
+                     "establish an HTTP or CLI entry point."
+                     if collected and deserialization and acquisition["version"] == 3
+                     else "Review the runtime contract: confirm input trust, loader options and expected "
                      "object types before choosing a repair." if collected and deserialization else
                      "Review the runtime contract: confirm reachability, input control and expected "
                      "query behavior before choosing a repair." if collected else

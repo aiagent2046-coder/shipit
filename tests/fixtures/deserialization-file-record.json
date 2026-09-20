@@ -1,0 +1,1018 @@
+{
+  "trace": {
+    "version": 1,
+    "method": "python_ast_import_resolved",
+    "file": "checkpoints.py",
+    "source_sha256": "e50819c11a106a2755cb86e41ea60172bbc2efc3213823bb3398252b3d3494a0",
+    "sink_line": 4,
+    "sink_span": [
+      4,
+      15,
+      4,
+      34
+    ],
+    "sink_method": "load",
+    "loader": "pickle.load",
+    "input_control_status": "not_checked"
+  },
+  "record": {
+    "version": 3,
+    "status": "completed",
+    "stop_reason": "source_goal_reached",
+    "source": {
+      "file": "checkpoints.py",
+      "source_sha256": "e50819c11a106a2755cb86e41ea60172bbc2efc3213823bb3398252b3d3494a0",
+      "sink_span": [
+        4,
+        15,
+        4,
+        34
+      ]
+    },
+    "facts": [
+      {
+        "id": "file_input_source",
+        "method": "python_ast_file_binding",
+        "sources": [
+          {
+            "function": "read_checkpoint",
+            "parameter": "path",
+            "handle": "handle",
+            "mode": "rb",
+            "function_span": [
+              2,
+              0,
+              4,
+              34
+            ],
+            "parameter_span": [
+              2,
+              20,
+              2,
+              24
+            ],
+            "open_span": [
+              3,
+              9,
+              3,
+              25
+            ],
+            "handle_span": [
+              3,
+              29,
+              3,
+              35
+            ]
+          }
+        ]
+      },
+      {
+        "id": "local_input_flow",
+        "method": "python_ast_file_flow",
+        "locations": [
+          [
+            2,
+            20,
+            2,
+            24
+          ],
+          [
+            3,
+            9,
+            3,
+            25
+          ],
+          [
+            3,
+            29,
+            3,
+            35
+          ],
+          [
+            4,
+            27,
+            4,
+            33
+          ],
+          [
+            4,
+            15,
+            4,
+            34
+          ]
+        ]
+      }
+    ],
+    "attempts": [
+      {
+        "action": "locate_source",
+        "result": "established",
+        "reason": "source_snapshot_matched",
+        "produced": []
+      },
+      {
+        "action": "trace_file_input",
+        "result": "established",
+        "reason": "file_flow_established",
+        "produced": [
+          "file_input_source",
+          "local_input_flow"
+        ]
+      }
+    ],
+    "budget": {
+      "max_steps": 2,
+      "steps": 2,
+      "work_units": 100
+    }
+  },
+  "cases": [
+    {
+      "name": "unchanged",
+      "changes": [],
+      "valid": true
+    },
+    {
+      "name": "wrong_version",
+      "changes": [
+        {
+          "path": [
+            "version"
+          ],
+          "value": 2
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "boolean_version",
+      "changes": [
+        {
+          "path": [
+            "version"
+          ],
+          "value": true
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "other_file",
+      "changes": [
+        {
+          "path": [
+            "source",
+            "file"
+          ],
+          "value": "other.py"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "other_hash",
+      "changes": [
+        {
+          "path": [
+            "source",
+            "source_sha256"
+          ],
+          "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "other_sink",
+      "changes": [
+        {
+          "path": [
+            "source",
+            "sink_span",
+            3
+          ],
+          "value": 33
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "missing_sink",
+      "changes": [
+        {
+          "path": [
+            "source",
+            "sink_span"
+          ],
+          "delete": true
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "invented_http_channel",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "channel"
+          ],
+          "value": "body"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "write_mode",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "mode"
+          ],
+          "value": "wb"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "invalid_function",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "function"
+          ],
+          "value": "read\ncheckpoint"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "unbounded_parameter",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "parameter"
+          ],
+          "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "invalid_handle",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "handle"
+          ],
+          "value": []
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "function_excludes_sink",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "function_span",
+            2
+          ],
+          "value": 3
+        },
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "function_span",
+            3
+          ],
+          "value": 35
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "boolean_coordinate",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "parameter_span",
+            0
+          ],
+          "value": true
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "open_after_sink",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "open_span",
+            0
+          ],
+          "value": 4
+        },
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "open_span",
+            1
+          ],
+          "value": 35
+        },
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "open_span",
+            2
+          ],
+          "value": 4
+        },
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "open_span",
+            3
+          ],
+          "value": 40
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "handle_before_open",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "handle_span",
+            0
+          ],
+          "value": 2
+        },
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "handle_span",
+            1
+          ],
+          "value": 5
+        },
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "handle_span",
+            2
+          ],
+          "value": 2
+        },
+        {
+          "path": [
+            "facts",
+            0,
+            "sources",
+            0,
+            "handle_span",
+            3
+          ],
+          "value": 11
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "multiple_sources",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "sources"
+          ],
+          "value": [
+            {
+              "function": "read_checkpoint",
+              "parameter": "path",
+              "handle": "handle",
+              "mode": "rb",
+              "function_span": [
+                2,
+                0,
+                4,
+                34
+              ],
+              "parameter_span": [
+                2,
+                20,
+                2,
+                24
+              ],
+              "open_span": [
+                3,
+                9,
+                3,
+                25
+              ],
+              "handle_span": [
+                3,
+                29,
+                3,
+                35
+              ]
+            },
+            {
+              "function": "read_checkpoint",
+              "parameter": "path",
+              "handle": "handle",
+              "mode": "rb",
+              "function_span": [
+                2,
+                0,
+                4,
+                34
+              ],
+              "parameter_span": [
+                2,
+                20,
+                2,
+                24
+              ],
+              "open_span": [
+                3,
+                9,
+                3,
+                25
+              ],
+              "handle_span": [
+                3,
+                29,
+                3,
+                35
+              ]
+            }
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "borrowed_body_source",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            0,
+            "id"
+          ],
+          "value": "request_input_source"
+        },
+        {
+          "path": [
+            "facts",
+            0,
+            "method"
+          ],
+          "value": "fastapi_ast_binding"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "borrowed_body_flow",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            1,
+            "method"
+          ],
+          "value": "python_ast_straight_line"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "missing_parameter",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            1,
+            "locations"
+          ],
+          "value": [
+            [
+              3,
+              9,
+              3,
+              25
+            ],
+            [
+              3,
+              29,
+              3,
+              35
+            ],
+            [
+              4,
+              27,
+              4,
+              33
+            ],
+            [
+              4,
+              15,
+              4,
+              34
+            ]
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "missing_open",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            1,
+            "locations"
+          ],
+          "value": [
+            [
+              2,
+              20,
+              2,
+              24
+            ],
+            [
+              3,
+              29,
+              3,
+              35
+            ],
+            [
+              4,
+              27,
+              4,
+              33
+            ],
+            [
+              4,
+              15,
+              4,
+              34
+            ]
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "missing_handle",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            1,
+            "locations"
+          ],
+          "value": [
+            [
+              2,
+              20,
+              2,
+              24
+            ],
+            [
+              3,
+              9,
+              3,
+              25
+            ],
+            [
+              4,
+              27,
+              4,
+              33
+            ],
+            [
+              4,
+              15,
+              4,
+              34
+            ]
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "missing_sink_endpoint",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            1,
+            "locations"
+          ],
+          "value": [
+            [
+              2,
+              20,
+              2,
+              24
+            ],
+            [
+              3,
+              9,
+              3,
+              25
+            ],
+            [
+              3,
+              29,
+              3,
+              35
+            ],
+            [
+              4,
+              27,
+              4,
+              33
+            ]
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "location_outside_function",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            1,
+            "locations"
+          ],
+          "value": [
+            [
+              2,
+              20,
+              2,
+              24
+            ],
+            [
+              1,
+              0,
+              1,
+              13
+            ],
+            [
+              3,
+              9,
+              3,
+              25
+            ],
+            [
+              3,
+              29,
+              3,
+              35
+            ],
+            [
+              4,
+              27,
+              4,
+              33
+            ],
+            [
+              4,
+              15,
+              4,
+              34
+            ]
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "duplicate_location",
+      "changes": [
+        {
+          "path": [
+            "facts",
+            1,
+            "locations"
+          ],
+          "value": [
+            [
+              2,
+              20,
+              2,
+              24
+            ],
+            [
+              2,
+              20,
+              2,
+              24
+            ],
+            [
+              3,
+              9,
+              3,
+              25
+            ],
+            [
+              3,
+              29,
+              3,
+              35
+            ],
+            [
+              4,
+              27,
+              4,
+              33
+            ],
+            [
+              4,
+              15,
+              4,
+              34
+            ]
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "invented_trust_fact",
+      "changes": [
+        {
+          "path": [
+            "facts"
+          ],
+          "value": [
+            {
+              "id": "file_input_source",
+              "method": "python_ast_file_binding",
+              "sources": [
+                {
+                  "function": "read_checkpoint",
+                  "parameter": "path",
+                  "handle": "handle",
+                  "mode": "rb",
+                  "function_span": [
+                    2,
+                    0,
+                    4,
+                    34
+                  ],
+                  "parameter_span": [
+                    2,
+                    20,
+                    2,
+                    24
+                  ],
+                  "open_span": [
+                    3,
+                    9,
+                    3,
+                    25
+                  ],
+                  "handle_span": [
+                    3,
+                    29,
+                    3,
+                    35
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "local_input_flow",
+              "method": "python_ast_file_flow",
+              "locations": [
+                [
+                  2,
+                  20,
+                  2,
+                  24
+                ],
+                [
+                  3,
+                  9,
+                  3,
+                  25
+                ],
+                [
+                  3,
+                  29,
+                  3,
+                  35
+                ],
+                [
+                  4,
+                  27,
+                  4,
+                  33
+                ],
+                [
+                  4,
+                  15,
+                  4,
+                  34
+                ]
+              ]
+            },
+            {
+              "id": "input_trust_boundary",
+              "method": "python_ast_file_binding"
+            }
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "borrowed_request_action",
+      "changes": [
+        {
+          "path": [
+            "attempts",
+            1,
+            "reason"
+          ],
+          "value": "request_flow_established"
+        },
+        {
+          "path": [
+            "attempts",
+            1,
+            "action"
+          ],
+          "value": "trace_request_input"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "missing_fact_production",
+      "changes": [
+        {
+          "path": [
+            "attempts",
+            1,
+            "produced"
+          ],
+          "value": [
+            "file_input_source"
+          ]
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "wrong_action_reason",
+      "changes": [
+        {
+          "path": [
+            "attempts",
+            1,
+            "reason"
+          ],
+          "value": "request_flow_established"
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "reversed_actions",
+      "changes": [
+        {
+          "path": [
+            "attempts",
+            0,
+            "reason"
+          ],
+          "value": "file_flow_established"
+        },
+        {
+          "path": [
+            "attempts",
+            0,
+            "action"
+          ],
+          "value": "trace_file_input"
+        },
+        {
+          "path": [
+            "attempts",
+            0,
+            "produced"
+          ],
+          "value": [
+            "file_input_source",
+            "local_input_flow"
+          ]
+        },
+        {
+          "path": [
+            "attempts",
+            1,
+            "reason"
+          ],
+          "value": "source_snapshot_matched"
+        },
+        {
+          "path": [
+            "attempts",
+            1,
+            "action"
+          ],
+          "value": "locate_source"
+        },
+        {
+          "path": [
+            "attempts",
+            1,
+            "produced"
+          ],
+          "value": []
+        }
+      ],
+      "valid": false
+    },
+    {
+      "name": "expanded_budget",
+      "changes": [
+        {
+          "path": [
+            "budget",
+            "max_steps"
+          ],
+          "value": 4
+        }
+      ],
+      "valid": false
+    }
+  ]
+}

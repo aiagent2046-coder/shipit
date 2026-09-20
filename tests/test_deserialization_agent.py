@@ -58,7 +58,7 @@ def test_body_flow_completes_source_goal_but_keeps_trust_and_loader_gates():
     agent = result["report"]["security_agent"]
     finding, = deserialization_findings(result["report"])
     trace = finding["claim_evidence"]["deserialization_observation"]
-    assert observation["pattern_revision"] == 2
+    assert observation["pattern_revision"] == 3
     assert acquisition["version"] == 2
     assert acquisition["status"] == "completed"
     assert fact_ids(acquisition) == SOURCE_FACTS

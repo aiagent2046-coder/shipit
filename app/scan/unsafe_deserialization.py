@@ -68,6 +68,7 @@ class _Evidence:
     what: str
     kind: str = "code"
     sink_span: tuple[int, int, int, int] | None = None
+    loader: str | None = None
 
 
 # An import proves a name only in the scope where Python binds it. Ordinary
@@ -330,8 +331,8 @@ def _evidence(tree: ast.Module) -> list[_Evidence]:
         if member in _ALWAYS_UNSAFE.get(module, ()):
             kind = "marshal" if module == "marshal" else "code"
             span = ((node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
-                    if target == "pickle.loads" else None)
-            found.append(_Evidence(node.lineno, f"calls {target}()", kind, span))
+                    if target in {"pickle.load", "pickle.loads"} else None)
+            found.append(_Evidence(node.lineno, f"calls {target}()", kind, span, target if span else None))
         elif module == "torch" and member == "load":
             if any(keyword.arg == "weights_only" and isinstance(keyword.value, ast.Constant)
                    and keyword.value.value is False for keyword in node.keywords):
@@ -446,6 +447,7 @@ def _finding(path: str, item: _Evidence, source_digest: str = "") -> CheckFindin
         claim_evidence={**static_claim_evidence(), "deserialization_observation": {
             "version": 1, "method": "python_ast_import_resolved", "file": path,
             "source_sha256": source_digest, "sink_line": item.line, "sink_span": list(item.sink_span),
-            "sink_method": "loads", "loader": "pickle.loads", "input_control_status": "not_checked",
+            "sink_method": item.loader.removeprefix("pickle."), "loader": item.loader,
+            "input_control_status": "not_checked",
         }} if item.sink_span else None,
     )

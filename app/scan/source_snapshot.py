@@ -59,6 +59,9 @@ class SourceSnapshot:
             part.casefold().split(".", 1)[0] in {
                 "pickle", "fastapi", "starlette", "typing", "typing_extensions", "builtins"}
             for path in self._entries for part in path.replace("\\", "/").split("/"))
+        self.file_deserialization_import_shadowed = any(
+            part.casefold().split(".", 1)[0] in {"pickle", "builtins"}
+            for path in self._entries for part in path.replace("\\", "/").split("/"))
         self._documents = {}
         self._source_bytes = 0
         self.acquisitions = {}
