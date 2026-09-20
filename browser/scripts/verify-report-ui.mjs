@@ -165,7 +165,8 @@ try {
   async function scanControlled(nextReport, nextSarif = sarif) {
     await page.evaluate(next => { window.scanResponse = next; }, { report: nextReport, sarif: nextSarif });
     await page.getByRole('button', { name: 'Scan locally', exact: true }).click();
-    await patternReview.locator('summary').click();
+    await page.locator('#results').waitFor({ state: 'visible' });
+    if (await patternReview.isVisible()) await patternReview.locator('summary').click();
   }
   await scanControlled(acquiredReport);
   const acquiredSection = patternReview.locator('section').filter({ hasText: 'Request input source investigation' });
@@ -243,6 +244,24 @@ try {
   assert.equal(await ownerSummary.isVisible(), true);
   assert.match(await ownerSummary.innerText(), /2 file-loading locations/);
   assert.match(await ownerSummary.innerText(), /other observations remain below/);
+  const roadmap = page.getByRole('region', { name: 'Project roadmap', exact: true });
+  assert.equal(await roadmap.isVisible(), true);
+  assert.equal(await roadmap.locator('#roadmap-task-file-loading-origin').count(), 1);
+  const decision = roadmap.locator('#roadmap-task-file-loading-decision');
+  await decision.locator('summary').click();
+  const prerequisite = decision.getByRole('link', { name: 'Find out who supplies and can change loaded files' });
+  await prerequisite.focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#roadmap-task-file-loading-origin').evaluate(el => el === document.activeElement), true);
+  const originTask = roadmap.locator('#roadmap-task-file-loading-origin');
+  await originTask.locator('summary').click();
+  const sourceLinks = originTask.getByRole('link');
+  assert.equal(await sourceLinks.count(), 2, 'One investigation task must retain both original loader locations');
+  await fileGroup.evaluate(el => { el.open = false; });
+  await sourceLinks.nth(1).focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#roadmap-finding-1').evaluate(el => el === document.activeElement), true);
+  assert.equal(await page.locator('#owner-finding-1').isVisible(), true, 'Roadmap references must reveal collapsed groups');
   for (const card of await fileGroup.locator('.owner-finding').all()) {
     const visible = await card.innerText();
     assert.match(visible, /If an untrusted file/);
@@ -294,6 +313,10 @@ try {
   await scanControlled(contextualFiles);
   const contextualOwner = page.locator('#owner-finding-0');
   assert.equal(await contextualOwner.isVisible(), false);
+  await roadmap.locator('#roadmap-task-file-loading-origin summary').click();
+  await roadmap.locator('#roadmap-task-file-loading-origin a').first().click();
+  assert.equal(await contextualOwner.isVisible(), true, 'Roadmap references must reveal contextual findings');
+  await page.locator('.contextual-findings').evaluate(el => { el.open = false; });
   await ownerSummary.getByRole('link', { name: 'See the file-loading question' }).click();
   assert.equal(await contextualOwner.isVisible(), true, 'The next action must reveal a collapsed contextual card');
   assert.equal(await contextualOwner.evaluate(el => el === document.activeElement), true);
@@ -311,8 +334,30 @@ try {
   assert.equal(await page.locator('#security-agent').textContent(), '', 'Rescanning must clear previous observations');
   assert.equal(await ownerSummary.isVisible(), false, 'Rescanning must clear an inapplicable owner summary');
   assert.equal(await page.locator('#owner-report-summary').textContent(), '', 'Unsupported reports must not inherit earlier advice');
+  assert.equal(await roadmap.locator('#roadmap-task-file-loading-origin').count(), 0, 'Rescanning must clear old tasks and references');
+  const genericTask = roadmap.locator('#roadmap-task-remaining-observations');
+  await genericTask.locator('summary').click();
+  await genericTask.getByRole('link').first().click();
+  assert.equal(await page.locator('#roadmap-finding-0').isVisible(), true, 'Generic review must lead to the original observation');
+  const inventoryReport = { findings: [{ rule_id: 'no-dockerfile', source: 'static', context: 'deployment_inventory',
+    file: '', line: 0, title: 'No Dockerfile found', severity: 'low' }] };
+  await scanControlled(inventoryReport);
+  assert.equal(await roadmap.locator('.roadmap-task').count(), 1);
+  assert.equal(await roadmap.getByRole('heading', { name: 'If needed', exact: true }).count(), 1);
+  assert.equal(await roadmap.getByRole('heading', { name: 'First', exact: true }).count(), 0,
+    'A Dockerfile inventory observation must not become mandatory deployment work');
+  await scanControlled({ findings: [], dependency_cve: { status: 'partial', status_counts: { not_in_catalog: 1 } } });
+  assert.equal(await roadmap.locator('.roadmap-task').count(), 1);
+  assert.doesNotMatch(await roadmap.innerText(), /provide the exact installed versions/,
+    'An unlisted package does not establish missing versions');
+  await roadmap.locator('summary').click();
+  await roadmap.getByRole('link', { name: 'Dependency coverage', exact: true }).click();
+  assert.equal(await page.locator('#roadmap-coverage').evaluate(el => el === document.activeElement), true);
+  await scanControlled({ findings: [] });
+  assert.equal(await roadmap.locator('.roadmap-task').count(), 0);
+  assert.match(await roadmap.innerText(), /does not establish that the project is ready or safe/);
   assert.deepEqual(errors, []);
-  console.log('Report UI: grouping, retained priority, legacy review, acquired source facts, remaining gaps, rejected forged records, keyboard disclosure, safe text, exports and mobile layout passed');
+  console.log('Report UI: grouping, retained evidence, roadmap prerequisites and source links, conditional deployment, coverage gaps, keyboard disclosure, safe text, unchanged exports and mobile layout passed');
 } finally {
   await browser.close();
 }

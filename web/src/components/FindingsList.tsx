@@ -89,8 +89,8 @@ export function SeveritySummary({ findings }: { findings: Finding[] }) {
   );
 }
 
-function FindingCard({ finding, historical = false, included = false, refreshed = false, ownerCard }: {
-  finding: Finding; historical?: boolean; included?: boolean; refreshed?: boolean; ownerCard?: OwnerReportCard;
+function FindingCard({ finding, historical = false, included = false, refreshed = false, ownerCard, findingIndex }: {
+  finding: Finding; historical?: boolean; included?: boolean; refreshed?: boolean; ownerCard?: OwnerReportCard; findingIndex?: number;
 }) {
   const { what, risk, fix } = plainFields(finding);
   const projection = narrativeProjection(finding);
@@ -174,8 +174,8 @@ function FindingCard({ finding, historical = false, included = false, refreshed 
       )}
   </>;
   return <li className="rounded-lg border border-border bg-surface p-4 scroll-mt-6"
-    id={ownerCard ? `owner-finding-${ownerCard.finding_index}` : undefined} tabIndex={ownerCard ? -1 : undefined}>
-    {ownerCard ? <>
+    id={findingIndex !== undefined ? `roadmap-finding-${findingIndex}` : undefined} tabIndex={findingIndex !== undefined ? -1 : undefined}>
+    {ownerCard ? <div id={`owner-finding-${ownerCard.finding_index}`} tabIndex={-1} className="scroll-mt-6">
       <div className="mb-3 flex items-start justify-between gap-3">
         <h3 className="font-semibold">{ownerCard.title}</h3><SeverityBadge severity={finding.severity} />
       </div>
@@ -186,7 +186,7 @@ function FindingCard({ finding, historical = false, included = false, refreshed 
         <summary>Details for a developer</summary>
         <div className="mt-3">{original}</div>
       </details>
-    </> : original}
+    </div> : original}
   </li>;
 }
 
@@ -239,14 +239,17 @@ export function PreviewHistory({ score }: { score: Score }) {
   );
 }
 
-function RelatedFindingCards({ findings, ownerCards }: { findings: Finding[]; ownerCards?: Map<Finding, OwnerReportCard> }) {
+function RelatedFindingCards({ findings, ownerCards, findingIndices }: {
+  findings: Finding[]; ownerCards?: Map<Finding, OwnerReportCard>; findingIndices: Map<Finding, number>;
+}) {
   return relatedFindingGroups(findings).map((group, index) => group.length === 1
-    ? <FindingCard key={index} finding={group[0]} ownerCard={ownerCards?.get(group[0])} />
+    ? <FindingCard key={index} finding={group[0]} ownerCard={ownerCards?.get(group[0])} findingIndex={findingIndices.get(group[0])} />
     : <li key={index} className="rounded-lg border border-border p-3">
       <details open>
         <summary className="mb-3 font-semibold">Pickle file loading · {group.length} locations</summary>
         <ul className="flex flex-col gap-3">
-          {group.map((finding, location) => <FindingCard key={location} finding={finding} ownerCard={ownerCards?.get(finding)} />)}
+          {group.map((finding, location) => <FindingCard key={location} finding={finding}
+            ownerCard={ownerCards?.get(finding)} findingIndex={findingIndices.get(finding)} />)}
         </ul>
       </details>
     </li>);
@@ -265,16 +268,20 @@ export function FindingsList({ findings, context, projection }: {
       </div>
     );
   }
-  const sorted = sortFindings(findings);
+  // Give every input occurrence its own presentation identity, including callers
+  // that repeat the same object reference. Original records remain unchanged.
+  const currentFindings = findings.map(finding => ({ ...finding }));
+  const sorted = sortFindings(currentFindings);
   // Keep preview/demo/legacy callers unchanged; current report adapters supply
   // the saved scan context. Map by original object before sorting and grouping.
   const ownerCards = new Map<Finding, OwnerReportCard>();
+  const findingIndices = new Map(currentFindings.map((finding, index) => [finding, index]));
   const ownerProjection = projection ?? (context ? projectOwnerReport(findings, context) : null);
   if (ownerProjection) for (const card of ownerProjection.cards) {
-    ownerCards.set(findings[card.finding_index], card);
+    ownerCards.set(currentFindings[card.finding_index], card);
   }
   const contradicted = sorted.filter(syntaxContradicted);
-  const informational = sorted.filter(isInformational);
+  const informational = sorted.filter(f => !syntaxContradicted(f) && isInformational(f));
   const unsupported = sorted.filter((f) => !syntaxContradicted(f) && !isInformational(f) && unsupportedTransport(f));
   const unresolved = sorted.filter((f) => !syntaxContradicted(f) && !isInformational(f) && !unsupportedTransport(f));
   const production = unresolved.filter((f) => !isNonProductionFinding(f));
@@ -282,7 +289,7 @@ export function FindingsList({ findings, context, projection }: {
   return (
     <>
       <ul className="flex flex-col gap-3">
-        <RelatedFindingCards findings={production} ownerCards={ownerCards} />
+        <RelatedFindingCards findings={production} ownerCards={ownerCards} findingIndices={findingIndices} />
       </ul>
       {examples.length > 0 && (
         <section className="mt-6" aria-label="In tests, examples and scaffolding">
@@ -294,14 +301,14 @@ export function FindingsList({ findings, context, projection }: {
             committed in a test.
           </p>
           <ul className="flex flex-col gap-3">
-            <RelatedFindingCards findings={examples} ownerCards={ownerCards} />
+            <RelatedFindingCards findings={examples} ownerCards={ownerCards} findingIndices={findingIndices} />
           </ul>
         </section>
       )}
       {informational.length > 0 && <section className="mt-6" aria-label="Deployment inventory">
         <h3 className="font-semibold">Deployment inventory</h3>
         <ul className="flex flex-col gap-3">
-          {informational.map((f, i) => <FindingCard key={i} finding={f} />)}
+          {informational.map((f, i) => <FindingCard key={i} finding={f} findingIndex={findingIndices.get(f)} />)}
         </ul>
       </section>}
       {unsupported.length > 0 && <section className="mt-6" aria-label="Credential transport hypotheses">
@@ -311,7 +318,7 @@ export function FindingsList({ findings, context, projection }: {
           and excluded from unresolved finding counts and score penalties. Credential safety remains unverified.
         </p>
         <ul className="flex flex-col gap-3">
-          {unsupported.map((f, i) => <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />)}
+          {unsupported.map((f, i) => <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} findingIndex={findingIndices.get(f)} />)}
         </ul>
       </section>}
       {contradicted.length > 0 && <section className="mt-6" aria-label="Contradicted syntax premises">
@@ -322,7 +329,7 @@ export function FindingsList({ findings, context, projection }: {
           that the surrounding code is safe.
         </p>
         <ul className="flex flex-col gap-3">
-          {contradicted.map((f, i) => <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} />)}
+          {contradicted.map((f, i) => <FindingCard key={`${f.rule_id}-${f.file}-${i}`} finding={f} findingIndex={findingIndices.get(f)} />)}
         </ul>
       </section>}
     </>

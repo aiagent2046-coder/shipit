@@ -52,5 +52,6 @@ evidence and keyboard access to a collapsed card. The existing Chromium report
 test additionally checks the real browser upload/render/export path, next-action
 links, rescan clearing and narrow-screen layout with controlled worker results.
 
-This work is the first report PR. Building the full owner roadmap, measuring
+The [project roadmap](owner-roadmap.md) builds on these cards to propose work
+with dependencies, suggested owners and completion criteria. Measuring
 paid-analysis contributions and running a pilot across 3–5 projects follow it.
