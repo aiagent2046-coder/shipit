@@ -89,6 +89,26 @@ def test_unrelated_framework_module_does_not_block_a_file_binding():
     assert all(o["acquisition"]["status"] == "completed" for o in report["security_agent"]["observations"])
 
 
+def test_function_builtins_mutation_keeps_findings_but_revokes_file_facts():
+    source = FILE_LOADERS + '''
+def change():
+    read_primary.__builtins__["open"] = replacement
+    return False
+'''
+    source = source.replace("use_other_format(path)", "change()")
+    report = scan({"src/checkpoints.py": source})["report"]
+    findings = [f for f in report["findings"] if f["rule_id"] == "unsafe-deserialization"]
+    assert len(findings) == 2
+    assert all(f["severity"] == "high" and f["verification_status"] == "unverified" for f in findings)
+    agent = report["security_agent"]
+    assert len(agent["observations"]) == 2
+    for observation in agent["observations"]:
+        assert observation["state"] == "needs_evidence"
+        assert not observation["acquisition"]["facts"]
+        assert set(observation["missing_evidence"]) == GAPS | {"local_input_flow"}
+    assert "Source fact: file input source" not in dict(security_agent_rows(agent))
+
+
 def test_file_scan_paths_never_execute_customer_code_or_call_network_or_model(tmp_path, monkeypatch):
     marker = tmp_path / "customer-code-ran"
     raw = archive({"src/checkpoints.py": FILE_LOADERS,

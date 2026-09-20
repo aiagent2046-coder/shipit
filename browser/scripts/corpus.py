@@ -204,6 +204,8 @@ def file_deserialization_acquisition_cases():
          .replace('pickle.load(handle)', 'restore(handle)'), True),
         ('overwritten-path', source.replace('    with open', '    path = "local"\n    with open'), False),
         ('custom-open', source.replace('open(path,', 'custom_open(path,'), False),
+        ('function-builtins-mutation', source.replace('if alternate(path):', 'if change():')
+         + 'def change():\n    load.__builtins__["open"] = replacement\n    return False\n', False),
     ):
         data = archive({'src/restore.py': body})
         result = scan_archive(data)

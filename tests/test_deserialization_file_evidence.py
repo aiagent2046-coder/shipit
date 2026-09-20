@@ -166,6 +166,22 @@ def test_namespace_rebinding_mutation_and_escape_revoke_file_provenance(extra):
     assert collect(loader() + extra)['facts'] == []
 
 
+@pytest.mark.parametrize('mutation', [
+    'read_checkpoint.__builtins__["open"] = replacement',
+    'namespace = read_checkpoint.__builtins__\nnamespace["open"] = replacement',
+    'mutate(read_checkpoint.__builtins__)',
+])
+def test_function_builtins_access_revokes_file_provenance(mutation):
+    # The helper can change open before the otherwise supported file binding.
+    # Parse this fixture only: never mutate the test runner's builtins.
+    source = loader('if change():\n    return None\n'
+                    'with open(path, "rb") as handle:\n    return pickle.load(handle)\n')
+    source += 'def change():\n' + textwrap.indent(mutation + '\nreturn False\n', '    ')
+    assert collect(source) == {
+        'status': 'unknown', 'reason': 'file_binding_not_established', 'facts': [],
+    }
+
+
 @pytest.mark.parametrize('shadow', [
     'open = replacement', 'pickle = replacement', 'from custom import open',
     'try:\n    pass\nexcept Exception as open:\n    pass',
