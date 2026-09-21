@@ -111,6 +111,51 @@ The tests cover overlapping and reintroduced vulnerabilities, CVE/GHSA
 disagreement, unknown ranges, missing fixed boundaries, exhausted budgets,
 source bindings, retained reports, and the bundled examples above.
 
+### Real package-manager contracts
+
+Two repository-owned consumer fixtures now exercise the installation part of
+the recipes. Run them explicitly on Linux with Python 3.12, Node 24 and npm 11:
+
+```bash
+python scripts/verify_dependency_remediation.py --case npm --output-dir /tmp/drydock-npm-contract
+python scripts/verify_dependency_remediation.py --case pypi --output-dir /tmp/drydock-pypi-contract
+```
+
+Each output directory must be new. The commands download public registry
+packages into disposable environments and preserve JSON evidence, resolved
+manifests and command logs. They do not take a customer project, arbitrary
+package, command, or version as input. Exit codes are `0` passed, `1` failed,
+and `2` unavailable; unavailable is not a successful or skipped check.
+
+| Fixture | Before → candidate → restored | Independent consumer |
+| --- | --- | --- |
+| npm picomatch | 2.3.0 → 2.3.2 → 2.3.0 | Nine Rollup pluginutils filter assertions |
+| PyPI sqlparse | 0.5.5 → 0.6.0 → 0.5.5 | Four Django/SQL assertions and a Python-snippet escaping regression |
+
+The current planner must offer the selected candidate. npm regenerates its
+lockfile and installs it with lifecycle scripts disabled. pip installs exact,
+hashed wheels into a fresh environment for every stage, checks dependencies,
+and generates resolved requirements from that actual installation. Each probe
+reports the package loaded by the real consumer. The runner compares installed
+and resolved versions, requires a complete target assessment, rejects any
+unknown or unresolved target advisory, and requires every recorded target entry
+to be unaffected after the update. The original manifests, findings and inventory
+must return in the last stage; other package versions cannot silently change.
+
+The `dependency-remediation-contract` workflow runs both fixtures on pull
+requests, main pushes and manual dispatch, and uploads evidence even on failure.
+The normal offline pytest suite checks false-success boundaries without registry
+access. Branch-protection settings are not changed by this workflow.
+
+`fixture_verified` is limited to these fixtures. `runtime_verified`,
+`customer_project_verified` and `automatic_patch` remain false; ordinary cards
+are not promoted to runtime evidence. The npm probe does not reproduce ReDoS.
+The PyPI probe verifies one escaping fix without executing generated code; it
+does not establish that the Django application can reach the advisory's code
+execution scenario. These smaller fixtures do not repeat the earlier full
+Svelte build or Django HTTP/ORM experiment. See the
+[fixture provenance and exact scope](../tests/fixtures/dependency-remediation/README.md).
+
 Automatic source-code recipe extraction from CWE classifications, patch
 references, or before/after code is **not implemented**. The existing Python
 SQL/Psycopg pilot remains in its separate pattern catalog and evidence workflow;
