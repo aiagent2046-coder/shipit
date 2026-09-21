@@ -131,6 +131,9 @@ def test_unrechecked_match_survives_with_original_provenance_and_a_retained_mark
     assert initial == original
     expected = deepcopy(original["findings"])
     expected[0]["claim_evidence"]["snapshot_check_status"] = "retained_not_reconfirmed"
+    assert "not been reconfirmed" in refreshed["findings"][0]["fix_hint"]
+    assert "Advisory-fixed upgrade candidates:" not in refreshed["findings"][0]["fix_hint"]
+    expected[0]["fix_hint"] = refreshed["findings"][0]["fix_hint"]
     assert refreshed["findings"] == expected
     assert refreshed["score"]["total"] == initial["score"]["total"]
     assert refreshed["sca"]["dependency_snapshot"]["retained_findings"] == 1
