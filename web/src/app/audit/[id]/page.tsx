@@ -9,7 +9,10 @@ import { RESULT_PREFIX } from "@/components/AuditForm";
 import { findingCounts } from "@/lib/evidence";
 import { AuditCoverage } from "@/components/AuditCoverage";
 import { CopyAuditLink } from "@/components/CopyAuditLink";
-import { FindingsList, PreviewHistory, SeveritySummary } from "@/components/FindingsList";
+import { FindingsList, OwnerReportSummary, PreviewHistory, SeveritySummary } from "@/components/FindingsList";
+import { projectOwnerReport } from "@/lib/ownerReport";
+import { projectOwnerRoadmap } from "@/lib/ownerRoadmap";
+import { OwnerRoadmap } from "@/components/OwnerRoadmap";
 import { Spinner } from "@/components/Spinner";
 import { FixpackPurchase } from "@/components/FixpackPurchase";
 import { RlsCheck } from "@/components/RlsCheck";
@@ -134,6 +137,9 @@ function AuditPageInner() {
     };
   }, [id, token]);
 
+  const ownerProjection = projectOwnerReport(view?.findings, view?.score.scan_manifest ?? {});
+  const roadmapProjection = projectOwnerRoadmap(view?.findings, view?.score.scan_manifest ?? {});
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
       <Link href="/" className="text-sm text-muted hover:text-text">
@@ -211,7 +217,11 @@ function AuditPageInner() {
             <CopyAuditLink />
 
             <div className="my-6 border-t border-border" />
-            <AuditCoverage score={view.score} findings={view.findings} />
+            <OwnerReportSummary projection={ownerProjection} />
+            <OwnerRoadmap projection={roadmapProjection} findings={view.findings} />
+            <div id="roadmap-coverage" tabIndex={-1} className="scroll-mt-6">
+              <AuditCoverage score={view.score} findings={view.findings} />
+            </div>
 
             <div className="mt-6 flex flex-wrap gap-3">
               <a
@@ -238,7 +248,7 @@ function AuditPageInner() {
             <h2 id="current-observations-title" className="mb-3 text-lg font-semibold">
               Current scan observations
             </h2>
-            <FindingsList findings={view.findings} />
+            <FindingsList findings={view.findings} projection={ownerProjection} />
           </section>
 
           <div id="fix-pack" tabIndex={-1} className="scroll-mt-6">

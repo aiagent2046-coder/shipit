@@ -1,0 +1,296 @@
+[
+  {
+    "name": "fixed",
+    "review": {
+      "version": 1,
+      "source": {
+        "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "engine_version": "test"
+      },
+      "status": "completed",
+      "coverage_partial": false,
+      "budget": {
+        "max_candidates": 32,
+        "candidates_found": 1,
+        "processed": 1,
+        "omitted": 0
+      },
+      "runtime_verified": false,
+      "automatic_patch": false,
+      "model_calls": 0,
+      "observations": [
+        {
+          "id": "9826a62116ffa399af1a642758588cda10c2dab63c11f8c4f46b67f059253d97",
+          "file": "<img src=x onerror=\"alert(1)\">.ts",
+          "line": 3,
+          "state": "fixed_sql_fragments",
+          "analysis": {
+            "version": 1,
+            "file": "<img src=x onerror=\"alert(1)\">.ts",
+            "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "sink_line": 3,
+            "sink_column": 1,
+            "sink_method": "query",
+            "verdict": "fixed_sql_fragments",
+            "parameter_argument": "present",
+            "fragments": [
+              {
+                "line": 2,
+                "kind": "fixed_helper",
+                "reason": "single_return_literal_args"
+              }
+            ],
+            "reason": "proven_fixed",
+            "runtime_verified": false
+          },
+          "tasks": [
+            {
+              "agent": "detector",
+              "status": "completed",
+              "input_sha256": "9826a62116ffa399af1a642758588cda10c2dab63c11f8c4f46b67f059253d97",
+              "output_sha256": "782c1d37f78ea344da65b127bb5c7c2d19fb815b0d0d7c64c031f9de798d50b2",
+              "depends_on": []
+            },
+            {
+              "agent": "researcher",
+              "status": "completed",
+              "input_sha256": "782c1d37f78ea344da65b127bb5c7c2d19fb815b0d0d7c64c031f9de798d50b2",
+              "output_sha256": "f116ba4ed9fb90c072224c7503c4e11e1a9233742775b263e8bfcc962b369e67",
+              "depends_on": [
+                "782c1d37f78ea344da65b127bb5c7c2d19fb815b0d0d7c64c031f9de798d50b2"
+              ]
+            },
+            {
+              "agent": "verifier",
+              "status": "completed",
+              "input_sha256": "f116ba4ed9fb90c072224c7503c4e11e1a9233742775b263e8bfcc962b369e67",
+              "output_sha256": "08f922691b94c3ee6bd8f4775c38e3a455c0636acab063ddfb2197e15fb3fa6f",
+              "depends_on": [
+                "f116ba4ed9fb90c072224c7503c4e11e1a9233742775b263e8bfcc962b369e67"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "dynamic",
+    "review": {
+      "version": 1,
+      "source": {
+        "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "engine_version": "test"
+      },
+      "status": "completed",
+      "coverage_partial": false,
+      "budget": {
+        "max_candidates": 32,
+        "candidates_found": 1,
+        "processed": 1,
+        "omitted": 0
+      },
+      "runtime_verified": false,
+      "automatic_patch": false,
+      "model_calls": 0,
+      "observations": [
+        {
+          "id": "9826a62116ffa399af1a642758588cda10c2dab63c11f8c4f46b67f059253d97",
+          "file": "<img src=x onerror=\"alert(1)\">.ts",
+          "line": 3,
+          "state": "dynamic_sql_unresolved",
+          "analysis": {
+            "version": 1,
+            "file": "<img src=x onerror=\"alert(1)\">.ts",
+            "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "sink_line": 3,
+            "sink_column": 1,
+            "sink_method": "query",
+            "verdict": "dynamic_sql_unresolved",
+            "parameter_argument": "present",
+            "fragments": [
+              {
+                "line": 2,
+                "kind": "unknown",
+                "reason": "unresolved_expression"
+              }
+            ],
+            "reason": "unresolved_expression",
+            "runtime_verified": false
+          },
+          "tasks": [
+            {
+              "agent": "detector",
+              "status": "completed",
+              "input_sha256": "9826a62116ffa399af1a642758588cda10c2dab63c11f8c4f46b67f059253d97",
+              "output_sha256": "782c1d37f78ea344da65b127bb5c7c2d19fb815b0d0d7c64c031f9de798d50b2",
+              "depends_on": []
+            },
+            {
+              "agent": "researcher",
+              "status": "completed",
+              "input_sha256": "782c1d37f78ea344da65b127bb5c7c2d19fb815b0d0d7c64c031f9de798d50b2",
+              "output_sha256": "ff0bd10c3835582aef8ceec64a5ae5afdaa7b69fca92543d5034cf65efd3bf5c",
+              "depends_on": [
+                "782c1d37f78ea344da65b127bb5c7c2d19fb815b0d0d7c64c031f9de798d50b2"
+              ]
+            },
+            {
+              "agent": "verifier",
+              "status": "completed",
+              "input_sha256": "ff0bd10c3835582aef8ceec64a5ae5afdaa7b69fca92543d5034cf65efd3bf5c",
+              "output_sha256": "ac6e0c052103b1e9f403b59e564cd2eae33ecab770063a37e1bc4d5d495a4b60",
+              "depends_on": [
+                "ff0bd10c3835582aef8ceec64a5ae5afdaa7b69fca92543d5034cf65efd3bf5c"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "unavailable",
+    "review": {
+      "version": 1,
+      "source": {
+        "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "engine_version": "test"
+      },
+      "status": "partial",
+      "coverage_partial": false,
+      "budget": {
+        "max_candidates": 32,
+        "candidates_found": 1,
+        "processed": 1,
+        "omitted": 0
+      },
+      "runtime_verified": false,
+      "automatic_patch": false,
+      "model_calls": 0,
+      "observations": [
+        {
+          "id": "9826a62116ffa399af1a642758588cda10c2dab63c11f8c4f46b67f059253d97",
+          "file": "<img src=x onerror=\"alert(1)\">.ts",
+          "line": 3,
+          "state": "unavailable",
+          "analysis": {
+            "version": 1,
+            "file": "<img src=x onerror=\"alert(1)\">.ts",
+            "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "sink_line": 3,
+            "sink_column": null,
+            "sink_method": null,
+            "verdict": "unavailable",
+            "parameter_argument": "unknown",
+            "fragments": [],
+            "reason": "work_limit",
+            "runtime_verified": false
+          },
+          "tasks": [
+            {
+              "agent": "detector",
+              "status": "completed",
+              "input_sha256": "9826a62116ffa399af1a642758588cda10c2dab63c11f8c4f46b67f059253d97",
+              "output_sha256": "782c1d37f78ea344da65b127bb5c7c2d19fb815b0d0d7c64c031f9de798d50b2",
+              "depends_on": []
+            },
+            {
+              "agent": "researcher",
+              "status": "blocked",
+              "input_sha256": "782c1d37f78ea344da65b127bb5c7c2d19fb815b0d0d7c64c031f9de798d50b2",
+              "output_sha256": "f64a077e484909ba35a4e721701d10960bd8a4d6bd49282f88921edb4e6f14a4",
+              "depends_on": [
+                "782c1d37f78ea344da65b127bb5c7c2d19fb815b0d0d7c64c031f9de798d50b2"
+              ]
+            },
+            {
+              "agent": "verifier",
+              "status": "blocked",
+              "input_sha256": "f64a077e484909ba35a4e721701d10960bd8a4d6bd49282f88921edb4e6f14a4",
+              "output_sha256": "e22e395c4be59f03812f7e41290b2e1f8bede264a58d5c2a56d53e258a0fc5ce",
+              "depends_on": [
+                "f64a077e484909ba35a4e721701d10960bd8a4d6bd49282f88921edb4e6f14a4"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "unicode",
+    "review": {
+      "version": 1,
+      "source": {
+        "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "engine_version": "\u0432\u0435\u0440\u0441\u0438\u044f-\ud83d\ude00"
+      },
+      "status": "completed",
+      "coverage_partial": false,
+      "budget": {
+        "max_candidates": 32,
+        "candidates_found": 1,
+        "processed": 1,
+        "omitted": 0
+      },
+      "runtime_verified": false,
+      "automatic_patch": false,
+      "model_calls": 0,
+      "observations": [
+        {
+          "id": "19bbb816c4333b25d53a9da3c88674baadc08b005d1d765866ed8c4c22603c58",
+          "file": "src/\u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430-\ud800\udc00-\ud83d\ude00-\u007f-\ud800.ts",
+          "line": 3,
+          "state": "fixed_sql_fragments",
+          "analysis": {
+            "version": 1,
+            "file": "src/\u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430-\ud800\udc00-\ud83d\ude00-\u007f-\ud800.ts",
+            "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "sink_line": 3,
+            "sink_column": 1,
+            "sink_method": "query",
+            "verdict": "fixed_sql_fragments",
+            "parameter_argument": "present",
+            "fragments": [
+              {
+                "line": 2,
+                "kind": "fixed_helper",
+                "reason": "single_return_literal_args"
+              }
+            ],
+            "reason": "proven_fixed",
+            "runtime_verified": false
+          },
+          "tasks": [
+            {
+              "agent": "detector",
+              "status": "completed",
+              "input_sha256": "19bbb816c4333b25d53a9da3c88674baadc08b005d1d765866ed8c4c22603c58",
+              "output_sha256": "affd2eceb1c8ce3d50a4a5ea877cddebe86cc172b6bad9c490d02f0b8b3897df",
+              "depends_on": []
+            },
+            {
+              "agent": "researcher",
+              "status": "completed",
+              "input_sha256": "affd2eceb1c8ce3d50a4a5ea877cddebe86cc172b6bad9c490d02f0b8b3897df",
+              "output_sha256": "eac4af646c6ad0549e19c5d0451913e90405039d14b6449efd1eb0b3869500e8",
+              "depends_on": [
+                "affd2eceb1c8ce3d50a4a5ea877cddebe86cc172b6bad9c490d02f0b8b3897df"
+              ]
+            },
+            {
+              "agent": "verifier",
+              "status": "completed",
+              "input_sha256": "eac4af646c6ad0549e19c5d0451913e90405039d14b6449efd1eb0b3869500e8",
+              "output_sha256": "0279d662b4e9802d5b959f5419549a8ea016a6ba0fe00596a6da54a6ecebebf9",
+              "depends_on": [
+                "eac4af646c6ad0549e19c5d0451913e90405039d14b6449efd1eb0b3869500e8"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from contextlib import contextmanager
+import hashlib
 from typing import BinaryIO
 
 from app.capabilities import CHECKS_RUN, EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE
@@ -28,6 +29,8 @@ from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
 from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
+from app.scan.security_agent import attach_security_agent
+from app.scan.version import AUDIT_ENGINE_VERSION
 from app.scan.unsafe_deserialization import scan_unsafe_deserialization
 from app.scan.path_traversal import scan_path_traversal
 from app.scan.archive_extraction import scan_archive_extraction
@@ -61,7 +64,8 @@ class _CheckDidNotRun:
         self.mount = MOUNT_UNKNOWN
 
 
-def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) -> dict:
+def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, synthetic_sql_executor=None,
+                    client_runtime_evidence=None, client_runtime_run_id=None) -> dict:
     """Returns {"score": {...}, "findings": [ScoredFinding-as-dict]}.
 
     The score here describes THIS stage only. app/scan/pipeline.py reads just
@@ -142,7 +146,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                 rule_id=q.rule_id, title=q.title, severity=q.severity,
                 confidence=q.confidence, category=q.category, file=q.file,
                 line=q.line, explanation=q.explanation, fix_hint=q.fix_hint,
-                claim_evidence=static_claim_evidence(),
+                claim_evidence=getattr(q, "claim_evidence", None) or static_claim_evidence(),
             ))
 
     fileobj.seek(0)
@@ -193,7 +197,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
                 rule_id=d.rule_id, title=d.title, severity=d.severity,
                 confidence=d.confidence, category=d.category, file=d.file,
                 line=d.line, explanation=d.explanation, fix_hint=d.fix_hint,
-                claim_evidence=static_claim_evidence(),
+                claim_evidence=d.claim_evidence or static_claim_evidence(),
             ))
 
     fileobj.seek(0)
@@ -363,7 +367,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
         f"files with invalid UTF-8 bytes omitted: {file_coverage.get('lossy_decoded_files', 0)}. "
         + EXCLUSIONS_NOTE
     )
-    return {
+    result = {
         "limitations": limitations,
         "rule_coverage": rule_coverage,
         "check_finding_counts": check_finding_counts,
@@ -433,3 +437,11 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False) ->
         # audits. This list carries the check and the reason.
         "checks_not_run": checks_not_run,
     }
+    fileobj.seek(0)
+    attach_security_agent(result, archive_sha256=hashlib.file_digest(fileobj, "sha256").hexdigest(),
+                          engine_version=AUDIT_ENGINE_VERSION, source_archive=fileobj,
+                          synthetic_sql_executor=synthetic_sql_executor)
+    if client_runtime_evidence is not None or client_runtime_run_id is not None:
+        from app.scan.client_runtime_chain import attach_client_runtime
+        attach_client_runtime(result["security_agent"], client_runtime_evidence, run_id=client_runtime_run_id)
+    return result

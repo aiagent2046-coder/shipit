@@ -5,6 +5,7 @@ import { FindingsList, SeveritySummary } from "./FindingsList";
 import type { Finding, Score, ScanManifest } from "@/lib/types";
 import { findingCounts, sourceSeverityCounts } from "@/lib/evidence";
 import ruleCoverageCases from "@/lib/fixtures/rule_coverage_cases.json";
+import snapshotCases from "@/lib/fixtures/dependency_snapshot_cases.json";
 
 afterEach(cleanup);
 
@@ -41,6 +42,24 @@ const manifest: ScanManifest = {
   rubrics_completed: [], llm_candidate_files: 2, llm_submitted_files: 1, llm_files_not_submitted: 1,
   limitations: [], runtime_verified: false,
 };
+
+it.each(snapshotCases.filter(c => ["checked", "partial", "unavailable-retained", "partial-retained"].includes(c.name)))(
+  "shows snapshot provenance and uncertainty independently of live OSV: $name", c => {
+    render(<AuditCoverage score={{ total: 0, categories: {}, basis: "static+preview", scan_manifest: {
+      ...manifest, model_calls: 1, dependency_cve: c.coverage, dependency_snapshot: c.metadata,
+      sca_skipped_reason: "no_client", limitations: ["dependency_snapshot_scope", "dependency_runtime_reachability_not_checked"],
+    } }} findings={[]} />);
+    expect(screen.queryByRole("complementary", { name: "Dependency check not run" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Model review status" })).toBeNull();
+    expect(screen.getByText("Live OSV lookup").nextElementSibling?.textContent)
+      .toBe("Not run. Bundled snapshot results are recorded separately.");
+    for (const title of c.notice_titles) {
+      expect(screen.getByRole("complementary", { name: title }).closest("details")).toBeNull();
+    }
+    if (c.metadata?.catalog_sha256) expect(screen.getByText(c.metadata.catalog_sha256)).toBeTruthy();
+    expect(document.body.textContent).not.toContain("private-cache-value");
+  },
+);
 
 describe("audit evidence", () => {
   it.each(ruleCoverageCases.filter(item => item.notice))(

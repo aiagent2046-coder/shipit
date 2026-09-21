@@ -28,11 +28,13 @@ import json
 import urllib.parse
 
 from app.report.plain_language import plain_fields
+from app.report.dependency_snapshot import snapshot_metadata
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
 from app.scan.cve_evidence import normalize_cve_summary
 from app.scan.claim_narrative import narrative_projection
 from app.scan.query_read_identity import valid_query_read_identity
+from app.scan.security_agent import agent_record, sql_observation
 
 SARIF_VERSION = "2.1.0"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
@@ -189,6 +191,13 @@ def build_sarif(findings: list[dict], *, engine_version: str,
             }
         record = finding.get("claim_evidence")
         record = record if isinstance(record, dict) else {}
+        if trace := sql_observation(finding):
+            results[-1].setdefault("properties", {}).update({
+                "sqlObservation": trace,
+                "verificationStatus": finding.get("verification_status"),
+                "conditionsStatus": record.get("conditions_status"),
+                "consequenceStatus": record.get("consequence_status"),
+            })
         if rule_id in DEPENDENCY_RULE_IDS:
             results[-1].setdefault("properties", {}).update({
                 "dependencyEvidence": record,
@@ -233,9 +242,13 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                 "basis": (score or {}).get("basis"),
                 "limitations": list(manifest.get("limitations") or []),
                 "ruleCoverage": normalize_rule_coverage(manifest.get("rule_coverage")),
+                **({"securityAgent": agent} if
+                   (agent := agent_record(manifest.get("security_agent"))) is not None else {}),
                 "cveEvidence": normalize_cve_summary(manifest.get("sca_cve")),
                 **({"dependencyCve": manifest["dependency_cve"]}
                    if isinstance(manifest.get("dependency_cve"), dict) else {}),
+                **({"dependencySnapshot": metadata} if
+                   (metadata := snapshot_metadata(manifest.get("dependency_snapshot"))) is not None else {}),
                 "staticChecksNotRun": failures,
             },
         }],
@@ -249,6 +262,17 @@ def build_sarif(findings: list[dict], *, engine_version: str,
              "properties": item}
             for item in failures
         ]
+    agent = agent_record(manifest.get("security_agent"))
+    if agent and agent["status"] in {"unavailable", "partial"}:
+        unavailable = agent["status"] == "unavailable"
+        if unavailable:
+            run["invocations"][0]["executionSuccessful"] = False
+        run["invocations"][0].setdefault("toolExecutionNotifications", []).append({
+            "level": "error" if unavailable else "warning",
+            "descriptor": {"id": "security-agent-unavailable" if unavailable else "security-agent-incomplete"},
+            "message": {"text": "Pattern review could not complete its bounded plan. "
+                        "Retained static findings remain observations; missing review is not a clean result."},
+        })
     if project_name:
         run["properties"] = {"project": project_name}
     return {"version": SARIF_VERSION, "$schema": SARIF_SCHEMA, "runs": [run]}

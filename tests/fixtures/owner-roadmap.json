@@ -1,0 +1,2114 @@
+[
+  {
+    "name": "empty",
+    "input": {
+      "findings": [],
+      "context": {}
+    },
+    "expected": {
+      "version": 1,
+      "tasks": []
+    }
+  },
+  {
+    "name": "malformed-input",
+    "input": {
+      "findings": null,
+      "context": {
+        "runtime_verified": false
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "deployment-check",
+          "stage": "when_needed",
+          "kind": "verify",
+          "title": "Check the intended way to run the project",
+          "why": "The report records that application behavior has not been verified.",
+          "action": "When preparing a deployment, confirm the intended hosting method, configuration, and startup steps, then run a basic user journey in an isolated test environment. Docker is only one possible hosting option.",
+          "owner": "Developer or person responsible for deployment",
+          "needs": [
+            "The intended hosting method and required configuration.",
+            "An isolated test environment and an agreed basic user journey."
+          ],
+          "depends_on": [],
+          "done_when": "Record the tested version, setup, steps, and actual results, including what was not tested. This does not verify every application behavior.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "runtime_verified"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "partial-unknown-ranges",
+    "input": {
+      "findings": [],
+      "context": {
+        "dependency_cve": {
+          "status": "partial",
+          "status_counts": {
+            "unknown": 1
+          },
+          "incomplete_manifests": {}
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "partial-other-gaps",
+    "input": {
+      "findings": [],
+      "context": {
+        "dependency_cve": {
+          "status": "partial",
+          "incomplete_manifests": {
+            "package.json": "oversized",
+            "go.mod": "unsupported"
+          }
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "dependency-unavailable",
+    "input": {
+      "findings": [],
+      "context": {
+        "dependency_cve": {
+          "status": "unavailable"
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "unresolved-manifests",
+    "input": {
+      "findings": [],
+      "context": {
+        "dependency_cve": {
+          "status": "partial",
+          "incomplete_manifests": {
+            "requirements.txt": "unresolved",
+            "package.json": "unresolved",
+            "go.mod": "unsupported"
+          }
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Check the recorded dependency gaps and provide the exact installed versions or matching lockfiles for the unresolved manifests.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations.",
+            "Unresolved manifest: package.json",
+            "Unresolved manifest: requirements.txt"
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "static-inventory-only",
+    "input": {
+      "findings": [
+        {
+          "rule_id": "no-dockerfile",
+          "source": "static",
+          "context": "deployment_inventory",
+          "title": "No Dockerfile"
+        }
+      ],
+      "context": {}
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "deployment-check",
+          "stage": "when_needed",
+          "kind": "verify",
+          "title": "Check the intended way to run the project",
+          "why": "A deployment inventory observation describes files in the archive; it does not establish whether the application can run.",
+          "action": "When preparing a deployment, confirm the intended hosting method, configuration, and startup steps, then run a basic user journey in an isolated test environment. Docker is only one possible hosting option.",
+          "owner": "Developer or person responsible for deployment",
+          "needs": [
+            "The intended hosting method and required configuration.",
+            "An isolated test environment and an agreed basic user journey."
+          ],
+          "depends_on": [],
+          "done_when": "Record the tested version, setup, steps, and actual results, including what was not tested. This does not verify every application behavior.",
+          "finding_indices": [
+            0
+          ],
+          "coverage_refs": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "model-inventory-only",
+    "input": {
+      "findings": [
+        {
+          "rule_id": "no-dockerfile",
+          "source": "llm",
+          "context": "deployment_inventory",
+          "title": "No Dockerfile"
+        }
+      ],
+      "context": {}
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "remaining-observations",
+          "stage": "first",
+          "kind": "review",
+          "title": "Review the other recorded observations",
+          "why": "These observations need their own evidence and context reviewed before deciding whether any action is warranted.",
+          "action": "Review each linked observation with its original evidence, limits, and test or example context. Record what is supported, contradicted, or still unknown and decide the next step.",
+          "owner": "Developer",
+          "needs": [
+            "The original linked observations and their evidence.",
+            "Someone familiar with the affected part of the project."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked observation has a documented assessment and a next step or a reason no change is needed; unverified claims remain marked as unverified.",
+          "finding_indices": [
+            0
+          ],
+          "coverage_refs": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "file-locations",
+    "input": {
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 11,
+          "masked": "",
+          "explanation": "Line 11 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 11,
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        }
+      ],
+      "context": {}
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "file-loading-origin",
+          "stage": "first",
+          "kind": "investigate",
+          "title": "Find out who supplies and can change loaded files",
+          "why": "The recorded file-loading calls need a trust check; source review alone does not establish a runtime problem.",
+          "action": "For every linked location, identify who produces the file, who can change it, and what checks happen before it is loaded.",
+          "owner": "Project owner and developer",
+          "needs": [
+            "The linked file-loading observations.",
+            "The people or services that create, store, and deliver these files."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked location has a recorded file producer, write access, and trust check, or an explicitly named unanswered question.",
+          "finding_indices": [
+            0,
+            1
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "file-loading-decision",
+          "stage": "after",
+          "kind": "review",
+          "title": "Decide whether file-loading protection needs to change",
+          "why": "The right decision depends on where the files come from, who can change them, and the checks already in place.",
+          "action": "Review the file-origin answers with a developer. If protection needs to change, choose an approach compatible with existing files and plan a focused check of normal use and rejected input.",
+          "owner": "Developer",
+          "needs": [
+            "The file-origin answers, including unresolved questions.",
+            "Examples of legitimate files and their expected use."
+          ],
+          "depends_on": [
+            "file-loading-origin"
+          ],
+          "done_when": "Document the decision and its evidence for each linked location. If a change is needed, record the compatibility requirements and how the change will be tested; this task does not certify a fix.",
+          "finding_indices": [
+            0,
+            1
+          ],
+          "coverage_refs": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "duplicate-file-locations",
+    "input": {
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 11,
+          "masked": "",
+          "explanation": "Line 11 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 11,
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        }
+      ],
+      "context": {}
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "file-loading-origin",
+          "stage": "first",
+          "kind": "investigate",
+          "title": "Find out who supplies and can change loaded files",
+          "why": "The recorded file-loading calls need a trust check; source review alone does not establish a runtime problem.",
+          "action": "For every linked location, identify who produces the file, who can change it, and what checks happen before it is loaded.",
+          "owner": "Project owner and developer",
+          "needs": [
+            "The linked file-loading observations.",
+            "The people or services that create, store, and deliver these files."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked location has a recorded file producer, write access, and trust check, or an explicitly named unanswered question.",
+          "finding_indices": [
+            0,
+            1,
+            2
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "file-loading-decision",
+          "stage": "after",
+          "kind": "review",
+          "title": "Decide whether file-loading protection needs to change",
+          "why": "The right decision depends on where the files come from, who can change them, and the checks already in place.",
+          "action": "Review the file-origin answers with a developer. If protection needs to change, choose an approach compatible with existing files and plan a focused check of normal use and rejected input.",
+          "owner": "Developer",
+          "needs": [
+            "The file-origin answers, including unresolved questions.",
+            "Examples of legitimate files and their expected use."
+          ],
+          "depends_on": [
+            "file-loading-origin"
+          ],
+          "done_when": "Document the decision and its evidence for each linked location. If a change is needed, record the compatibility requirements and how the change will be tested; this task does not certify a fix.",
+          "finding_indices": [
+            0,
+            1,
+            2
+          ],
+          "coverage_refs": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "combined-current",
+    "input": {
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 11,
+          "masked": "",
+          "explanation": "Line 11 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 11,
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "no-dockerfile",
+          "source": "static",
+          "context": "deployment_inventory",
+          "title": "No Dockerfile"
+        },
+        {
+          "rule_id": "other-check",
+          "source": "static",
+          "title": "Example observation",
+          "file": "tests/example.py",
+          "context": "test"
+        },
+        {
+          "rule_id": "llm-other",
+          "source": "llm",
+          "title": "Model hypothesis",
+          "verification_status": "unverified"
+        }
+      ],
+      "context": {
+        "runtime_verified": false,
+        "dependency_cve": {
+          "status": "partial"
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "file-loading-origin",
+          "stage": "first",
+          "kind": "investigate",
+          "title": "Find out who supplies and can change loaded files",
+          "why": "The recorded file-loading calls need a trust check; source review alone does not establish a runtime problem.",
+          "action": "For every linked location, identify who produces the file, who can change it, and what checks happen before it is loaded.",
+          "owner": "Project owner and developer",
+          "needs": [
+            "The linked file-loading observations.",
+            "The people or services that create, store, and deliver these files."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked location has a recorded file producer, write access, and trust check, or an explicitly named unanswered question.",
+          "finding_indices": [
+            0,
+            1
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        },
+        {
+          "id": "remaining-observations",
+          "stage": "first",
+          "kind": "review",
+          "title": "Review the other recorded observations",
+          "why": "These observations need their own evidence and context reviewed before deciding whether any action is warranted.",
+          "action": "Review each linked observation with its original evidence, limits, and test or example context. Record what is supported, contradicted, or still unknown and decide the next step.",
+          "owner": "Developer",
+          "needs": [
+            "The original linked observations and their evidence.",
+            "Someone familiar with the affected part of the project."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked observation has a documented assessment and a next step or a reason no change is needed; unverified claims remain marked as unverified.",
+          "finding_indices": [
+            3,
+            4
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "file-loading-decision",
+          "stage": "after",
+          "kind": "review",
+          "title": "Decide whether file-loading protection needs to change",
+          "why": "The right decision depends on where the files come from, who can change them, and the checks already in place.",
+          "action": "Review the file-origin answers with a developer. If protection needs to change, choose an approach compatible with existing files and plan a focused check of normal use and rejected input.",
+          "owner": "Developer",
+          "needs": [
+            "The file-origin answers, including unresolved questions.",
+            "Examples of legitimate files and their expected use."
+          ],
+          "depends_on": [
+            "file-loading-origin"
+          ],
+          "done_when": "Document the decision and its evidence for each linked location. If a change is needed, record the compatibility requirements and how the change will be tested; this task does not certify a fix.",
+          "finding_indices": [
+            0,
+            1
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "deployment-check",
+          "stage": "when_needed",
+          "kind": "verify",
+          "title": "Check the intended way to run the project",
+          "why": "The report records that application behavior has not been verified.",
+          "action": "When preparing a deployment, confirm the intended hosting method, configuration, and startup steps, then run a basic user journey in an isolated test environment. Docker is only one possible hosting option.",
+          "owner": "Developer or person responsible for deployment",
+          "needs": [
+            "The intended hosting method and required configuration.",
+            "An isolated test environment and an agreed basic user journey."
+          ],
+          "depends_on": [],
+          "done_when": "Record the tested version, setup, steps, and actual results, including what was not tested. This does not verify every application behavior.",
+          "finding_indices": [
+            2
+          ],
+          "coverage_refs": [
+            "runtime_verified"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "specialized-and-legacy",
+    "input": {
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            },
+            "syntax_check": {
+              "result": "contradicted"
+            }
+          }
+        },
+        {
+          "rule_id": "unsafe-deserialization",
+          "source": "static",
+          "title": "Legacy loader observation",
+          "file": "legacy.py",
+          "line": 12
+        }
+      ],
+      "context": {}
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "remaining-observations",
+          "stage": "first",
+          "kind": "review",
+          "title": "Review the other recorded observations",
+          "why": "These observations need their own evidence and context reviewed before deciding whether any action is warranted.",
+          "action": "Review each linked observation with its original evidence, limits, and test or example context. Record what is supported, contradicted, or still unknown and decide the next step.",
+          "owner": "Developer",
+          "needs": [
+            "The original linked observations and their evidence.",
+            "Someone familiar with the affected part of the project."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked observation has a documented assessment and a next step or a reason no change is needed; unverified claims remain marked as unverified.",
+          "finding_indices": [
+            0,
+            1
+          ],
+          "coverage_refs": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "malformed-findings",
+    "input": {
+      "findings": [
+        null,
+        {},
+        [],
+        {
+          "rule_id": 4
+        },
+        {
+          "title": "  "
+        },
+        {
+          "title": "Recorded observation"
+        }
+      ],
+      "context": {
+        "runtime_verified": "false",
+        "dependency_cve": {
+          "status": "complete"
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "remaining-observations",
+          "stage": "first",
+          "kind": "review",
+          "title": "Review the other recorded observations",
+          "why": "These observations need their own evidence and context reviewed before deciding whether any action is warranted.",
+          "action": "Review each linked observation with its original evidence, limits, and test or example context. Record what is supported, contradicted, or still unknown and decide the next step.",
+          "owner": "Developer",
+          "needs": [
+            "The original linked observations and their evidence.",
+            "Someone familiar with the affected part of the project."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked observation has a documented assessment and a next step or a reason no change is needed; unverified claims remain marked as unverified.",
+          "finding_indices": [
+            5
+          ],
+          "coverage_refs": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "history-is-not-current",
+    "input": {
+      "findings": [],
+      "context": {
+        "free_baseline": {
+          "findings": [
+            {
+              "rule_id": "unsafe-deserialization",
+              "title": "A deserialization call requires trusted input",
+              "severity": "high",
+              "confidence": 0.8,
+              "category": "Security",
+              "file": "src/checkpoints.py",
+              "line": 7,
+              "masked": "",
+              "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+              "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+              "context": null,
+              "origin_category": null,
+              "source": "static",
+              "verification_status": "unverified",
+              "verification_method": "source_pattern",
+              "claim_evidence": {
+                "version": 1,
+                "source_check": {
+                  "kind": "static_rule"
+                },
+                "observation": null,
+                "required_conditions": null,
+                "conditions_status": "not_checked",
+                "consequence_status": "not_checked",
+                "deserialization_observation": {
+                  "version": 1,
+                  "method": "python_ast_import_resolved",
+                  "file": "src/checkpoints.py",
+                  "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                  "sink_line": 7,
+                  "sink_span": [
+                    7,
+                    15,
+                    7,
+                    34
+                  ],
+                  "sink_method": "load",
+                  "loader": "pickle.load",
+                  "input_control_status": "not_checked"
+                }
+              }
+            },
+            {
+              "rule_id": "unsafe-deserialization",
+              "title": "A deserialization call requires trusted input",
+              "severity": "high",
+              "confidence": 0.8,
+              "category": "Security",
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "masked": "",
+              "explanation": "Line 11 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+              "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+              "context": null,
+              "origin_category": null,
+              "source": "static",
+              "verification_status": "unverified",
+              "verification_method": "source_pattern",
+              "claim_evidence": {
+                "version": 1,
+                "source_check": {
+                  "kind": "static_rule"
+                },
+                "observation": null,
+                "required_conditions": null,
+                "conditions_status": "not_checked",
+                "consequence_status": "not_checked",
+                "deserialization_observation": {
+                  "version": 1,
+                  "method": "python_ast_import_resolved",
+                  "file": "src/checkpoints.py",
+                  "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                  "sink_line": 11,
+                  "sink_span": [
+                    11,
+                    15,
+                    11,
+                    34
+                  ],
+                  "sink_method": "load",
+                  "loader": "pickle.load",
+                  "input_control_status": "not_checked"
+                }
+              }
+            }
+          ]
+        },
+        "preview_history": {
+          "retained_findings": [
+            {
+              "rule_id": "unsafe-deserialization",
+              "title": "A deserialization call requires trusted input",
+              "severity": "high",
+              "confidence": 0.8,
+              "category": "Security",
+              "file": "src/checkpoints.py",
+              "line": 7,
+              "masked": "",
+              "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+              "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+              "context": null,
+              "origin_category": null,
+              "source": "static",
+              "verification_status": "unverified",
+              "verification_method": "source_pattern",
+              "claim_evidence": {
+                "version": 1,
+                "source_check": {
+                  "kind": "static_rule"
+                },
+                "observation": null,
+                "required_conditions": null,
+                "conditions_status": "not_checked",
+                "consequence_status": "not_checked",
+                "deserialization_observation": {
+                  "version": 1,
+                  "method": "python_ast_import_resolved",
+                  "file": "src/checkpoints.py",
+                  "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                  "sink_line": 7,
+                  "sink_span": [
+                    7,
+                    15,
+                    7,
+                    34
+                  ],
+                  "sink_method": "load",
+                  "loader": "pickle.load",
+                  "input_control_status": "not_checked"
+                }
+              }
+            },
+            {
+              "rule_id": "unsafe-deserialization",
+              "title": "A deserialization call requires trusted input",
+              "severity": "high",
+              "confidence": 0.8,
+              "category": "Security",
+              "file": "src/checkpoints.py",
+              "line": 11,
+              "masked": "",
+              "explanation": "Line 11 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+              "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+              "context": null,
+              "origin_category": null,
+              "source": "static",
+              "verification_status": "unverified",
+              "verification_method": "source_pattern",
+              "claim_evidence": {
+                "version": 1,
+                "source_check": {
+                  "kind": "static_rule"
+                },
+                "observation": null,
+                "required_conditions": null,
+                "conditions_status": "not_checked",
+                "consequence_status": "not_checked",
+                "deserialization_observation": {
+                  "version": 1,
+                  "method": "python_ast_import_resolved",
+                  "file": "src/checkpoints.py",
+                  "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+                  "sink_line": 11,
+                  "sink_span": [
+                    11,
+                    15,
+                    11,
+                    34
+                  ],
+                  "sink_method": "load",
+                  "loader": "pickle.load",
+                  "input_control_status": "not_checked"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": []
+    }
+  },
+  {
+    "name": "unicode-manifest-order",
+    "input": {
+      "findings": [],
+      "context": {
+        "dependency_cve": {
+          "status": "partial",
+          "incomplete_manifests": {
+            "😀/requirements.txt": "unresolved",
+            "/requirements.txt": "unresolved",
+            "": "unresolved",
+            "﻿": "unresolved",
+            " \t\r\n": "unresolved"
+          }
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Check the recorded dependency gaps and provide the exact installed versions or matching lockfiles for the unresolved manifests.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations.",
+            "Unresolved manifest: ",
+            "Unresolved manifest: /requirements.txt",
+            "Unresolved manifest: ﻿",
+            "Unresolved manifest: 😀/requirements.txt"
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "unicode-and-ascii-empty-finding-labels",
+    "input": {
+      "findings": [
+        {
+          "title": " \t\r\n"
+        },
+        {
+          "title": ""
+        },
+        {
+          "rule_id": "﻿"
+        }
+      ],
+      "context": {}
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "remaining-observations",
+          "stage": "first",
+          "kind": "review",
+          "title": "Review the other recorded observations",
+          "why": "These observations need their own evidence and context reviewed before deciding whether any action is warranted.",
+          "action": "Review each linked observation with its original evidence, limits, and test or example context. Record what is supported, contradicted, or still unknown and decide the next step.",
+          "owner": "Developer",
+          "needs": [
+            "The original linked observations and their evidence.",
+            "Someone familiar with the affected part of the project."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked observation has a documented assessment and a next step or a reason no change is needed; unverified claims remain marked as unverified.",
+          "finding_indices": [
+            1,
+            2
+          ],
+          "coverage_refs": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy-only-unresolved-manifest",
+    "input": {
+      "findings": [],
+      "context": {
+        "limitations": [
+          "dependency_coverage_incomplete"
+        ],
+        "sca_skipped_reason": "no_resolvable_lockfile",
+        "sca_incomplete_lockfiles": {
+          "project/requirements.txt": "unresolved",
+          "go.mod": "unsupported"
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Check the recorded dependency gaps and provide the exact installed versions or matching lockfiles for the unresolved manifests.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations.",
+            "Unresolved manifest: project/requirements.txt"
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy-catalog-unavailable",
+    "input": {
+      "findings": [],
+      "context": {
+        "limitations": [
+          "dependency_database_unavailable"
+        ],
+        "sca_skipped_reason": "osv_unavailable:timeout"
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy-check-not-run",
+    "input": {
+      "findings": [],
+      "context": {
+        "limitations": [
+          "dependency_check_not_run"
+        ]
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy-no-client-with-known-dependencies",
+    "input": {
+      "findings": [],
+      "context": {
+        "sca_skipped_reason": "no_client",
+        "sca_dependencies": 2
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy-no-client-without-inventory",
+    "input": {
+      "findings": [],
+      "context": {
+        "sca_skipped_reason": "no_client",
+        "sca_dependencies": true
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": []
+    }
+  },
+  {
+    "name": "snapshot-checked-owns-live-client-scope",
+    "input": {
+      "findings": [],
+      "context": {
+        "dependency_cve": {
+          "status": "checked"
+        },
+        "sca_skipped_reason": "no_client",
+        "sca_dependencies": 19,
+        "limitations": [
+          "dependency_snapshot_scope",
+          "dependency_runtime_reachability_not_checked"
+        ]
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": []
+    }
+  },
+  {
+    "name": "snapshot-not_applicable-owns-live-client-scope",
+    "input": {
+      "findings": [],
+      "context": {
+        "dependency_cve": {
+          "status": "not_applicable"
+        },
+        "sca_skipped_reason": "no_client",
+        "sca_dependencies": 19,
+        "limitations": [
+          "dependency_snapshot_scope",
+          "dependency_runtime_reachability_not_checked"
+        ]
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": []
+    }
+  },
+  {
+    "name": "snapshot-gap-does-not-borrow-legacy-versions",
+    "input": {
+      "findings": [],
+      "context": {
+        "dependency_cve": {
+          "status": "partial",
+          "incomplete_manifests": {
+            "go.mod": "unsupported"
+          }
+        },
+        "sca_incomplete_lockfiles": {
+          "requirements.txt": "unresolved"
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy-malformed-gap-fields",
+    "input": {
+      "findings": [],
+      "context": {
+        "dependency_cve": {
+          "status": []
+        },
+        "limitations": [
+          "dependency_snapshot_scope",
+          {},
+          [
+            "dependency_coverage_incomplete"
+          ]
+        ],
+        "sca_coverage_incomplete": "true",
+        "sca_skipped_reason": [
+          "no_resolvable_lockfile"
+        ],
+        "sca_dependencies": "2",
+        "sca_incomplete_lockfiles": {
+          "requirements.txt": "unresolved"
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": []
+    }
+  },
+  {
+    "name": "legacy-unsupported-manifest-is-not-missing-versions",
+    "input": {
+      "findings": [],
+      "context": {
+        "sca_coverage_incomplete": true,
+        "sca_incomplete_lockfiles": {
+          "go.mod": "unsupported",
+          "requirements.txt": [
+            "unresolved"
+          ]
+        }
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "five-review-directions",
+    "input": {
+      "findings": [
+        {
+          "rule_id": "dependency-cve-match",
+          "source": "dependency",
+          "claim_evidence": {
+            "package": "library-a",
+            "ecosystem": "npm",
+            "installed_version": "1.0.0",
+            "dependency_scope": "runtime",
+            "advisory_id": "TEST-ADVISORY-1"
+          }
+        },
+        {
+          "rule_id": "dependency-cve-match",
+          "source": "dependency",
+          "claim_evidence": {
+            "package": "library-a",
+            "ecosystem": "npm",
+            "installed_version": "1.0.0",
+            "dependency_scope": "runtime",
+            "advisory_id": "TEST-ADVISORY-2"
+          }
+        },
+        {
+          "rule_id": "dependency-cve-match",
+          "source": "dependency",
+          "claim_evidence": {
+            "package": "library-b",
+            "ecosystem": "npm",
+            "installed_version": "2.0.0",
+            "dependency_scope": "development",
+            "advisory_id": "TEST-ADVISORY-3"
+          }
+        },
+        {
+          "rule_id": "dependency-cve-match",
+          "source": "dependency",
+          "claim_evidence": {
+            "package": "library-c",
+            "ecosystem": "PyPI",
+            "installed_version": "3.0.0",
+            "dependency_scope": "unknown",
+            "advisory_id": "TEST-ADVISORY-4"
+          }
+        },
+        {
+          "rule_id": "xss-unsafe-html-injection",
+          "source": "static"
+        },
+        {
+          "rule_id": "generic-assignment",
+          "source": "static",
+          "context": "test_file"
+        },
+        {
+          "rule_id": "generic-assignment",
+          "source": "static",
+          "context": "test_file"
+        },
+        {
+          "rule_id": "missing-error-boundary",
+          "source": "static"
+        },
+        {
+          "rule_id": "dependency-dir-committed",
+          "source": "static"
+        }
+      ],
+      "context": {}
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-advisory-review",
+          "title": "Review the matched library versions and how they are used",
+          "why": "The report matches recorded library versions to advisory entries. A match does not establish that affected functionality is used or exploitable in this application.",
+          "action": "Group the linked matches by library, ecosystem, and installed version. Separate application dependencies, development dependencies, and unknown use from the recorded evidence. Review each advisory and check whether its conditions apply before choosing an update or other action.",
+          "owner": "Developer responsible for dependencies",
+          "needs": [
+            "The linked library versions, advisory references, and manifest locations.",
+            "How each library is installed and used in the application, development, or tests."
+          ],
+          "done_when": "For each library/version group, record its use, the applicable advisory conditions, any unanswered questions, and the chosen next step. A proposed update still needs compatibility testing and a new check; this review does not verify a fix.",
+          "stage": "first",
+          "kind": "review",
+          "depends_on": [],
+          "finding_indices": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "html-input-review",
+          "title": "Find out where inserted HTML comes from",
+          "why": "The source observation records a value being inserted as HTML. It does not establish who controls that value, whether it is sanitized, or what happens in the browser.",
+          "action": "Trace each linked value to its source, identify who can change it, and review any checks before insertion. Decide whether markup is needed and whether the existing handling is suitable.",
+          "owner": "Frontend developer",
+          "needs": [
+            "The linked HTML insertion locations and the code that supplies their values.",
+            "Examples of intended content and any validation or sanitization rules."
+          ],
+          "done_when": "Record each value's source, control, and handling. Document the decision and any focused browser check still needed; source review alone does not confirm an exploit or a fix.",
+          "stage": "first",
+          "kind": "review",
+          "depends_on": [],
+          "finding_indices": [
+            4
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "test-credential-review",
+          "title": "Check whether credential-like values in tests are synthetic",
+          "why": "The scanner found credential-like assignments in test files. The pattern does not establish that these values are live credentials or accepted by a service.",
+          "action": "Ask the test maintainer to confirm where the values came from and whether they are synthetic. If a real exposed credential is confirmed, arrange replacement or revocation with its owner; synthetic fixtures do not require account-level rotation.",
+          "owner": "Test maintainer and credential owner, if applicable",
+          "needs": [
+            "The linked test locations and the purpose of their fixtures.",
+            "Confirmation from the person responsible for the values; do not copy secret values into the review."
+          ],
+          "done_when": "Record whether each value is synthetic, real, or still unknown and the corresponding next step. Record no secret values and do not claim revocation or replacement until separately confirmed.",
+          "stage": "first",
+          "kind": "review",
+          "depends_on": [],
+          "finding_indices": [
+            5,
+            6
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "ui-error-handling-review",
+          "title": "Review how the interface handles rendering errors",
+          "why": "The static check did not identify the expected error-handling boundary. It does not establish that the running interface fails or that framework-provided handling is absent.",
+          "action": "Review the actual application entry points, routes, and framework error handling. Agree what users should see after a rendering error and plan a focused check of that recovery path.",
+          "owner": "Frontend developer",
+          "needs": [
+            "The linked entry points, route setup, and existing error-handling code.",
+            "The expected fallback screen and recovery action for users."
+          ],
+          "done_when": "Document the existing handling, any gap requiring a change, and the planned or observed recovery check. Keep untested interface behavior explicitly unverified.",
+          "stage": "first",
+          "kind": "review",
+          "depends_on": [],
+          "finding_indices": [
+            7
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "archive-content-review",
+          "title": "Check why dependency-like directories are in the archive",
+          "why": "The archive contains a directory commonly used for installed dependencies or generated files. Its name does not establish Git tracking or whether the contents should be removed.",
+          "action": "Identify whether the linked directories contain reproducible dependencies, generated files, intentional vendored source, or test data. Check the archive's packaging rules and, if relevant, Git tracking before deciding what to retain or exclude.",
+          "owner": "Developer responsible for packaging",
+          "needs": [
+            "The linked archive directories and the instructions used to assemble the archive.",
+            "The purpose of the included files and, if relevant, evidence of Git tracking."
+          ],
+          "done_when": "Record what belongs in the archive and why, and how any excluded dependencies or generated files can be recreated. Do not record a deletion or Git change as completed without evidence.",
+          "stage": "first",
+          "kind": "review",
+          "depends_on": [],
+          "finding_indices": [
+            8
+          ],
+          "coverage_refs": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "known-rules-with-context-or-counterevidence-stay-generic",
+    "input": {
+      "findings": [
+        {
+          "rule_id": "xss-unsafe-html-injection",
+          "source": "static"
+        },
+        {
+          "rule_id": "dependency-cve-match",
+          "source": "llm"
+        },
+        {
+          "rule_id": "xss-unsafe-html-injection",
+          "source": "llm"
+        },
+        {
+          "rule_id": "generic-assignment",
+          "source": "static",
+          "context": "example_file"
+        },
+        {
+          "rule_id": "generic-assignment",
+          "source": "static"
+        },
+        {
+          "rule_id": "missing-error-boundary",
+          "source": "static",
+          "context": "test_file"
+        },
+        {
+          "rule_id": "dependency-dir-committed",
+          "source": "dependency"
+        },
+        {
+          "rule_id": "xss-unsafe-html-injection",
+          "source": "static",
+          "claim_evidence": {
+            "syntax_check": {
+              "result": "contradicted"
+            }
+          }
+        },
+        {
+          "rule_id": "dependency-cve-match",
+          "source": "dependency",
+          "claim_evidence": {
+            "source_assessments": [
+              {
+                "result": "not_supported"
+              }
+            ]
+          }
+        },
+        {
+          "rule_id": "generic-assignment",
+          "source": "static",
+          "context": "test_file",
+          "claim_evidence": {
+            "premise_checks": [
+              {
+                "result": "contradicted"
+              }
+            ]
+          }
+        },
+        {
+          "rule_id": "missing-error-boundary",
+          "source": "static",
+          "claim_evidence": {
+            "source_assessments": {}
+          }
+        },
+        {
+          "rule_id": "dependency-dir-committed",
+          "source": "static",
+          "claim_evidence": {
+            "syntax_check": []
+          }
+        },
+        {
+          "rule_id": "generic-assignment",
+          "source": "static",
+          "context": [
+            "test_file"
+          ]
+        },
+        {
+          "rule_id": "dependency-cve-match",
+          "source": "dependency",
+          "verification_status": "contradicted"
+        },
+        {
+          "rule_id": "missing-error-boundary",
+          "source": "static",
+          "claim_evidence": "unreadable"
+        }
+      ],
+      "context": {}
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "html-input-review",
+          "title": "Find out where inserted HTML comes from",
+          "why": "The source observation records a value being inserted as HTML. It does not establish who controls that value, whether it is sanitized, or what happens in the browser.",
+          "action": "Trace each linked value to its source, identify who can change it, and review any checks before insertion. Decide whether markup is needed and whether the existing handling is suitable.",
+          "owner": "Frontend developer",
+          "needs": [
+            "The linked HTML insertion locations and the code that supplies their values.",
+            "Examples of intended content and any validation or sanitization rules."
+          ],
+          "done_when": "Record each value's source, control, and handling. Document the decision and any focused browser check still needed; source review alone does not confirm an exploit or a fix.",
+          "stage": "first",
+          "kind": "review",
+          "depends_on": [],
+          "finding_indices": [
+            0
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "remaining-observations",
+          "stage": "first",
+          "kind": "review",
+          "title": "Review the other recorded observations",
+          "why": "These observations need their own evidence and context reviewed before deciding whether any action is warranted.",
+          "action": "Review each linked observation with its original evidence, limits, and test or example context. Record what is supported, contradicted, or still unknown and decide the next step.",
+          "owner": "Developer",
+          "needs": [
+            "The original linked observations and their evidence.",
+            "Someone familiar with the affected part of the project."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked observation has a documented assessment and a next step or a reason no change is needed; unverified claims remain marked as unverified.",
+          "finding_indices": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14
+          ],
+          "coverage_refs": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy-file-loading-report-has-four-tasks",
+    "input": {
+      "findings": [
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 7,
+          "masked": "",
+          "explanation": "Line 7 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 7,
+              "sink_span": [
+                7,
+                15,
+                7,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        },
+        {
+          "rule_id": "unsafe-deserialization",
+          "title": "A deserialization call requires trusted input",
+          "severity": "high",
+          "confidence": 0.8,
+          "category": "Security",
+          "file": "src/checkpoints.py",
+          "line": 11,
+          "masked": "",
+          "explanation": "Line 11 calls pickle.load(). This loader can reconstruct arbitrary Python objects and invoke code during deserialization. Malicious input could run with this process's privileges. Where the bytes come from has NOT been verified by this detector; trusted internal data and untrusted external data can reach the same call.",
+          "fix_hint": "Prefer json (or msgpack/cbor) with an explicit schema across trust boundaries; use yaml.safe_load for YAML values. If object serialization is unavoidable, accept only trusted producers and verify an HMAC or digital signature before loading. A checksum supplied alongside untrusted bytes does not authenticate them; a digest helps only when its expected value comes from a trusted source.",
+          "context": null,
+          "origin_category": null,
+          "source": "static",
+          "verification_status": "unverified",
+          "verification_method": "source_pattern",
+          "claim_evidence": {
+            "version": 1,
+            "source_check": {
+              "kind": "static_rule"
+            },
+            "observation": null,
+            "required_conditions": null,
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "deserialization_observation": {
+              "version": 1,
+              "method": "python_ast_import_resolved",
+              "file": "src/checkpoints.py",
+              "source_sha256": "e56f69db9c799642c8e1e3822f4add6ba7af72d44ee6932c03500a52ccf7e5c3",
+              "sink_line": 11,
+              "sink_span": [
+                11,
+                15,
+                11,
+                34
+              ],
+              "sink_method": "load",
+              "loader": "pickle.load",
+              "input_control_status": "not_checked"
+            }
+          }
+        }
+      ],
+      "context": {
+        "limitations": [
+          "dependency_coverage_incomplete"
+        ],
+        "sca_skipped_reason": "no_resolvable_lockfile",
+        "sca_incomplete_lockfiles": {
+          "project/requirements.txt": "unresolved"
+        },
+        "runtime_verified": false
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "file-loading-origin",
+          "stage": "first",
+          "kind": "investigate",
+          "title": "Find out who supplies and can change loaded files",
+          "why": "The recorded file-loading calls need a trust check; source review alone does not establish a runtime problem.",
+          "action": "For every linked location, identify who produces the file, who can change it, and what checks happen before it is loaded.",
+          "owner": "Project owner and developer",
+          "needs": [
+            "The linked file-loading observations.",
+            "The people or services that create, store, and deliver these files."
+          ],
+          "depends_on": [],
+          "done_when": "Each linked location has a recorded file producer, write access, and trust check, or an explicitly named unanswered question.",
+          "finding_indices": [
+            0,
+            1
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Check the recorded dependency gaps and provide the exact installed versions or matching lockfiles for the unresolved manifests.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations.",
+            "Unresolved manifest: project/requirements.txt"
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        },
+        {
+          "id": "file-loading-decision",
+          "stage": "after",
+          "kind": "review",
+          "title": "Decide whether file-loading protection needs to change",
+          "why": "The right decision depends on where the files come from, who can change them, and the checks already in place.",
+          "action": "Review the file-origin answers with a developer. If protection needs to change, choose an approach compatible with existing files and plan a focused check of normal use and rejected input.",
+          "owner": "Developer",
+          "needs": [
+            "The file-origin answers, including unresolved questions.",
+            "Examples of legitimate files and their expected use."
+          ],
+          "depends_on": [
+            "file-loading-origin"
+          ],
+          "done_when": "Document the decision and its evidence for each linked location. If a change is needed, record the compatibility requirements and how the change will be tested; this task does not certify a fix.",
+          "finding_indices": [
+            0,
+            1
+          ],
+          "coverage_refs": []
+        },
+        {
+          "id": "deployment-check",
+          "stage": "when_needed",
+          "kind": "verify",
+          "title": "Check the intended way to run the project",
+          "why": "The report records that application behavior has not been verified.",
+          "action": "When preparing a deployment, confirm the intended hosting method, configuration, and startup steps, then run a basic user journey in an isolated test environment. Docker is only one possible hosting option.",
+          "owner": "Developer or person responsible for deployment",
+          "needs": [
+            "The intended hosting method and required configuration.",
+            "An isolated test environment and an agreed basic user journey."
+          ],
+          "depends_on": [],
+          "done_when": "Record the tested version, setup, steps, and actual results, including what was not tested. This does not verify every application behavior.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "runtime_verified"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy-no-client-integer-float",
+    "input": {
+      "findings": [],
+      "context": {
+        "sca_skipped_reason": "no_client",
+        "sca_dependencies": 1.0
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": [
+        {
+          "id": "dependency-coverage",
+          "stage": "first",
+          "kind": "provide_information",
+          "title": "Clarify the gaps in dependency checking",
+          "why": "The report records incomplete or unavailable dependency checking; the gaps do not establish whether the dependencies are safe.",
+          "action": "Read the recorded dependency gaps, identify what information or checking capability is missing, and agree how to obtain it.",
+          "owner": "Developer",
+          "needs": [
+            "The recorded dependency coverage and its limitations."
+          ],
+          "depends_on": [],
+          "done_when": "Record the cause of each gap, the information supplied or next check needed, and any limitations that remain. A later scan must record its own coverage.",
+          "finding_indices": [],
+          "coverage_refs": [
+            "dependency_cve"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy-no-client-unsafe-numeric-count",
+    "input": {
+      "findings": [],
+      "context": {
+        "sca_skipped_reason": "no_client",
+        "sca_dependencies": 9007199254740992
+      }
+    },
+    "expected": {
+      "version": 1,
+      "tasks": []
+    }
+  }
+]

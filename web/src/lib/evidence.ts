@@ -1,6 +1,8 @@
 import type { Finding, ModelAcceptance, Score, Severity, SourceAssessment, StaticCoverageRule, StaticRuleCoverage } from "./types";
 import { narrativeProjection as checkedNarrativeProjection } from "./claimNarrative";
 import { cveRows, cveNotices } from "./cveEvidence";
+import { snapshotRows, snapshotNotices, snapshotScopeReasons, snapshotFindingRows } from "./dependencySnapshot";
+import { patternReview, patternReviewNotices, sqlEvidenceRows, deserializationEvidenceRows } from "./securityAgent";
 
 const nonProductionContexts = new Set([
   "test_fixture", "test_file", "comment", "doc_example", "ci_service",
@@ -79,6 +81,9 @@ export function partialContradicted(finding: Finding): boolean {
 }
 
 export function evidenceLabel(finding: Finding, historical = false): string {
+  if (finding.source === "dependency" && finding.verification_method === "package_version_match") {
+    return "Dependency version match — reachability unverified";
+  }
   if (isInformational(finding)) return "Deployment inventory — informational";
   if (syntaxContradicted(finding)) return "Model syntax premise contradicted — see bounded check";
   if (!historical && unsupportedTransport(finding)) return "Credential transport — exposure not established";
@@ -145,8 +150,14 @@ export function claimEvidenceRows(finding: Finding, historical = false): [string
     ? `Quoted text matched in source lines ${check.line_start}–${check.line_end}. This does not verify the interpretation.`
     : check?.kind === "static_rule"
       ? "A static rule emitted this observation. Its consequence was not tested."
+      : finding.source === "dependency" && finding.verification_method === "package_version_match"
+        ? "A locked package version matched an advisory. Application reachability was not checked."
       : "Not recorded for this finding; do not assume the cited code was verified.";
   const rows: [string, string][] = [["Source check", checked]];
+  rows.push(...sqlEvidenceRows(finding), ...deserializationEvidenceRows(finding));
+  if (finding.source === "dependency" && finding.verification_method === "package_version_match") {
+    rows.push(...snapshotFindingRows(record));
+  }
   if (!historical && unsupportedTransport(finding)) rows.push(["Needs exposure evidence",
     "This transport-only hypothesis is excluded from the score. Runtime routing, logging and credential exposure remain unverified."]);
   for (const assessment of sourceAssessments(finding)) {
@@ -267,7 +278,13 @@ export function claimEvidenceRows(finding: Finding, historical = false): [string
       + "remain unverified. Severity and score eligibility are unchanged."]);
     rows.push(["Original model provenance — not independent confirmation", JSON.stringify(projection.original.producer)]);
   }
-  if (record?.observation) rows.push([projection ? "Source interpretation — outcome unverified" : "Model interpretation — unverified", record.observation]);
+  if (record?.observation) {
+    const label = projection ? "Source interpretation — outcome unverified"
+      : finding.source === "llm" || finding.rule_id?.startsWith("llm-") ? "Model interpretation — unverified"
+      : finding.source === "static" ? "Static observation — unverified"
+      : finding.source === "dependency" ? "Source observation — unverified" : "Legacy observation — provenance not recorded";
+    rows.push([label, record.observation]);
+  }
   rows.push(["Required conditions — not checked", record?.required_conditions?.length
     ? record.required_conditions.join("\n") : "Not recorded; do not assume the conditions for harm are satisfied."]);
   rows.push(["Consequence check", "No independent verification recorded."]);
@@ -328,11 +345,12 @@ export function sourceSeverityCounts(findings: Finding[]): Record<Severity, numb
 // app/scan/manifest.py. New reasons remain visible without assuming their stage.
 const modelLimitations = new Set([
   "billing", "provider", "provider_failure", "cost_cap_exceeded", "daily_spend_cap",
-  "input_truncated", "invalid_responses", "no_providers_configured", "free_tier",
+  "input_truncated", "invalid_responses", "no_providers_configured", "free_tier", "paid_job_cost_cap",
 ]);
 const dependencyLimitations = new Set([
   "dependency_check_not_run", "dependency_database_unavailable",
   "dependency_lockfile_unreadable", "dependency_coverage_incomplete",
+  "dependency_snapshot_scope", "dependency_runtime_reachability_not_checked", "dependency_snapshot_unavailable",
 ]);
 
 const ruleCoverageLabels: Record<StaticCoverageRule, string> = {
@@ -435,6 +453,8 @@ function ruleCoverageRows(score: Score): [string, string][] {
 function classifiedLimits(score: Score): [string[], string[], string[]] {
   const model: string[] = [], dependency: string[] = [], other: string[] = [];
   for (const reason of score.scan_manifest?.limitations ?? []) {
+    if (["security_agent_unavailable", "security_agent_incomplete"].includes(reason)
+      && patternReviewNotices(score.scan_manifest?.security_agent).length) continue;
     if (reason === "static_checks_failed" && normalizedCheckFailures(score.scan_manifest?.static_checks_not_run).length) continue;
     if (modelLimitations.has(reason) || reason.startsWith("rubric_failed:")) model.push(reason);
     else if (dependencyLimitations.has(reason)) dependency.push(reason);
@@ -468,8 +488,15 @@ function normalizedCheckFailures(value: unknown): { check: string; reason: strin
 }
 
 export function nonModelStatusNotices(score: Score): [string, string][] {
-  const [, dependency, other] = classifiedLimits(score);
-  const notices: [string, string][] = cveNotices(score.scan_manifest?.sca_cve);
+  const [, recordedDependency, other] = classifiedLimits(score);
+  const manifest = score.scan_manifest;
+  const hasSnapshot = manifest?.dependency_cve != null || manifest?.dependency_snapshot != null;
+  const notices: [string, string][] = [...cveNotices(manifest?.sca_cve),
+    ...snapshotNotices(manifest?.dependency_cve, manifest?.dependency_snapshot),
+    ...patternReviewNotices(manifest?.security_agent)];
+  const handled = new Set([...snapshotScopeReasons, "dependency_snapshot_unavailable",
+    ...(manifest?.sca_skipped_reason === "no_client" ? ["dependency_coverage_incomplete"] : [])]);
+  const dependency = hasSnapshot ? recordedDependency.filter(reason => !handled.has(reason)) : recordedDependency;
   const failures = normalizedCheckFailures(score.scan_manifest?.static_checks_not_run);
   if (failures.length) notices.push(["Static checks failed",
     failures.map(item => `${item.check}: ${item.reason}`).join("; ") +
@@ -500,8 +527,13 @@ export function nonModelStatusNotices(score: Score): [string, string][] {
     if (dependency.includes("dependency_coverage_incomplete")) {
       details.push("Dependency coverage is incomplete; some dependencies could not be checked.");
     }
-    const title = dependency.every(reason => reason === "dependency_check_not_run")
-      ? "Dependency check not run" : "Dependency check incomplete";
+    if (dependency.includes("dependency_snapshot_scope")) details.push("Only the recorded advisory snapshot was considered.");
+    if (dependency.includes("dependency_runtime_reachability_not_checked")) details.push("Application reachability was not checked.");
+    if (dependency.includes("dependency_snapshot_unavailable")) details.push("The bundled advisory catalog could not be checked.");
+    let title = dependency.every(reason => reason === "dependency_check_not_run") ? "Dependency check not run"
+      : dependency.every(reason => snapshotScopeReasons.has(reason)) ? "Dependency snapshot scope" : "Dependency check incomplete";
+    if (hasSnapshot) title = dependency.every(reason => reason === "dependency_check_not_run")
+      ? "Live OSV lookup not run" : "Live dependency lookup incomplete";
     notices.push([title, details.join(" ") + " This does not establish the absence of vulnerable dependencies."]);
   }
   if (other.length) notices.push(["Additional audit limitations recorded",
@@ -534,7 +566,7 @@ export function modelStatusNotice(score: Score): [string, string] | null {
   if (reasons.includes("provider") || reasons.includes("provider_failure") || reasons.some((r) => r.startsWith("rubric_failed:"))) {
     detail += " A model request failed.";
   }
-  if (reasons.includes("cost_cap_exceeded") || reasons.includes("daily_spend_cap")) {
+  if (reasons.includes("cost_cap_exceeded") || reasons.includes("daily_spend_cap") || reasons.includes("paid_job_cost_cap")) {
     detail += " A review spending limit was reached.";
   }
   if (reasons.includes("input_truncated")) {
@@ -659,10 +691,14 @@ export function manifestRows(score: Score): [string, string][] {
     ["Scan engine", m.engine_version || "Not recorded"],
     ["Files in archive", String(m.archive_files)],
     ["Static checks run", m.static_checks.join(", ") || "Not recorded"],
+    ...snapshotRows(m.dependency_cve, m.dependency_snapshot),
+    ...(m.sca_skipped_reason === "no_client" && (m.dependency_cve != null || m.dependency_snapshot != null)
+      ? [["Live OSV lookup", "Not run. Bundled snapshot results are recorded separately."] as [string, string]] : []),
     ...cveRows(m.sca_cve),
     ["Last responding model", m.model || "No model response recorded"],
     ["Model responses", String(m.model_calls)],
     ["Review areas applied", m.rubrics_completed.join(", ") || "None"],
+    ...(patternReview(m.security_agent)?.rows.slice(0, 2) ?? []),
     ["Files eligible for model review", String(m.llm_candidate_files ?? "Not recorded")],
     ["Unique files submitted to model", String(m.llm_submitted_files ?? "Not recorded")],
     ["Eligible files not submitted", String(m.llm_files_not_submitted ?? "Not recorded")],

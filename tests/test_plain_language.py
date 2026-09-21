@@ -1,4 +1,6 @@
 """Plain-language reports explain observations and their evidence limits."""
+import pytest
+
 from app.report.html import render_report
 from app.report.plain_language import PLAIN, plain_fields, tier
 from app.scan.checks import run_checks  # noqa: F401 (import sanity)
@@ -155,3 +157,52 @@ def test_configuration_inventory_prose_does_not_claim_exposure_or_absent_automat
     ignore = plain_fields({"rule_id": "gitignore-missing-secrets"})
     assert "path" in ignore[0]
     assert "not evidence" in ignore[1]
+
+
+def test_saved_inventory_and_boundary_prose_is_bounded_without_changing_originals():
+    """A stored assertion must not override the static check's actual scope."""
+    from copy import deepcopy
+
+    saved = [
+        {"source": "static", "rule_id": "dependency-dir-committed", "title": "venv is committed",
+         "explanation": "Every clone downloads all of it.",
+         "fix_hint": "Untrack it immediately.", "file": "venv"},
+        {"source": "static", "rule_id": "missing-error-boundary", "title": "No error boundary above the app's routes",
+         "explanation": "One small bug anywhere becomes a total outage of the screen.",
+         "fix_hint": "Create all boundary files.", "file": "src/main.tsx"},
+    ]
+    before = deepcopy(saved)
+    inventory, boundary = [plain_fields(finding) for finding in saved]
+    assert "archive" in inventory[0]
+    assert "do not establish Git tracking" in inventory[1]
+    assert "Check Git tracking separately" in inventory[2]
+    assert "inspected" in boundary[0]
+    assert "Runtime behavior was not tested" in boundary[1]
+    assert "If a suitable boundary is missing" in boundary[2]
+    assert all(finding["explanation"] not in " ".join(prose)
+               for finding, prose in zip(saved, (inventory, boundary)))
+    assert saved == before
+
+
+@pytest.mark.parametrize("rule", ["dependency-dir-committed", "missing-error-boundary"])
+@pytest.mark.parametrize("overrides", [
+    {"source": "llm"}, {"source": None}, {"context": "test_file"},
+    {"verification_status": "contradicted"},
+    {"claim_evidence": {"syntax_check": {"result": "contradicted"}}},
+    {"claim_evidence": {"source_assessments": [{"kind": "separate_review"}]}},
+    {"claim_evidence": {"premise_checks": [{"status": "review"}]}},
+    {"claim_evidence": {"syntax_check": []}}, {"claim_evidence": []},
+])
+def test_static_copy_does_not_replace_a_separate_or_unknown_assessment(rule, overrides):
+    from copy import deepcopy
+
+    finding = {"source": "static", "rule_id": rule, "title": "Separate assessment",
+               "explanation": "Retain separate assessment", "fix_hint": "Original", **overrides}
+    before = deepcopy(finding)
+    assert plain_fields(finding) == ("Separate assessment", "Retain separate assessment", "Original")
+    assert finding == before
+
+
+def test_unknown_assessment_without_a_title_gets_neutral_copy():
+    assert plain_fields({"source": "llm", "rule_id": "missing-error-boundary"}) == (
+        "Recorded observation", "", "")

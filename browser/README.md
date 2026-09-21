@@ -35,7 +35,9 @@ The preview compares resolved npm/PyPI dependencies against a pinned local
 catalog compiled from the CVE List and GitHub-reviewed GHSA records. It sends no
 package queries or archive content to advisory services.
 Supported inputs include `package-lock.json`, pinned `requirements.txt`,
-`poetry.lock`, `pnpm-lock.yaml` v9, and `uv.lock` v1 (revisions 0–3).
+`poetry.lock`, `pnpm-lock.yaml` v9, `bun.lock` v1, and `uv.lock` v1 (revisions 0–3).
+Binary `bun.lockb` is unsupported; provide a text `bun.lock`. If both are
+present, the text lock takes precedence, including any coverage gaps it has.
 All locked platform/optional/development variants are inspected; this is not
 an assertion that every variant is installed in production.
 Source commits, snapshot age, unsupported manifests, unlisted packages and
@@ -64,6 +66,13 @@ checks cannot run. Stored `.sql.fixture` inputs use the SQL comparison exclusion
 inert `.env.fixture` files and entirely wrapped test dependency trees do not
 produce instructions to remove working configuration or installed dependencies.
 Their contents remain subject to the existing secret scanner and its exclusions.
+
+The collapsible **Pattern review** section shows the shared
+[deterministic agent](../docs/deterministic-security-agent.md): selected CWE cards,
+SQL assembly-to-sink observations, missing evidence, and manual-review decisions.
+JSON and SARIF retain the same record and pattern-catalog identity. Continuation
+recomputes this plan from cumulative findings and coverage. A completed plan
+does not establish runtime exploitability or prove that the project is safe.
 
 ## Build and serve
 

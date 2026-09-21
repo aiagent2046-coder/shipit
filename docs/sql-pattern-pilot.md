@@ -1,8 +1,10 @@
 # SQL pattern pilot: Python and Psycopg 3
 
-Card ID: `sql-value-parameterization-python-psycopg3`, revision 1.
-Status: design pilot tied to existing static evidence and tests; no automatic
-patch application or new agent coordinator is enabled by this card.
+Pattern ID: `python-sql-string-assembly`, revision 3.
+Recipe ID: `sql-value-parameterization-python-psycopg3`, revision 1.
+Status: executable static-evidence pilot selected by the
+[deterministic coordinator](deterministic-security-agent.md). The recipe remains
+manual guidance; it does not enable automatic patch application.
 
 ## Applicability and evidence
 
@@ -27,6 +29,56 @@ Record the source snapshot, engine version, catalog identity if used, file and
 line, observed assembly, execution sink and per-rule coverage. A parse, decoding,
 size, file-count, finding-count or analysis limit leaves the affected scope
 incomplete. Existing findings remain observations even when another file fails.
+
+## Bounded driver provenance
+
+SQL observation schema 2 adds `driver_status: source_resolved | unknown`.
+A resolved observation contains `driver_provenance` with the import, connection
+and cursor source lines, under the observation's existing file and source hash.
+Schema 1 reports remain readable as historical `not_checked` evidence.
+
+The optional AST pass traces synchronous `import psycopg` / `from psycopg import
+connect`, import and object aliases, `connect()` → `cursor()` → `execute()` or
+`executemany()`, and their `with` forms. Function-local chains may inherit a
+single stable import binding; connections and cursors never cross deferred
+function scopes. Only a no-argument `cursor()` and a connection without a custom
+cursor factory or argument unpacking qualify. Psycopg's
+[connection API](https://www.psycopg.org/psycopg3/docs/api/connections.html)
+permits replacing cursor factories, so a familiar method name is insufficient.
+
+Branches, loops, exception handling, classes, nested functions, asynchronous
+chains, wrappers, named/custom cursors, object escapes and resource exhaustion
+remain unknown. Visible dynamic namespace access, attribute writes, wildcard
+imports or driver-module escapes conservatively disable provenance for the
+whole file. A repository-local `psycopg.py` or `psycopg/` disables it for the
+archive. These conservative boundaries may leave valid chains unknown.
+
+Unknown attribute access, function defaults and container stores revoke source
+identity for the affected object and its aliases. A later target in a chained
+assignment cannot restore it. Executable annotation expressions are analyzed
+conservatively, including rebinding and opaque calls; match captures are treated
+as local bindings throughout their function. A driver-module escape also
+invalidates evidence recorded in a deferred function before that escape.
+
+The optional pass has an 80,000-node cap and a separate 640,000-unit work budget
+covering traversal and binding work. Exhaustion yields unknown driver provenance
+while retaining the independently detected SQL finding. Calls do not copy the
+entire alias table, and files without SQL observations skip this evidence pass.
+
+This establishes a chain in the uploaded source under ordinary Python import
+semantics. It does not inspect the installed package, import hooks, external
+monkeypatching, connection success or execution. DSNs and source values are not
+copied to the evidence. SQL findings and their severity remain unchanged.
+
+The driver pass removes only `psycopg3_cursor_provenance` from missing recipe
+prerequisites. The adaptive source collectors can separately establish HTTP
+origin, local input flow, SQL value positions and declared/conversion constraints
+for supported FastAPI handlers. See the [source investigation contract](deterministic-security-agent.md#sql-evidence-and-limits).
+Caller authorization, deployed reachability, intended type and runtime behavior
+still require evidence. The implementation
+and positive/unknown regressions live in `app/scan/psycopg_provenance.py` and
+`tests/test_psycopg_provenance.py`, `tests/test_psycopg_provenance_review.py` and
+`tests/test_psycopg_provenance_budget.py`; browser parity includes these result shapes.
 
 ## One constrained transformation
 
@@ -71,7 +123,7 @@ rule did not produce a finding, not that the application is safe.
 
 ## Acceptance before promoting this to a repair recipe
 
-1. Add independent positive, negative and unknown cases for the selected driver.
+1. Maintain independent positive, negative and unknown cases for the selected driver.
 2. Confirm the original behavior in a separate, authorized synthetic database
    harness, including ordinary values, quotes, NULL and expected result shape.
 3. Confirm the corrected value binding removes the demonstrated defect without
@@ -81,8 +133,11 @@ rule did not produce a finding, not that the application is safe.
 5. Measure false positives, misses, unknown outcomes, time and memory against
    the same input and versions. Fewer findings alone is not an improvement.
 
-The runtime repair checks in steps 2–4 are proposed work, not capabilities added
-by this PR. The current pilot delivers bounded static evidence, explicit gaps
-and a reviewable recipe. A future deterministic coordinator can select this card
-only when its applicability evidence is present; otherwise it should return the
-specific missing evidence and stop within its budget.
+The [synthetic PostgreSQL contract](sql-runtime-contract.md) now exercises steps
+2–4 for a fixed text-value fixture and two explicit NULL operators. Its evidence
+is scoped to the recipe, not an uploaded application. The current pilot delivers bounded static evidence, explicit gaps
+and a reviewable recipe. The deterministic coordinator classifies the source
+observation, gathers supported missing source facts and records which recipe
+prerequisites remain. When all four source facts are collected, the next action
+is `review_runtime_contract`; other candidates retain `manual_review`. It cannot establish the installed driver's
+runtime identity or promote the proposed transformation to an automatic repair.

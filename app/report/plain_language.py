@@ -292,15 +292,14 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "checkout.",
     ),
     "dependency-dir-committed": (
-        "Installed libraries are stored in your repository as if you wrote "
-        "them.",
-        "Every clone downloads all of it, every update to a library lands in "
-        "your history, and what is stored slowly stops matching what your "
-        "lockfile says the project needs — so the versions running in "
-        "production drift away from the ones you think you have.",
-        "Add the folder to .gitignore and untrack it with "
-        "`git rm -r --cached <folder>`. Your local copy stays; anyone "
-        "cloning reinstalls from your lockfile, which is what it is for.",
+        "The archive includes a folder commonly used for installed libraries or generated files.",
+        "These files can make a source archive larger and harder to review. "
+        "Folder names alone do not establish Git tracking, how the files were "
+        "created, or whether they are intentional copies of third-party source.",
+        "Check whether the folder can be recreated from the project's installation "
+        "instructions. If so, exclude it from future source archives. Check Git "
+        "tracking separately before removing tracked copies or adding ignore rules. "
+        "Keep intentional third-party source and test data when needed.",
     ),
     'no-dockerfile': (
         'No Dockerfile was found in the supplied archive.',
@@ -310,15 +309,15 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         'deployment is needed.',
     ),
     "missing-error-boundary": (
-        "Your app has no error boundary above its pages.",
-        "When any single component hits an error while rendering, there is "
-        "nothing to contain it: the whole screen goes blank and the person "
-        "using it can only reload and hope. One small bug anywhere becomes a "
-        "total outage of the page.",
-        "Add an error boundary above your routes. In the Next.js app router, "
-        "create app/error.tsx and app/global-error.tsx; in a plain React app, "
-        "wrap the top-level component in an <ErrorBoundary> with a small "
-        "fallback that offers a reload.",
+        "The static check did not find a recognized error boundary in the inspected app source.",
+        "If a rendering error reaches the root without a working boundary, the "
+        "affected screen may go blank. This check uses selected files and known "
+        "names within read limits; custom boundaries may not be recognized. "
+        "Runtime behavior was not tested.",
+        "Check how the reported application entry point handles rendering errors. "
+        "If a suitable boundary is missing, add one for the relevant routes or root "
+        "layout. Then trigger a controlled rendering error and verify that the user "
+        "sees a recovery option.",
     ),
     "react-unchecked-http-success": (
         "A handler continues to a success state or navigation without checking its HTTP response.",
@@ -364,6 +363,25 @@ CREDENTIAL_RULES = frozenset({
 })
 
 
+def _uses_bounded_static_copy(finding: dict) -> bool:
+    """Mirror the browser's narrow overlay without replacing separate assessments."""
+    if (finding.get("source") != "static"
+            or finding.get("verification_status") == "contradicted"
+            or finding.get("context") not in (None, "")):
+        return False
+    evidence = finding.get("claim_evidence")
+    if evidence is not None:
+        if not isinstance(evidence, dict):
+            return False
+        syntax = evidence.get("syntax_check")
+        if ((syntax is not None and not isinstance(syntax, dict))
+                or isinstance(syntax, dict) and syntax.get("result") == "contradicted"
+                or any(value is not None and not (isinstance(value, list) and not value)
+                       for value in (evidence.get("source_assessments"), evidence.get("premise_checks")))):
+            return False
+    return True
+
+
 def plain_fields(finding: dict) -> tuple[str, str, str]:
     """(what, risk, fix) for any finding.
 
@@ -375,6 +393,13 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
     rid = str(finding.get("rule_id", ""))
     own_risk = str(finding.get("explanation", "")).strip()
     own_fix = str(finding.get("fix_hint", "")).strip()
+    evidence = finding.get("claim_evidence")
+    if (rid == "dependency-cve-match" and isinstance(evidence, dict)
+            and evidence.get("remediation") is not None
+            and evidence.get("snapshot_check_status") == "retained_not_reconfirmed"):
+        return (finding.get("title") or "Recorded dependency match", own_risk,
+                "The current check could not reconfirm this dependency match. Repeat the advisory check "
+                "before choosing an upgrade; previously recorded upgrade candidates have not been reconfirmed.")
     if rid in PLAIN and rid in CREDENTIAL_RULES:
         what, risk, fix = PLAIN[rid]
         if rid == "sql-secret-assignment" and not str(finding.get("file", "")).lower().endswith((".sql", ".psql")):
@@ -414,6 +439,13 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
         if finding.get("context") == "deployment_inventory":
             return what, own_risk or risk, own_fix or fix
         return PLAIN[rid]
+    if rid in {"dependency-dir-committed", "missing-error-boundary"}:
+        # Stored findings used to infer Git tracking or a total runtime outage.
+        # Keep originals and separate model/source assessments intact.
+        if _uses_bounded_static_copy(finding):
+            return PLAIN[rid]
+        return (finding.get("title") or "Recorded observation",
+                finding.get("explanation") or "", finding.get("fix_hint") or "")
     if rid in PLAIN:
         what, risk, fix = PLAIN[rid]
         # The finding's own text wins where it has any.

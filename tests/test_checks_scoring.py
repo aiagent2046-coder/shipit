@@ -813,9 +813,13 @@ def test_the_dependency_check_fires_through_run_checks():
         zf.writestr("repo-main/app.py", "print('hi')\n")
     buf.seek(0)
 
-    ids = [f.rule_id for f in run_checks(buf)]
-
-    assert "dependency-dir-committed" in ids
+    findings = run_checks(buf)
+    finding = next(f for f in findings if f.rule_id == "dependency-dir-committed")
+    assert finding.file == "venv"
+    assert "40 files" in finding.title
+    assert "Archive" in finding.title
+    assert "Git tracking" in finding.explanation
+    assert "Check Git tracking" in finding.fix_hint
 
 
 # --- a category that handed all its findings to a neighbour ------------------

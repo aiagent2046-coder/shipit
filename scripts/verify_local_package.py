@@ -14,6 +14,7 @@ import importlib
 import importlib.metadata
 import importlib.util
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -46,6 +47,17 @@ MIGRATION = '''CREATE TABLE public.private_users (id int, email text);
 ALTER TABLE public.private_users ENABLE ROW LEVEL SECURITY;
 CREATE POLICY read_users ON public.private_users FOR SELECT TO authenticated USING (true);
 '''
+SQL_QUERY = ('query = "SELECT id FROM users WHERE id = " + user_id\n'
+             'cursor.execute(query)\n')
+SQL_HTTP = '''from fastapi import FastAPI
+import psycopg
+app = FastAPI()
+@app.get("/users")
+def load(name: str):
+    conn = psycopg.connect(dsn)
+    cur = conn.cursor()
+    cur.execute(f"SELECT id FROM users WHERE name = '{name}'")
+'''
 DEPENDENCIES = {"pyyaml", "tree-sitter", "tree-sitter-typescript", "pglast"}
 SERVER_DISTRIBUTIONS = {"fastapi", "httpx", "psycopg", "redis", "uvicorn", "shipit"}
 
@@ -58,6 +70,8 @@ def require(condition, message):
 def fixture(root: Path):
     files = {
         "routes.py": CAMEL_ROUTES,
+        "query.py": SQL_QUERY,
+        "sql_http.py": SQL_HTTP,
         "src/server.ts": JAVASCRIPT,
         "migrations/001_users.sql": MIGRATION,
         "requirements.txt": "langflow==1.0.12\n",
@@ -148,6 +162,29 @@ def exercise(namespace, temporary):
         db = stack.enter_context(closing(store.connect(state)))
         key, first = cli.poll_project(db, root, state)
         require(first["runtime_verified"] is False, "Local report claims runtime verification")
+        agent = first["security_agent"]
+        require(agent["status"] == "completed" and not agent["automatic_patch"],
+                "Deterministic pattern review unavailable or claims automatic patching")
+        decision = next(row for row in agent["observations"]
+                        if row["pattern_id"] == "python-sql-string-assembly" and row["file"] == "query.py")
+        require(decision["file"] == "query.py" and decision["weaknesses"] == ["CWE-89"],
+                "SQL pattern classification was lost")
+        require(decision["evidence"]["sql_observation"]["source_sha256"]
+                == hashlib.sha256(SQL_QUERY.encode()).hexdigest(), "SQL source identity was lost")
+        require("psycopg3_cursor_provenance" in decision["missing_evidence"],
+                "Method name was mistaken for driver evidence")
+        investigated = next(row for row in agent["observations"] if row["file"] == "sql_http.py")
+        require(investigated["state"] == "source_evidence_collected"
+                and investigated["next_action"] == "review_runtime_contract",
+                "Installed engine did not collect the missing SQL source evidence")
+        require({fact["id"] for fact in investigated["acquisition"]["facts"]}
+                == {"request_input_source", "local_input_flow", "sql_value_position", "value_constraints"},
+                "Source investigation did not establish all four independent facts")
+        require({"caller_authorization", "route_reachability", "intended_value_type", "runtime_behavior_contract"}
+                <= set(investigated["missing_evidence"]), "Source facts closed runtime prerequisites")
+        status, patterns = captured_main(cli, ["patterns", "--json"])
+        require(status == 0 and patterns["catalog_sha256"] == agent["catalog"]["sha256"],
+                "Installed pattern catalog differs from the report")
         require(cli.exit_status(first, "none") == 0, "Fixture scan has unavailable or incomplete checks")
         rules = {item["rule_id"] for item in first["findings"]}
         require({"python-route-read-auth-consistency", "insecure-randomness", "xss-unsafe-html-injection"} <= rules,
@@ -203,6 +240,7 @@ def console_check(root, temporary):
     state = temporary / "console-state"
     environment = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONHOME"}}
     for command in ([str(executable), "--help"],
+                    [str(executable), "patterns", "--json"],
                     [str(executable), "--state-dir", str(state), "scan", str(root), "--json"],
                     [str(executable), "--state-dir", str(state), "history", str(root)]):
         result = subprocess.run(command, cwd=temporary, env=environment, capture_output=True, text=True, timeout=60)

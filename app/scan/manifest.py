@@ -7,6 +7,7 @@ import zipfile
 
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.rule_coverage import normalize_rule_coverage
+from app.scan.security_agent import agent_record
 from app.scan.check_failures import normalize_check_failures
 from app.scan.cve_evidence import normalize_cve_summary
 from app.sca.lockfiles import OSV_ECOSYSTEM
@@ -15,12 +16,22 @@ from app.sca.lockfiles import OSV_ECOSYSTEM
 SCA_LIMITATIONS = frozenset({
     "dependency_check_not_run", "dependency_database_unavailable",
     "dependency_lockfile_unreadable", "dependency_coverage_incomplete",
+    "dependency_snapshot_scope", "dependency_runtime_reachability_not_checked",
+    "dependency_snapshot_unavailable",
 })
 
 
 def sca_limitations(sca: dict) -> list[str]:
     """Dependency coverage facts shared by initial scans and cached refreshes."""
     reasons = []
+    snapshot = sca.get("dependency_cve")
+    if isinstance(snapshot, dict):
+        if snapshot.get("status") == "unavailable":
+            return ["dependency_check_not_run", "dependency_snapshot_unavailable"]
+        reasons = ["dependency_snapshot_scope", "dependency_runtime_reachability_not_checked"]
+        if snapshot.get("status") == "partial":
+            reasons.append("dependency_coverage_incomplete")
+        return reasons
     skipped = str(sca.get("skipped_reason") or "")
     if skipped == "no_client" and sca.get("dependencies"):
         reasons.append("dependency_check_not_run")
@@ -44,6 +55,9 @@ def sca_manifest_fields(sca: dict) -> dict:
                    "sca_cve": normalize_cve_summary(sca.get("cve")),
                    "sca_findings_truncated": sca.get("truncated", 0),
                    "sca_skipped_reason": sca.get("skipped_reason") or None})
+    for name in ("dependency_cve", "dependency_snapshot"):
+        if name in sca:
+            fields[name] = sca[name]
     return fields
 
 
@@ -110,6 +124,8 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
     failed_checks = normalize_check_failures(static.get('checks_not_run'))
     if failed_checks:
         reasons.append('static_checks_failed')
+    reasons.extend(reason for reason in static.get("limitations", [])
+                   if reason in {"security_agent_unavailable", "security_agent_incomplete"})
     return {
         "archive_sha256": hashlib.sha256(data).hexdigest(),
         "engine_version": engine,
@@ -128,6 +144,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         "static_limits": static.get("coverage", {}),
         "secrets_coverage": _file_counts(static.get("secrets_coverage")),
         "rule_coverage": normalize_rule_coverage(static.get("rule_coverage")),
+        "security_agent": agent_record(static.get("security_agent")),
         "source_facts": static.get("source_facts"),
         "model": stats.get("model"),
         "model_calls": stats.get("calls", 0),

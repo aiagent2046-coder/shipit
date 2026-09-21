@@ -1,0 +1,363 @@
+[
+  {
+    "name": "archive substitution",
+    "changes": [
+      {"path": ["source","archive_sha256"],"value": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "engine substitution",
+    "changes": [
+      {"path": ["source","engine_version"],"value": "other-engine"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "catalog substitution",
+    "changes": [
+      {"path": ["catalog","sha256"],"value": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "missing source",
+    "changes": [
+      {"path": ["source"],"delete": true}
+    ],
+    "valid": false
+  },
+  {
+    "name": "missing catalog",
+    "changes": [
+      {"path": ["catalog"],"delete": true}
+    ],
+    "valid": false
+  },
+  {
+    "name": "missing chain",
+    "changes": [
+      {"path": ["observations","0","agent_chain"],"delete": true}
+    ],
+    "valid": false
+  },
+  {
+    "name": "missing acquisition",
+    "changes": [
+      {"path": ["observations","0","acquisition"],"delete": true}
+    ],
+    "valid": false
+  },
+  {
+    "name": "missing trace",
+    "changes": [
+      {"path": ["observations","0","evidence","deserialization_observation"],"delete": true}
+    ],
+    "valid": false
+  },
+  {
+    "name": "missing evidence",
+    "changes": [
+      {"path": ["observations","0","evidence"],"delete": true}
+    ],
+    "valid": false
+  },
+  {
+    "name": "observation substitution",
+    "changes": [
+      {"path": ["observations","0","id"],"value": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "source hash substitution",
+    "changes": [
+      {"path": ["observations","0","evidence","deserialization_observation","source_sha256"],"value": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "file substitution",
+    "changes": [
+      {"path": ["observations","0","file"],"value": "other.py"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "line substitution",
+    "changes": [
+      {"path": ["observations","0","line"],"value": 99}
+    ],
+    "valid": false
+  },
+  {
+    "name": "edited candidate content",
+    "changes": [
+      {"path": ["observations","0","title"],"value": "Changed title"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "removed runtime gaps",
+    "changes": [
+      {"path": ["observations","0","missing_evidence"],"value": []}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong next action",
+    "changes": [
+      {"path": ["observations","0","next_action"],"value": "manual_review"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong state",
+    "changes": [
+      {"path": ["observations","0","state"],"value": "needs_evidence"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong chain scope",
+    "changes": [
+      {"path": ["observations","0","agent_chain","scope"],"value": "synthetic_recipe"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong chain version",
+    "changes": [
+      {"path": ["observations","0","agent_chain","version"],"value": true}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong chain status",
+    "changes": [
+      {"path": ["observations","0","agent_chain","status"],"value": "completed"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "expanded task budget",
+    "changes": [
+      {"path": ["observations","0","agent_chain","max_tasks"],"value": 5}
+    ],
+    "valid": false
+  },
+  {
+    "name": "unknown chain field",
+    "changes": [
+      {"path": ["observations","0","agent_chain","unknown"],"value": 1}
+    ],
+    "valid": false
+  },
+  {
+    "name": "empty tasks",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks"],"value": []}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong task id",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","0","id"],"value": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong task role",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","0","agent"],"value": "verifier"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong task goal",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","1","goal"],"value": "collect_missing_sql_source_facts"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong task source",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","1","source","archive_sha256"],"value": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong dependency",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","1","depends_on"],"value": []}
+    ],
+    "valid": false
+  },
+  {
+    "name": "broken handoff",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","1","input_sha256"],"value": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "edited final digest",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","3","output_sha256"],"value": "0000000000000000000000000000000000000000000000000000000000000000"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "newline in digest",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","3","output_sha256"],"value": "0000000000000000000000000000000000000000000000000000000000000000\n"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "wrong attempt count",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","0","attempts"],"value": 0}
+    ],
+    "valid": false
+  },
+  {
+    "name": "boolean attempt count",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","0","attempts"],"value": true}
+    ],
+    "valid": false
+  },
+  {
+    "name": "expanded retry budget",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","0","max_attempts"],"value": 2}
+    ],
+    "valid": false
+  },
+  {
+    "name": "invalid task status",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","0","status"],"value": "unknown"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "invalid task reason",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","0","reason"],"value": "source\n"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "empty task reason",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","0","reason"],"value": "___"}
+    ],
+    "valid": false
+  },
+  {
+    "name": "unknown task field",
+    "changes": [
+      {"path": ["observations","0","agent_chain","tasks","0","unknown"],"value": 1}
+    ],
+    "valid": false
+  },
+  {
+    "name": "budget exhausted",
+    "changes": [
+      {"path": ["budget","evidence_actions"],"value": 0},
+      {"path": ["budget","evidence_work"],"value": 0},
+      {"path": ["budget","max_evidence_actions"],"value": 0},
+      {"path": ["observations","0","acquisition","attempts"],"value": [{"action": "locate_source","result": "budget_exhausted","reason": "step_budget_exhausted","produced": []}]},
+      {"path": ["observations","0","acquisition","budget","steps"],"value": 1},
+      {"path": ["observations","0","acquisition","budget","work_units"],"value": 0},
+      {"path": ["observations","0","acquisition","facts"],"value": []},
+      {"path": ["observations","0","acquisition","status"],"value": "partial"},
+      {"path": ["observations","0","acquisition","stop_reason"],"value": "budget_exhausted"},
+      {"path": ["observations","0","agent_chain","tasks","0","id"],"value": "3888772008628ff049d9554e44e0cc53468c5e1a9f02f937dad2f22be0219ec2"},
+      {"path": ["observations","0","agent_chain","tasks","0","input_sha256"],"value": "5b9a072c5758afe6ebe339f593019fe4f0b79a971710f70f00bc9d255f2f33f9"},
+      {"path": ["observations","0","agent_chain","tasks","0","output_sha256"],"value": "5b9a072c5758afe6ebe339f593019fe4f0b79a971710f70f00bc9d255f2f33f9"},
+      {"path": ["observations","0","agent_chain","tasks","0","source","archive_sha256"],"value": "df1fae3fa0c79dde60194cec3413ce94b8048ea990dd083586e1d4155c326f79"},
+      {"path": ["observations","0","agent_chain","tasks","0","source","observation_id"],"value": "067ad43327fd4e8d51d842345ad9d7dc8a418e7d4f60794b55eeb80247d49041"},
+      {"path": ["observations","0","agent_chain","tasks","1","depends_on","0"],"value": "3888772008628ff049d9554e44e0cc53468c5e1a9f02f937dad2f22be0219ec2"},
+      {"path": ["observations","0","agent_chain","tasks","1","id"],"value": "f442088cbedac261dc64196a390d09cbeb9ff5ef561e4f7b59130c95cc1c5203"},
+      {"path": ["observations","0","agent_chain","tasks","1","input_sha256"],"value": "5b9a072c5758afe6ebe339f593019fe4f0b79a971710f70f00bc9d255f2f33f9"},
+      {"path": ["observations","0","agent_chain","tasks","1","output_sha256"],"value": "89a3c003034d7453d57c620aafacbb46db3926599df8fcea024714c3bb1ec4d3"},
+      {"path": ["observations","0","agent_chain","tasks","1","reason"],"value": "source_evidence_incomplete"},
+      {"path": ["observations","0","agent_chain","tasks","1","source","archive_sha256"],"value": "df1fae3fa0c79dde60194cec3413ce94b8048ea990dd083586e1d4155c326f79"},
+      {"path": ["observations","0","agent_chain","tasks","1","source","observation_id"],"value": "067ad43327fd4e8d51d842345ad9d7dc8a418e7d4f60794b55eeb80247d49041"},
+      {"path": ["observations","0","agent_chain","tasks","1","status"],"value": "blocked"},
+      {"path": ["observations","0","agent_chain","tasks","2","depends_on","0"],"value": "f442088cbedac261dc64196a390d09cbeb9ff5ef561e4f7b59130c95cc1c5203"},
+      {"path": ["observations","0","agent_chain","tasks","2","id"],"value": "b35cf0e9c95a36d83ca57e1850425624de31de4b5911e2c532b01552678ccdc0"},
+      {"path": ["observations","0","agent_chain","tasks","2","input_sha256"],"value": "89a3c003034d7453d57c620aafacbb46db3926599df8fcea024714c3bb1ec4d3"},
+      {"path": ["observations","0","agent_chain","tasks","2","output_sha256"],"value": "89a3c003034d7453d57c620aafacbb46db3926599df8fcea024714c3bb1ec4d3"},
+      {"path": ["observations","0","agent_chain","tasks","2","source","archive_sha256"],"value": "df1fae3fa0c79dde60194cec3413ce94b8048ea990dd083586e1d4155c326f79"},
+      {"path": ["observations","0","agent_chain","tasks","2","source","observation_id"],"value": "067ad43327fd4e8d51d842345ad9d7dc8a418e7d4f60794b55eeb80247d49041"},
+      {"path": ["observations","0","agent_chain","tasks","3","depends_on","0"],"value": "b35cf0e9c95a36d83ca57e1850425624de31de4b5911e2c532b01552678ccdc0"},
+      {"path": ["observations","0","agent_chain","tasks","3","id"],"value": "9a01cab55da0476e98bc1edd8c0ee5d6b6ad6aaaf51088324c51bdb65aa229a7"},
+      {"path": ["observations","0","agent_chain","tasks","3","input_sha256"],"value": "89a3c003034d7453d57c620aafacbb46db3926599df8fcea024714c3bb1ec4d3"},
+      {"path": ["observations","0","agent_chain","tasks","3","output_sha256"],"value": "89a3c003034d7453d57c620aafacbb46db3926599df8fcea024714c3bb1ec4d3"},
+      {"path": ["observations","0","agent_chain","tasks","3","source","archive_sha256"],"value": "df1fae3fa0c79dde60194cec3413ce94b8048ea990dd083586e1d4155c326f79"},
+      {"path": ["observations","0","agent_chain","tasks","3","source","observation_id"],"value": "067ad43327fd4e8d51d842345ad9d7dc8a418e7d4f60794b55eeb80247d49041"},
+      {"path": ["observations","0","id"],"value": "067ad43327fd4e8d51d842345ad9d7dc8a418e7d4f60794b55eeb80247d49041"},
+      {"path": ["observations","0","missing_evidence"],"value": ["request_input_source","local_input_flow","input_trust_boundary","loader_runtime_contract"]},
+      {"path": ["observations","0","next_action"],"value": "manual_review"},
+      {"path": ["observations","0","state"],"value": "needs_evidence"},
+      {"path": ["source","archive_sha256"],"value": "df1fae3fa0c79dde60194cec3413ce94b8048ea990dd083586e1d4155c326f79"},
+      {"path": ["status"],"value": "partial"},
+      {"path": ["stop_reason"],"value": "evidence_collection_incomplete"}
+    ],
+    "valid": true,
+    "status": "partial",
+    "acquisition_status": "partial"
+  },
+  {
+    "name": "unicode source and parameter",
+    "changes": [
+      {"path": ["observations","0","acquisition","facts","0","sources","0","parameter"],"value": "данные"},
+      {"path": ["observations","0","acquisition","facts","0","sources","0","span","3"],"value": 28},
+      {"path": ["observations","0","acquisition","facts","1","locations","0","3"],"value": 28},
+      {"path": ["observations","0","acquisition","facts","1","locations","1","3"],"value": 23},
+      {"path": ["observations","0","acquisition","source","file"],"value": "src/загрузка_🔒.py"},
+      {"path": ["observations","0","acquisition","source","source_sha256"],"value": "1b9b48a1a75ce1e65df0e59a2b8e93d4fe24c70ac7013dc235865d7e007cbd97"},
+      {"path": ["observations","0","agent_chain","tasks","0","id"],"value": "b2daf75acfb0f6783ed0e783ecab6cea85b8eb0705550241e2508c002a59f927"},
+      {"path": ["observations","0","agent_chain","tasks","0","input_sha256"],"value": "f746441ea870fbb18c24f7075cfdf91486e983fa1e884f786165702682561f0e"},
+      {"path": ["observations","0","agent_chain","tasks","0","output_sha256"],"value": "f746441ea870fbb18c24f7075cfdf91486e983fa1e884f786165702682561f0e"},
+      {"path": ["observations","0","agent_chain","tasks","0","source","archive_sha256"],"value": "3521024a035cdb858b4c1115202f08c13bc224722fd58be9a436920fc202fdf2"},
+      {"path": ["observations","0","agent_chain","tasks","0","source","observation_id"],"value": "5801e3bdeef1c30598678d823420a58773362dc9016bb7a3544d3b42f2ae008c"},
+      {"path": ["observations","0","agent_chain","tasks","0","source","source_sha256"],"value": "1b9b48a1a75ce1e65df0e59a2b8e93d4fe24c70ac7013dc235865d7e007cbd97"},
+      {"path": ["observations","0","agent_chain","tasks","1","depends_on","0"],"value": "b2daf75acfb0f6783ed0e783ecab6cea85b8eb0705550241e2508c002a59f927"},
+      {"path": ["observations","0","agent_chain","tasks","1","id"],"value": "8059d9bdce6dbf3a8d0d53070a0bf6eaa0792c33936a67d8bddd772f2e378220"},
+      {"path": ["observations","0","agent_chain","tasks","1","input_sha256"],"value": "f746441ea870fbb18c24f7075cfdf91486e983fa1e884f786165702682561f0e"},
+      {"path": ["observations","0","agent_chain","tasks","1","output_sha256"],"value": "dc1d993b4c3159ab96f4a89af582ca19a182a6f72c26a28f03487f3e54868edf"},
+      {"path": ["observations","0","agent_chain","tasks","1","source","archive_sha256"],"value": "3521024a035cdb858b4c1115202f08c13bc224722fd58be9a436920fc202fdf2"},
+      {"path": ["observations","0","agent_chain","tasks","1","source","observation_id"],"value": "5801e3bdeef1c30598678d823420a58773362dc9016bb7a3544d3b42f2ae008c"},
+      {"path": ["observations","0","agent_chain","tasks","1","source","source_sha256"],"value": "1b9b48a1a75ce1e65df0e59a2b8e93d4fe24c70ac7013dc235865d7e007cbd97"},
+      {"path": ["observations","0","agent_chain","tasks","2","depends_on","0"],"value": "8059d9bdce6dbf3a8d0d53070a0bf6eaa0792c33936a67d8bddd772f2e378220"},
+      {"path": ["observations","0","agent_chain","tasks","2","id"],"value": "c05248bac33cbe26afff45fd35d94aa03eaf5a3412b30e4451b7a7ae50c96f36"},
+      {"path": ["observations","0","agent_chain","tasks","2","input_sha256"],"value": "dc1d993b4c3159ab96f4a89af582ca19a182a6f72c26a28f03487f3e54868edf"},
+      {"path": ["observations","0","agent_chain","tasks","2","output_sha256"],"value": "dc1d993b4c3159ab96f4a89af582ca19a182a6f72c26a28f03487f3e54868edf"},
+      {"path": ["observations","0","agent_chain","tasks","2","source","archive_sha256"],"value": "3521024a035cdb858b4c1115202f08c13bc224722fd58be9a436920fc202fdf2"},
+      {"path": ["observations","0","agent_chain","tasks","2","source","observation_id"],"value": "5801e3bdeef1c30598678d823420a58773362dc9016bb7a3544d3b42f2ae008c"},
+      {"path": ["observations","0","agent_chain","tasks","2","source","source_sha256"],"value": "1b9b48a1a75ce1e65df0e59a2b8e93d4fe24c70ac7013dc235865d7e007cbd97"},
+      {"path": ["observations","0","agent_chain","tasks","3","depends_on","0"],"value": "c05248bac33cbe26afff45fd35d94aa03eaf5a3412b30e4451b7a7ae50c96f36"},
+      {"path": ["observations","0","agent_chain","tasks","3","id"],"value": "83a92a6ffdbc25260b230db5db2ff7840257f04d199acbd41c4d3861fd432c69"},
+      {"path": ["observations","0","agent_chain","tasks","3","input_sha256"],"value": "dc1d993b4c3159ab96f4a89af582ca19a182a6f72c26a28f03487f3e54868edf"},
+      {"path": ["observations","0","agent_chain","tasks","3","output_sha256"],"value": "dc1d993b4c3159ab96f4a89af582ca19a182a6f72c26a28f03487f3e54868edf"},
+      {"path": ["observations","0","agent_chain","tasks","3","source","archive_sha256"],"value": "3521024a035cdb858b4c1115202f08c13bc224722fd58be9a436920fc202fdf2"},
+      {"path": ["observations","0","agent_chain","tasks","3","source","observation_id"],"value": "5801e3bdeef1c30598678d823420a58773362dc9016bb7a3544d3b42f2ae008c"},
+      {"path": ["observations","0","agent_chain","tasks","3","source","source_sha256"],"value": "1b9b48a1a75ce1e65df0e59a2b8e93d4fe24c70ac7013dc235865d7e007cbd97"},
+      {"path": ["observations","0","evidence","deserialization_observation","file"],"value": "src/загрузка_🔒.py"},
+      {"path": ["observations","0","evidence","deserialization_observation","source_sha256"],"value": "1b9b48a1a75ce1e65df0e59a2b8e93d4fe24c70ac7013dc235865d7e007cbd97"},
+      {"path": ["observations","0","file"],"value": "src/загрузка_🔒.py"},
+      {"path": ["observations","0","id"],"value": "5801e3bdeef1c30598678d823420a58773362dc9016bb7a3544d3b42f2ae008c"},
+      {"path": ["source","archive_sha256"],"value": "3521024a035cdb858b4c1115202f08c13bc224722fd58be9a436920fc202fdf2"}
+    ],
+    "valid": true,
+    "status": "completed",
+    "acquisition_status": "completed"
+  }
+]

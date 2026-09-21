@@ -217,10 +217,13 @@ def test_the_section_does_not_tell_the_reader_these_files_never_run():
 def test_test_findings_go_under_their_own_heading():
     html = render_report(result([_PROD, _TEST_FILE]))
     assert NON_PRODUCTION_HEADING in html
-    # Both are present; the production one comes first.
-    assert html.index("src/config.ts") < html.index("tests/test_secrets.py")
-    assert html.index(NON_PRODUCTION_HEADING) < html.index(
-        "tests/test_secrets.py")
+    # Roadmap references may name either file before the finding tables. The
+    # actual production row still precedes the separate test/example section.
+    production = html.index('id="roadmap-finding-0"')
+    example = html.index('id="roadmap-finding-1"')
+    assert production < html.index(NON_PRODUCTION_HEADING) < example
+    assert "src/config.ts" in html[production:html.index("</tr>", production)]
+    assert "tests/test_secrets.py" in html[example:html.index("</tr>", example)]
 
 
 def test_no_heading_when_everything_is_production_code():

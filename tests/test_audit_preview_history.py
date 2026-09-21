@@ -13,6 +13,7 @@ from app.llm.client import LLMClient
 from app.main import app, get_audit_repo, run_repo_audit
 from app.report.html import render_report
 from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
+from app.sca.snapshot import run_snapshot_stage
 from app.worker import main as worker
 from tests.conftest import run_audit_job
 from tests.test_audit_determinism import _post, force_pro_account
@@ -29,13 +30,17 @@ PREVIEW = {"rule_id": "llm-security", "title": "Prior hypothesis <script>unsafe(
                "conditions_status": "not_checked", "consequence_status": "not_checked"}}
 RAW = make_zip({"package.json": NEXT_PKG, "src/auth.ts": b"const token = 'example';"}).getvalue()
 DIGEST = content_digest(RAW)
+SNAPSHOT = run_snapshot_stage(RAW)[1]
 
 
 def row(basis, findings, **kwargs):
     return {"id": str(uuid.uuid4()), "status": "completed", "stack": "nextjs", "file_count": 2,
             "score_total": 7, "score_json": {"total": 7, "categories": {}, "basis": basis,
                 "scan_manifest": {"model": "preview-model" if basis == "static+preview" else "paid-model",
-                                  "model_calls": 1}},
+                                  "model_calls": 1,
+                                  **({name: deepcopy(SNAPSHOT[name]) for name in
+                                      ("dependency_cve", "dependency_snapshot")}
+                                     if basis == "static+preview" else {})}},
             "findings_json": deepcopy(findings), "content_hash": DIGEST,
             "engine_version": AUDIT_ENGINE_VERSION, "access_token": "original-private-access-token",
             **kwargs}
@@ -283,19 +288,23 @@ async def test_full_free_snapshot_reuses_original_model_and_scope():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('reason', ['provider', 'budget'])
-async def test_baseline_unavailable_is_visible_and_does_not_call_model(reason):
+async def test_baseline_keeps_deterministic_checks_when_model_cannot_run(reason):
     from types import SimpleNamespace
     from app.audit_history import ensure_paid_baseline
     scan = {'score': row('static+llm', [])['score_json'], 'findings': [],
             'llm_usage': {'calls': 1, 'model': 'claude-sonnet-4.6',
                           'input_tokens': 100_000_000 if reason == 'budget' else 0, 'output_tokens': 0}}
-    runner, record = AsyncMock(), AsyncMock()
+    preview = {'score': row('static_only', [STATIC])['score_json'], 'findings': [STATIC],
+               'llm_usage': {'calls': 0}}
+    runner, record = AsyncMock(return_value=preview), AsyncMock()
     client = SimpleNamespace(providers=[] if reason == 'provider' else [1])
     score = await ensure_paid_baseline(Repo(), scan, RAW, client,
                                       DIGEST, AUDIT_ENGINE_VERSION, runner=runner, record_usage=record)
-    assert score['free_baseline']['status'] == 'unavailable'
-    assert 'Free audit unavailable' in render_report({'score': score, 'findings': [], 'stack': 'nextjs'})
-    runner.assert_not_awaited()
+    assert score['free_baseline']['status'] == 'incomplete'
+    assert score['free_baseline']['findings'] == [STATIC]
+    runner.assert_awaited_once()
+    assert runner.call_args.kwargs['llm_skip_reason'] == (
+        'no_providers_configured' if reason == 'provider' else 'paid_job_cost_cap')
 
 
 @pytest.mark.asyncio

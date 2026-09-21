@@ -1,0 +1,72 @@
+name: sql-runtime-contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sql-runtime-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-sql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: synthetic-contract-password
+          POSTGRES_DB: drydock_sql_contract
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SQL_CONTRACT_DATABASE_URL: postgresql://postgres:synthetic-contract-password@127.0.0.1:5432/drydock_sql_contract # scan-allow: disposable CI service
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install locked test dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.txt
+          python -m pip install -e . --no-deps
+      - name: Verify target boundaries and real PostgreSQL behavior
+        run: >-
+          python -m pytest -q tests/test_sql_runtime_target.py tests/test_sql_runtime_contract.py
+          tests/test_sql_runtime_executor.py tests/test_agent_synthetic_runtime.py tests/test_security_agent_chain.py tests/test_client_runtime_record.py
+          tests/test_client_runtime_chain.py tests/test_client_runtime_report.py
+      - name: Compare before, after and restored mutation
+        run: python scripts/verify_sql_runtime_contract.py --output "$RUNNER_TEMP/sql-runtime-contract.json"
+      - name: Let the agent select, execute and consume the contract
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from tests.test_evidence_acquisition import HTTP_SQL
+          from tests.test_security_agent import archive
+          Path(os.environ['RUNNER_TEMP'], 'agent-sql-input.zip').write_bytes(
+              archive({'src/a.py': HTTP_SQL, 'src/b.py': HTTP_SQL}))
+          PY
+          python scripts/investigate_sql_runtime.py "$RUNNER_TEMP/agent-sql-input.zip" \
+            --output "$RUNNER_TEMP/agent-sql-runtime.json"
+      - name: Preserve synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sql-runtime-contract-evidence
+          path: |
+            ${{ runner.temp }}/sql-runtime-contract.json
+            ${{ runner.temp }}/agent-sql-runtime.json
+          if-no-files-found: error
+          retention-days: 14

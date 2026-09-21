@@ -7,12 +7,14 @@ Native parsers are optional; unavailable checks remain explicit failures.
 from __future__ import annotations
 
 import io
+import hashlib
 from copy import deepcopy
 from dataclasses import replace
 
 from app.report.sarif import build_sarif
 from app.scan.manifest import scan_manifest
 from app.scan.static import run_static_scan
+from app.scan.security_agent import agent_record, attach_security_agent
 from app.scan.version import AUDIT_ENGINE_VERSION
 
 
@@ -90,6 +92,7 @@ def _result(data: bytes, static: dict, dependencies: dict | None = None) -> dict
             "rule_coverage": static["rule_coverage"],
             "limitations": limitations,
             "runtime_verified": False,
+            "security_agent": agent_record(static.get("security_agent")),
             **({"dependency_cve": dependency_coverage} if dependency_coverage else {}),
         },
         "sarif": sarif,
@@ -161,7 +164,7 @@ class ScanSession:
                         confidence=candidate.confidence, category=candidate.category,
                         file=candidate.file, line=candidate.line, explanation=candidate.explanation,
                         fix_hint=candidate.fix_hint, source="static", verification_method="source_pattern",
-                        claim_evidence=static_claim_evidence(),
+                        claim_evidence=getattr(candidate, "claim_evidence", None) or static_claim_evidence(),
                     )
                     if "recommendation_enrichment_unavailable" in updated["limitations"]:
                         finding = replace(finding, fix_hint="")
@@ -184,5 +187,7 @@ class ScanSession:
             failed_static=failed_check_categories(updated["checks_not_run"]),
         )
         updated["score"]["frontend_scan"] = frontend
+        attach_security_agent(updated, archive_sha256=hashlib.sha256(self.data).hexdigest(),
+                              engine_version=AUDIT_ENGINE_VERSION, source_archive=io.BytesIO(self.data))
         self.static = updated
         return self.result()

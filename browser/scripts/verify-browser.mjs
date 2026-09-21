@@ -90,6 +90,17 @@ try {
     assert.deepEqual(actual, expected);
   }
 
+  const binaryBun = cases.find(c => c.id === 'dependency-cve-match/bun-binary');
+  assert.ok(binaryBun, 'Need a binary Bun coverage regression');
+  await page.getByLabel('Project ZIP', { exact: true }).setInputFiles({
+    name: 'bun-binary.zip', mimeType: 'application/zip', buffer: Buffer.from(binaryBun.archive, 'base64'),
+  });
+  await page.getByRole('button', { name: 'Scan locally', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('#scan-button').disabled &&
+    document.querySelector('#dependency-cve-details').textContent.includes('Binary bun.lockb is unsupported'),
+  null, { timeout: 120_000 });
+  assert.match(await page.locator('#dependency-cve-details').innerText(), /provide a text bun.lock/);
+
   const continuation = JSON.parse(await readFile(resolve(root, 'test-dist/continuation.json')));
   await page.getByLabel('Project ZIP', { exact: true }).setInputFiles({
     name: 'large-project.zip', mimeType: 'application/zip', buffer: Buffer.from(continuation.archive, 'base64'),

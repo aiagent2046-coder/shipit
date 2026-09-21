@@ -1,0 +1,4 @@
+# Linux / CPython 3.12 only. Hashes are for official PyPI wheels.
+Django==5.2.10 --hash=sha256:cf85067a64250c95d5f9067b056c5eaa80591929f7e16fbcd997746e40d6c45c
+asgiref==3.11.0 --hash=sha256:1db9021efadb0d9512ce8ffaf72fcef601c7b73a8807a1bb2ef143dc6b14846d
+sqlparse==0.5.5 --hash=sha256:12a08b3bf3eec877c519589833aed092e2444e68240a3577e8e26148acc7b1ba

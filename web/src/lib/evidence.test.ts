@@ -264,6 +264,45 @@ it("replaces categorical legacy credential prose without dropping occurrence evi
   expect(text.fix).not.toContain("Rotate everything");
 });
 
+it("bounds saved archive and error-boundary prose without rewriting the finding", () => {
+  for (const [rule, expectedRisk] of [
+    ["dependency-dir-committed", "do not establish Git tracking"],
+    ["missing-error-boundary", "Runtime behavior was not tested"],
+  ]) {
+    const finding: Finding = { ...source, source: "static", rule_id: rule,
+      title: "A categorical legacy title", explanation: "A total outage is certain.",
+      fix_hint: "Remove all copies immediately." };
+    const before = JSON.stringify(finding);
+    const text = plainFields(finding);
+    expect(text.risk).toContain(expectedRisk);
+    expect(text.risk).not.toContain(finding.explanation);
+    expect(text.fix).not.toContain(finding.fix_hint);
+    expect(JSON.stringify(finding)).toBe(before);
+  }
+});
+
+it.each([
+  { source: "llm" }, { source: undefined }, { context: "test_file" },
+  { verification_status: "contradicted" },
+  { claim_evidence: { syntax_check: { result: "contradicted" } } },
+  { claim_evidence: { source_assessments: [{ kind: "separate_review" }] } },
+  { claim_evidence: { premise_checks: [{ status: "review" }] } },
+  { claim_evidence: { syntax_check: [] } }, { claim_evidence: [] },
+])("retains separate or unknown assessments instead of static prose: %j", overrides => {
+  for (const rule_id of ["dependency-dir-committed", "missing-error-boundary"]) {
+    const finding = { ...source, source: "static", rule_id, title: "Separate assessment",
+      explanation: "Retain separate assessment", fix_hint: "Original", ...overrides } as unknown as Finding;
+    const before = JSON.stringify(finding);
+    expect(plainFields(finding)).toEqual({ what: "Separate assessment", risk: "Retain separate assessment", fix: "Original" });
+    expect(JSON.stringify(finding)).toBe(before);
+  }
+});
+
+it("uses a neutral heading for an unknown assessment without a title", () => {
+  expect(plainFields({ ...source, title: "", source: "llm", rule_id: "missing-error-boundary" }))
+    .toEqual({ what: "Recorded observation", risk: "", fix: "" });
+});
+
 it.each([
   { file: "docs/config.rst", sql: false }, { file: "src/flask/config.py", sql: false },
   { file: undefined, sql: false }, { file: "schema.sql", sql: true }, { file: "schema.PSQL", sql: true },

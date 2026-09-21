@@ -19,8 +19,12 @@ from app.scan.query_read_identity import valid_query_read_identity
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.manifest import SCA_LIMITATIONS
 from app.report.cve import cve_rows, cve_notices
+from app.report.dependency_snapshot import SCOPE_REASONS, snapshot_rows, snapshot_notices, snapshot_finding_rows
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
+from app.scan.security_agent import agent_record, deserialization_observation, sql_driver_rows, sql_observation
+from app.scan.evidence_record import acquisition_rows, normalize_acquisition
+from app.scan.synthetic_record import normalize_synthetic_contract, synthetic_contract_rows
 
 
 def is_non_production(finding: dict) -> bool:
@@ -103,7 +107,7 @@ def source_severity_counts(findings: list[dict]) -> dict[str, int]:
 # of being assigned to a model failure by exclusion.
 MODEL_LIMITATIONS = frozenset({
     "billing", "provider", "provider_failure", "cost_cap_exceeded", "daily_spend_cap",
-    "input_truncated", "invalid_responses", "no_providers_configured", "free_tier",
+    "input_truncated", "invalid_responses", "no_providers_configured", "free_tier", "paid_job_cost_cap",
 })
 
 RULE_COVERAGE_LABELS = {
@@ -189,7 +193,19 @@ def _classified_limits(score: dict) -> tuple[list[str], list[str], list[str]]:
 def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
     """Keep dependency gaps and unclassified reasons visible above the findings."""
     _, dependency, other = _classified_limits(score)
-    notices = cve_notices((score.get("scan_manifest") or {}).get("sca_cve"))
+    manifest = score.get("scan_manifest") or {}
+    has_snapshot = manifest.get("dependency_cve") is not None or manifest.get("dependency_snapshot") is not None
+    notices = [*cve_notices(manifest.get("sca_cve")),
+               *snapshot_notices(manifest.get("dependency_cve"), manifest.get("dependency_snapshot"))]
+    agent = agent_record(manifest.get("security_agent"))
+    if agent and agent["status"] in {"unavailable", "partial"}:
+        notices.append(("Pattern review incomplete", "The coordinator could not complete its bounded plan. "
+                        "Existing findings are retained; missing review does not establish safety."))
+    if has_snapshot:
+        handled = SCOPE_REASONS | {"dependency_snapshot_unavailable"}
+        if manifest.get("sca_skipped_reason") == "no_client":
+            handled |= {"dependency_coverage_incomplete"}
+        dependency = [reason for reason in dependency if reason not in handled]
     failures = normalize_check_failures((score.get("scan_manifest") or {}).get("static_checks_not_run"))
     if failures:
         notices.append(("Static checks failed",
@@ -218,8 +234,18 @@ def non_model_status_notices(score: dict) -> list[tuple[str, str]]:
             details.append("A dependency lockfile could not be read.")
         if "dependency_coverage_incomplete" in dependency:
             details.append("Dependency coverage is incomplete; some dependencies could not be checked.")
+        if "dependency_snapshot_scope" in dependency:
+            details.append("Only the recorded advisory snapshot was considered.")
+        if "dependency_runtime_reachability_not_checked" in dependency:
+            details.append("Application reachability was not checked.")
+        if "dependency_snapshot_unavailable" in dependency:
+            details.append("The bundled advisory catalog could not be checked.")
         title = ("Dependency check not run" if set(dependency) == {"dependency_check_not_run"}
+                 else "Dependency snapshot scope" if set(dependency) <= SCOPE_REASONS
                  else "Dependency check incomplete")
+        if has_snapshot:
+            title = ("Live OSV lookup not run" if set(dependency) == {"dependency_check_not_run"}
+                     else "Live dependency lookup incomplete")
         notices.append((title, " ".join(details) +
                         " This does not establish the absence of vulnerable dependencies."))
     if other:
@@ -258,7 +284,7 @@ def model_status_notice(score: dict) -> tuple[str, str] | None:
     if ("provider" in reasons or "provider_failure" in reasons
             or any(r.startswith("rubric_failed:") for r in reasons)):
         detail += " A model request failed."
-    if "cost_cap_exceeded" in reasons or "daily_spend_cap" in reasons:
+    if "cost_cap_exceeded" in reasons or "daily_spend_cap" in reasons or "paid_job_cost_cap" in reasons:
         detail += " A review spending limit was reached."
     if "input_truncated" in reasons:
         detail += " Token accounting suggests possible input truncation; this is not independently verified."
@@ -304,6 +330,8 @@ def evidence_label(finding: dict, historical: bool = False) -> str:
     if is_informational(finding):
         return "Deployment inventory — informational"
     source = finding.get("source")
+    if source == "dependency" and finding.get("verification_method") == "package_version_match":
+        return "Dependency version match — reachability unverified"
     if source == "llm" or str(finding.get("rule_id", "")).startswith("llm-"):
         return "Model hypothesis — unverified"
     if source == "static":
@@ -356,9 +384,23 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
                    "This does not verify the interpretation.")
     elif check.get("kind") == "static_rule":
         checked = "A static rule emitted this observation. Its consequence was not tested."
+    elif finding.get("source") == "dependency" and finding.get("verification_method") == "package_version_match":
+        checked = "A locked package version matched an advisory. Application reachability was not checked."
     else:
         checked = "Not recorded for this finding; do not assume the cited code was verified."
     rows = [("Source check", checked)]
+    if trace := sql_observation(finding):
+        rows.extend([
+            ("SQL source trace", f"{trace['assembly_kind']} at line {trace['assembly_line']} → "
+             f"{trace['sink_method']}() at line {trace['sink_line']}. Possible local flow; "
+             "input control and runtime behavior were not checked."),
+            ("SQL source SHA-256", trace["source_sha256"]),
+            *sql_driver_rows(trace),
+        ])
+    if trace := deserialization_observation(finding):
+        rows.extend(_deserialization_trace_rows(trace))
+    if finding.get("source") == "dependency" and finding.get("verification_method") == "package_version_match":
+        rows.extend(snapshot_finding_rows(record))
     if not historical and unsupported_transport(record):
         rows.append(("Needs exposure evidence",
                      "This transport-only hypothesis is excluded from the score. Runtime routing, logging "
@@ -485,7 +527,16 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
         rows.append(("Original model provenance — not independent confirmation",
                      json.dumps(projection["original"]["producer"], ensure_ascii=False)))
     if record.get("observation"):
-        label = "Source interpretation — outcome unverified" if projection else "Model interpretation — unverified"
+        if projection:
+            label = "Source interpretation — outcome unverified"
+        elif finding.get("source") == "llm" or str(finding.get("rule_id", "")).startswith("llm-"):
+            label = "Model interpretation — unverified"
+        elif finding.get("source") == "static":
+            label = "Static observation — unverified"
+        elif finding.get("source") == "dependency":
+            label = "Source observation — unverified"
+        else:
+            label = "Legacy observation — provenance not recorded"
         rows.append((label, record["observation"]))
     conditions = record.get("required_conditions")
     rows.append(("Required conditions — not checked", "\n".join(conditions) if conditions else
@@ -539,6 +590,12 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
     current forever.
     """
     skipped = manifest.get("sca_skipped_reason")
+    if manifest.get("dependency_cve") is not None or manifest.get("dependency_snapshot") is not None:
+        if skipped == "no_client":
+            return ("Live OSV lookup", "Not run. Bundled snapshot results are recorded separately.")
+        # This row describes only the network stage when both kinds are recorded.
+        return ("Live OSV lookup", _dependency_row({key: value for key, value in manifest.items()
+                                                   if key not in {"dependency_cve", "dependency_snapshot"}})[1])
     resolved = manifest.get("sca_dependencies")
     found = manifest.get("sca_dependencies_found")
     if skipped == "no_client":
@@ -613,6 +670,233 @@ def _dependency_row(manifest: dict) -> tuple[str, str]:
             f"this application was not checked.{aged}")
 
 
+def _deserialization_trace_rows(trace: dict) -> list[tuple[str, str]]:
+    return [("Deserialization source trace", f"Import-resolved {trace['loader']}() at line {trace['sink_line']}. "
+             "Input trust and loader runtime behavior were not checked."),
+            ("Deserialization source SHA-256", trace["source_sha256"])]
+
+
+def security_agent_rows(value: object) -> list[tuple[str, str]]:
+    """Explain the saved bounded review without substituting today's catalog.
+
+    Recipe identities and unmet prerequisites are recorded by the coordinator;
+    they do not authorize a patch or establish the candidate weakness at runtime.
+    The HTML consumers escape every label and value, including archive paths.
+    """
+    agent = agent_record(value)
+    if agent is None:
+        return []
+
+    def text(value: object, fallback: str = "Not recorded") -> str:
+        return value if isinstance(value, str) and value.strip() else fallback
+
+    def count(value: object) -> str:
+        return str(value) if type(value) is int and value >= 0 else "Not recorded"
+
+    def humanize(value: object) -> str:
+        return text(value).replace("_", " ")
+
+    stop = agent.get("stop_reason")
+    known_stops = {"agent_unavailable", "checks_unavailable", "candidate_budget_exhausted",
+                   "coverage_incomplete", "bounded_review_completed", "evidence_collection_incomplete",
+                   "synthetic_verification_incomplete", "synthetic_evidence_invalid", "source_evidence_invalid",
+                   "agent_task_failed", "agent_chain_invalid"}
+    # Saved diagnostics are untrusted. Only the producer's type-only error
+    # form is displayable; never echo exception messages or arbitrary reasons.
+    if not (isinstance(stop, str) and (stop in known_stops
+            or re.fullmatch(r"agent_error: [A-Za-z_][A-Za-z0-9_]{0,127}", stop))):
+        stop = "Stop reason not recorded"
+    catalog = agent.get("catalog")
+    catalog = catalog if isinstance(catalog, dict) else {}
+    source = agent.get("source")
+    source = source if isinstance(source, dict) else {}
+    budget = agent["budget"]
+    has_synthetic = any(isinstance(item, dict) and "synthetic_contract" in item
+                        for item in agent["observations"])
+    client_runtime = (agent.get("client_runtime")
+                      if agent.get("client_runtime_status") == "accepted" else None)
+    observation_label = "Python catalog observations" if agent.get("js_sql_review") else "observations"
+    rows = [
+        ("Pattern review", f"{agent['status']}; {len(agent['observations'])} {observation_label}; "
+         f"{stop}. Completion describes bounded review, not project safety."),
+        ("Pattern catalog", f"{text(catalog.get('version'), 'Unavailable')}; "
+         f"SHA-256: {text(catalog.get('sha256'), 'Unavailable')}"),
+        ("Pattern catalog cards", count(catalog.get("cards"))),
+        ("Pattern review source", f"Archive SHA-256: {text(source.get('archive_sha256'))}; "
+         f"engine: {text(source.get('engine_version'))}."),
+        ("Candidate review budget", f"{count(budget.get('processed'))} processed of "
+         f"{count(budget.get('candidates_found'))} candidates; "
+         f"{count(budget.get('candidates_omitted'))} omitted; "
+         f"limit: {count(budget.get('max_candidates'))}."),
+        ("Pattern review limits", (
+            "Selected static patterns only. Candidate classes remain unverified. "
+            "The scanner did not execute the imported client scenario. "
+            "Its reported results cover only project CRUD and cross-tenant isolation; "
+            "SQL exploit behavior and repair preconditions remain unverified. No automatic patch applied."
+            if client_runtime else
+            "Selected static patterns only. Candidate classes are unverified; "
+            "attacker control and runtime behavior were not checked. "
+            + ("Customer project runtime tests not run. No automatic patch applied." if has_synthetic else
+               "No runtime tests or automatic patches were run."))),
+    ]
+    from app.report.js_sql_review import js_sql_review_rows
+    rows.extend(js_sql_review_rows(agent.get("js_sql_review"), source))
+    if agent.get("js_sql_review_rejected"):
+        rows.append(("JavaScript SQL source review", "Saved source review rejected; findings remain unchanged."))
+    if client_runtime:
+        rows.extend([
+            ("Client runtime evidence", "Operator-supplied scenario results accepted for consistency only. "
+             "This is not independent runtime attestation or verification of the entire project."),
+            ("Client runtime scope", "Project creation, reading, update and archiving; cross-tenant access "
+             "denials and database state checks. "
+             f"{len(client_runtime['checks'])} reported checks passed. No SQL repair proof is established."),
+            ("Client runtime archive SHA-256", client_runtime["archive_sha256"]),
+            ("Client runtime run", client_runtime["run_id"]),
+            ("Client runtime scenario", client_runtime["scenario_id"]),
+            ("Client runtime scenario SHA-256", client_runtime["scenario_sha256"]),
+            ("Client runtime evidence SHA-256", client_runtime["evidence_sha256"]),
+        ])
+    elif agent.get("client_runtime_status") == "rejected":
+        rows.append(("Client runtime evidence unavailable", "The supplied client runtime evidence could not "
+                     "be validated. Its reported results are not accepted as evidence."))
+    plan_labels = {
+        "analyzed": "Analyzed within the recorded scope",
+        "not_applicable": "No eligible files for this check",
+        "partial": "Partial check; coverage is incomplete",
+        "unavailable": "Check unavailable; coverage is not established",
+    }
+    for item in agent["plan"]:
+        if not isinstance(item, dict):
+            continue
+        check = text(item.get("check"))
+        status = item.get("status")
+        detail = plan_labels.get(status, "Review status not recorded") if isinstance(status, str) else (
+            "Review status not recorded")
+        detail += f". Pattern: {text(item.get('pattern_id'))}; check: {check}."
+        coverage = (normalize_rule_coverage({check: item.get("coverage")}) or {}).get(check)
+        if coverage is None:
+            detail += " File coverage not recorded."
+        else:
+            detail += (f" {coverage['analyzed_files']} of {coverage['eligible_files']} eligible files analyzed; "
+                       f"{coverage['attempted_files']} attempted; {coverage['skipped_files']} not fully analyzed; "
+                       f"{coverage['excluded_files']} excluded from {coverage['files_total']} archive files. "
+                       f"Not fully analyzed: {_rule_reasons(coverage['skip_reasons'], RULE_SKIP_LABELS)}. "
+                       f"Excluded: {_rule_reasons(coverage['exclusion_reasons'], RULE_EXCLUSION_LABELS)}.")
+        rows.append((f"Pattern check: {text(item.get('title'))}", detail))
+    if not agent["observations"]:
+        rows.append(("Pattern observations",
+                     ("No Python catalog candidates recorded. An empty result does not establish safety."
+                      if agent.get("js_sql_review") else
+                      "No reviewed candidates recorded. An empty result does not establish safety.")))
+    displayed = 0
+    for index, observation in enumerate(agent["observations"][:128], 1):
+        if (not isinstance(observation, dict) or not isinstance(observation.get("file"), str)
+                or type(observation.get("line")) is not int or observation["line"] < 1
+                or (observation.get("state"), observation.get("next_action")) not in (
+                    ("needs_evidence", "manual_review"),
+                    ("source_evidence_collected", "review_runtime_contract"),
+                    ("synthetic_recipe_verified", "review_project_runtime_contract"),
+                )):
+            continue
+        recipe = observation.get("recipe")
+        if (not isinstance(recipe, dict) or recipe.get("automatic_apply") is not False
+                or recipe.get("status") not in ("manual_guidance", "not_available")):
+            continue
+        evidence = observation.get("evidence")
+        finding = {"source": "static", "rule_id": observation.get("rule_id"),
+                   "file": observation.get("file"), "line": observation.get("line"),
+                   "claim_evidence": {"version": 1, **evidence}} if isinstance(evidence, dict) else {}
+        deserialization = observation.get("rule_id") == "unsafe-deserialization"
+        trace = deserialization_observation(finding) if deserialization else sql_observation(finding)
+        acquisition = normalize_acquisition(observation.get("acquisition"), trace)
+        synthetic = normalize_synthetic_contract(observation.get("synthetic_contract"), observation, source, catalog)
+        verified = observation.get("state") == "synthetic_recipe_verified"
+        collected = observation.get("state") in ("source_evidence_collected", "synthetic_recipe_verified")
+        if verified and (synthetic is None or synthetic["status"] != "passed"):
+            continue
+        if collected and (acquisition is None or acquisition["status"] != "completed"):
+            continue
+        missing = observation.get("missing_evidence")
+        missing = [item for item in missing if isinstance(item, str)] if isinstance(missing, list) else []
+        if deserialization and acquisition is not None and (
+                observation.get("pattern_id") != "python-unsafe-deserialization"
+                or not {"input_trust_boundary", "loader_runtime_contract"} <= set(missing)):
+            continue
+        displayed += 1
+        rows.append((f"Pattern observation {index}",
+                     f"{text(observation.get('title'))} — {text(observation.get('file'))}:"
+                     f"{count(observation.get('line'))}. Pattern: {text(observation.get('pattern_id'))}, "
+                     f"revision {count(observation.get('pattern_revision'))}; "
+                     f"rule: {text(observation.get('rule_id'))}."))
+        weaknesses = observation.get("weaknesses")
+        weaknesses = [item for item in weaknesses if isinstance(item, str) and re.fullmatch(r"CWE-[1-9][0-9]*", item)
+                      ] if isinstance(weaknesses, list) else []
+        rows.append(("Candidate weakness classes",
+                     ", ".join(weaknesses) + " — candidate classes, not verified vulnerabilities."
+                     if weaknesses else "Not recorded; do not infer a weakness class."))
+        rows.append(("Review state", "Saved synthetic recipe evidence passed; customer project runtime behavior "
+                     "and repair preconditions remain unverified." if verified else
+                     "Supported source evidence collected; runtime behavior and repair "
+                     "preconditions remain unverified." if collected else
+                     "Needs evidence; the candidate and repair preconditions remain unverified."))
+        rows.extend(acquisition_rows(acquisition, trace))
+        if synthetic is not None:
+            rows.extend(synthetic_contract_rows(synthetic))
+        elif "synthetic_contract" in observation:
+            rows.append(("Synthetic evidence unavailable", "The saved synthetic evidence could not be validated. "
+                         "Customer project runtime behavior remains unverified."))
+        if "acquisition" in observation and acquisition is None:
+            rows.append(("Source investigation unavailable", "The saved evidence could not be validated. "
+                         "Do not treat missing source facts as established."))
+        if trace and deserialization:
+            rows.extend(_deserialization_trace_rows(trace))
+        elif trace:
+            rows.extend([
+                ("SQL source trace", f"{humanize(trace['assembly_kind'])} at line {trace['assembly_line']} → "
+                 f"{trace['sink_method']}() at line {trace['sink_line']}. Possible local flow; "
+                 "input control and runtime behavior were not checked."),
+                ("SQL source SHA-256", trace["source_sha256"]),
+                *sql_driver_rows(trace),
+            ])
+        else:
+            rows.append(("Source evidence", "Static rule observation only; no additional source trace recorded."
+                         if deserialization else
+                         "Static rule observation only; no additional SQL source trace recorded."))
+        rows.append(("Missing evidence", "; ".join(
+                     "Calling code and origin of the file (not checked)"
+                     if (item == "request_input_source" and deserialization and trace
+                         and trace.get("sink_method") == "load")
+                     else humanize(item) for item in missing) if missing else
+                     "Not recorded; do not assume the repair preconditions are satisfied."))
+        rows.append(("Next step", "Review the customer project runtime contract: confirm authorization, deployed "
+                     "reachability, intended value types and expected query behavior before choosing a repair."
+                     if verified else "Review caller-supplied paths and file producers. Require authenticated, "
+                     "trusted bytes "
+                     "or reject unsupported serialization formats; confirm loader options and expected object types "
+                     "before choosing a repair. File input does not "
+                     "establish an HTTP or CLI entry point."
+                     if collected and deserialization and acquisition["version"] == 3
+                     else "Review the runtime contract: confirm input trust, loader options and expected "
+                     "object types before choosing a repair." if collected and deserialization else
+                     "Review the runtime contract: confirm reachability, input control and expected "
+                     "query behavior before choosing a repair." if collected else
+                     "Manual review: gather the missing evidence before evaluating a repair."))
+        guidance = (f"{text(recipe.get('id'))} — manual guidance only; establish the missing preconditions "
+                    "before applying the recorded recipe. No automatic patch was applied."
+                    if recipe.get("status") == "manual_guidance" and recipe.get("automatic_apply") is False else
+                    "No repair recipe available. Manual review is required; no automatic patch was applied.")
+        rows.append(("Repair guidance", guidance))
+        steps = observation.get("steps")
+        steps = [step for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
+        if steps:
+            rows.append(("Review steps", "; ".join(f"{humanize(step.get('action'))}: {humanize(step.get('result'))}"
+                                                   for step in steps)))
+    if displayed < len(agent["observations"]):
+        rows.append(("Observation display incomplete", f"{len(agent['observations']) - displayed} records "
+                     "could not be displayed within the supported schema and limit."))
+    return rows
+
+
 def manifest_rows(score: dict) -> list[tuple[str, str]]:
     manifest = score.get("scan_manifest")
     if not isinstance(manifest, dict):
@@ -624,11 +908,13 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Files in archive", str(manifest.get("archive_files", "Not recorded"))),
         ("Static checks run", ", ".join(manifest.get("static_checks", [])) or "Not recorded"),
         _dependency_row(manifest),
+        *snapshot_rows(manifest.get("dependency_cve"), manifest.get("dependency_snapshot")),
         *cve_rows(manifest.get("sca_cve")),
         ("Last responding model", manifest.get("model") or "No model response recorded"),
         ("Model responses", str(manifest.get("model_calls", 0))),
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),
     ]
+    rows.extend(security_agent_rows(manifest.get("security_agent")))
     accounting = manifest.get("model_findings")
     rows.extend((f"Static check failed: {item['check']}", item["reason"])
                 for item in normalize_check_failures(manifest.get("static_checks_not_run")))

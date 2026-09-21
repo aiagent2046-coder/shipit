@@ -23,8 +23,12 @@ Queries send resolved package ecosystems, names and versions to OSV. They do
 not send the source archive. Official CVE lookups send only CVE IDs from the
 OSV answer. `CVE_ENABLED=0` disables this enrichment independently, including
 CLI `--sca`, while preserving OSV checks. Current inventory inputs are `package-lock.json`,
-exactly pinned entries in `requirements.txt`, and `poetry.lock`; unsupported or
+exactly pinned entries in `requirements.txt`, `poetry.lock`, `pnpm-lock.yaml` v9,
+`bun.lock` v1 and `uv.lock` v1 (revisions 0–3); unsupported or
 incomplete inputs cannot establish a clean dependency inventory.
+Binary `bun.lockb` requires a text lockfile. Text takes precedence when both
+Bun formats are present. The same inventory feeds the free bundled CVE/GHSA
+check and optional live OSV lookups.
 
 ## Report contract
 

@@ -45,6 +45,7 @@ class CheckFinding:
     explanation: str = ""
     fix_hint: str = ""
     context: str | None = None
+    claim_evidence: dict | None = None
 
 
 def archive_root(names: list[str]) -> str:
@@ -116,7 +117,7 @@ _DEPLOY_CONFIG_SUFFIXES = (".service", ".tf", ".tfvars")
 
 
 def _committed_dependency_dirs(files: list[str]) -> list[tuple[str, int]]:
-    """(directory, tracked file count) for each dependency tree in the repo.
+    """(directory, archive file count) for each dependency-like tree.
 
     Reports the TOP-most occurrence only. A virtualenv contains
     site-packages/ and dozens of __pycache__/ directories, and listing each as
@@ -452,21 +453,22 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
     for directory, count in _committed_dependency_dirs(files):
         findings.append(CheckFinding(
             "dependency-dir-committed",
-            f"{directory} is committed to the repository ({count} files)",
+            f"Archive includes {directory} ({count} files)",
             severity="medium", confidence=0.95, category="Deploy",
             file=directory,
             explanation=(
                 f"The archive contains {count} files under {directory}, a "
                 "directory name commonly used for installed dependencies or "
-                "generated caches. File names alone do not establish how "
+                "generated caches. File names alone do not establish Git tracking, how "
                 "these files were created, whether they are intentionally "
                 "vendored, or which versions run in production."
             ),
             fix_hint=(
                 "Check whether this directory contains reproducible installed "
-                "dependencies or generated caches. If it does, add it to "
-                f".gitignore and stop tracking it with `git rm -r --cached {directory}`, "
-                "then document how to recreate it. Keep intentional vendored "
+                "dependencies or generated caches. If so, document how to recreate "
+                "it and exclude it from future source archives. Check Git tracking "
+                "separately before deciding whether to add an ignore rule and "
+                "remove tracked copies. Keep intentional vendored "
                 "source or test data when the project requires it."
             ),
         ))

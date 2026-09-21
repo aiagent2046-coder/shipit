@@ -13,7 +13,7 @@ from app.scan.pipeline import content_digest, run_scan
 from app.worker import main as worker
 from tests.conftest import run_audit_job
 from tests.test_audit_determinism import _post, force_pro_account
-from tests.test_audit_preview_history import Repo, row, RAW
+from tests.test_audit_preview_history import Repo, row, RAW, SNAPSHOT
 from tests.test_sca_wiring import fake_client, repo_with_lockfile
 from tests.test_sca_stage import make_zip
 
@@ -28,7 +28,7 @@ INVENTORY = {"version": 1, "asked_at": "2026-09-10T00:00:00+00:00", "found": 1,
 async def test_baseline_only_copy_preserves_inventory(monkeypatch, path):
     paid = row("static+llm", [], dependency_inventory=INVENTORY)
     repo = Repo(paid)
-    runner = AsyncMock(side_effect=AssertionError("Cached code must not be scanned again"))
+    runner = AsyncMock(wraps=worker._run_scan_offthread)
     monkeypatch.setattr(worker, "_run_scan_offthread", runner)
     if path == "worker":
         result = await run_audit_job(RAW, llm_client=LLMClient(providers=[]), audit_repo=repo,
@@ -40,12 +40,18 @@ async def test_baseline_only_copy_preserves_inventory(monkeypatch, path):
     assert result["id"] != paid["id"]
     assert result["dependency_inventory"] == INVENTORY
     assert result["score_json"]["analysis_reused_from"] == paid["id"]
-    runner.assert_not_awaited()
+    if path == "worker":
+        runner.assert_awaited_once()
+        assert runner.call_args.kwargs["depth"] == "static+preview"
+        assert runner.call_args.kwargs["llm_skip_reason"] == "no_providers_configured"
+    else:
+        runner.assert_not_awaited()
 
 
 def unqueried_paid(raw, reason="no_client"):
     scan = run_scan(raw, LLMClient(providers=[]), sca_client=None)
-    score = {**scan["score"], "basis": "static+llm", "free_baseline": {"status": "completed"}}
+    score = {**scan["score"], "basis": "static+llm", "free_baseline": {"status": "completed",
+             "score": {"scan_manifest": {"dependency_snapshot": SNAPSHOT["dependency_snapshot"]}}}}
     score["scan_manifest"]["sca_skipped_reason"] = reason
     return row("static+llm", scan["findings"], score_json=score, content_hash=content_digest(raw))
 

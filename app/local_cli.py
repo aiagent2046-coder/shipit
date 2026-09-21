@@ -23,7 +23,9 @@ from app.logging_config import configure_logging
 from app.report.plain_language import plain_fields
 from app.scan.browser import ScanSession
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS
+from app.scan.security_agent import agent_record
 from app.scan.version import AUDIT_ENGINE_VERSION
+from app.scan.remediation_catalog import remediation_hint, remediation_record
 
 # Keep local archives within both the static and offline dependency matcher budgets.
 MAX_FILES = 20_000
@@ -91,7 +93,13 @@ def snapshot(root: Path, state_dir: Path) -> tuple[bytes, dict]:
                 if len(body) + counts["bytes"] > MAX_BYTES:
                     raise ValueError("project exceeds local byte budget")
                 path = (relative / name).as_posix()
-                archive.writestr(path, body)
+                # Stable metadata keeps the archive/evidence identity tied to
+                # included paths and bytes rather than the scan's wall clock.
+                entry = zipfile.ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
+                entry.create_system = 3
+                entry.external_attr = 0o600 << 16
+                entry.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(entry, body)
                 fingerprint.update(path.encode() + b"\0" + hashlib.sha256(body).digest())
                 counts["files"] += 1
                 counts["bytes"] += len(body)
@@ -129,6 +137,11 @@ def record(db: sqlite3.Connection, root: Path, report: dict) -> dict:
         summary = {"created_at": report["created_at"], "engine_version": report["engine_version"],
                    "catalog_sha256": report["catalog"]["sha256"], "findings": len(report["findings"]),
                    "checks_not_run": len(report["checks_not_run"]), "changes": changes}
+        if agent := agent_record(report.get("security_agent")):
+            summary["pattern_review"] = {
+                "status": agent["status"], "catalog": agent["catalog"],
+                "observations": len(agent["observations"]), "stop_reason": agent["stop_reason"],
+            }
         db.execute("INSERT INTO scans(root, created_at, summary, identities) VALUES (?, ?, ?, ?)",
                    (str(root), report["created_at"], json.dumps(summary), json.dumps(identities)))
         db.execute("DELETE FROM scans WHERE root = ? AND id NOT IN "
@@ -169,6 +182,9 @@ def poll_project(db: sqlite3.Connection, root: Path, state_dir: Path,
 
 
 def exit_status(report: dict, threshold: str) -> int:
+    agent = agent_record(report.get("security_agent"))
+    if agent and agent["status"] in {"partial", "unavailable"}:
+        return 2
     # 2 signals unavailable/incomplete execution; 1 is the requested finding gate.
     coverage = report.get("dependency_cve", {})
     if (report["checks_not_run"] or report["can_continue"]
@@ -208,6 +224,9 @@ def _range_preview(row: dict) -> dict:
 
 def _dependency_task(findings: list[dict]) -> dict:
     evidence = findings[0]["claim_evidence"]
+    cards = [remediation_record(f.get("claim_evidence")) for f in findings]
+    # A grouped task must not promote one member's plan over missing or different evidence.
+    remediation = cards[0] if cards and cards[0] is not None and all(c == cards[0] for c in cards) else None
     occurrences = {json.dumps(row, sort_keys=True): row for finding in findings
                    for row in finding["claim_evidence"].get("occurrences", []) if isinstance(row, dict)}
     locations = [occurrences[key] for key in sorted(occurrences)]
@@ -256,7 +275,9 @@ def _dependency_task(findings: list[dict]) -> dict:
         "additional_advisory_ids": max(0, len(advisory_ids) - 8),
         "advisories": advisories, "additional_advisory_details": max(0, len(findings) - 5),
         "explanation": "The locked version matches these catalog advisories; reachability is not assessed.",
-        "action": ("Review the linked advisories and their individual ranges; update the dependency and lockfile. "
+        **({"remediation": remediation} if remediation is not None else {}),
+        "action": (remediation_hint(remediation) if remediation is not None else
+                   "Review the linked advisories and their individual ranges; update the dependency and lockfile. "
                    "A fixed boundary for one advisory is not a safe version for all advisories. "
                    + ("Development scope can still affect builds and CI." if scope == "development"
                       else "Verify where the affected functionality runs.")),
@@ -348,6 +369,18 @@ def display(report: dict, as_json: bool, show_contextual: bool = False) -> None:
             "examples": dict(list(excluded.items())[:5]), "additional": excluded_omitted,
         }))
     print("Folder exclusions: " + json.dumps(report["snapshot"]["excluded"]))
+    if agent := agent_record(report.get("security_agent")):
+        print("Pattern review: " + json.dumps({
+            "status": agent["status"], "catalog": agent["catalog"], "budget": agent["budget"],
+            "stop_reason": agent["stop_reason"],
+        }))
+        for observation in agent["observations"][:10]:
+            print("Review action: " + json.dumps({key: observation[key] for key in (
+                "pattern_id", "weaknesses", "file", "line", "evidence", "missing_evidence", "next_action",
+            )}))
+        if len(agent["observations"]) > 10:
+            print("Additional pattern observations are available in --json.")
+        print("Pattern review classifies static observations; recipe applicability still needs evidence.")
     gaps = {name: row["skip_reasons"] for name, row in report.get("rule_coverage", {}).items()
             if any(row.get("skip_reasons", {}).values())}
     if gaps or report["checks_not_run"] or report["can_continue"]:
@@ -382,6 +415,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", type=Path, default=default_state_dir())
     commands = parser.add_subparsers(dest="command", required=True)
+    patterns = commands.add_parser("patterns", help="show the bundled weakness and verification cards")
+    patterns.add_argument("--json", action="store_true", help="complete machine-readable pattern catalog")
+    recipes = commands.add_parser("recipes", help="show the bundled advisory-backed upgrade recipes")
+    recipes.add_argument("--json", action="store_true", help="complete machine-readable recipe catalog")
     for name in ("scan", "watch", "history"):
         command = commands.add_parser(name)
         command.add_argument("project", type=Path)
@@ -396,6 +433,28 @@ def main(argv: list[str] | None = None) -> int:
     update = commands.add_parser("update")
     update.add_argument("--revision", required=True, help="full Shipit commit SHA; this command uses the network")
     args = parser.parse_args(argv)
+    if args.command == "recipes":
+        from app.scan.remediation_catalog import recipe_catalog
+        catalog = recipe_catalog()
+        if args.json:
+            print(json.dumps(catalog, ensure_ascii=False))
+        else:
+            print(f"Drydock remediation catalog {catalog['catalog_version']}; review plans, no automatic updates")
+            for recipe in catalog["recipes"]:
+                print(json.dumps(recipe))
+        return 0
+    if args.command == "patterns":
+        from app.scan.pattern_catalog import catalog_manifest
+        catalog = catalog_manifest()
+        if args.json:
+            print(json.dumps(catalog, ensure_ascii=False))
+        else:
+            print(f"Drydock pattern catalog {catalog['catalog_version']} ({catalog['catalog_sha256'][:12]})")
+            for card in catalog["cards"]:
+                print(json.dumps({key: card[key] for key in (
+                    "id", "revision", "title", "weaknesses", "detection", "recipe",
+                )}))
+        return 0
     if args.command == "watch" and (not math.isfinite(args.interval) or args.interval < 1):
         parser.error("interval must be finite and at least one second")
     if os.name != "posix":

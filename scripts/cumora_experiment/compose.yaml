@@ -1,0 +1,60 @@
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: control
+      POSTGRES_PASSWORD: disposable-control-only
+      POSTGRES_DB: cumora_control
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks: [isolated]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U control -d cumora_control']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  redis:
+    image: redis:7-bookworm
+    command: [redis-server, --save, '', --appendonly, 'no']
+    networks: [isolated]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://control:disposable-control-only@postgres:5432/cumora_control # scan-allow: disposable database on internal Docker network only
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: offline-control-placeholder
+      OPENAI_BASE_URL: http://127.0.0.1:9/v1
+      PORT: '5181'
+      ENABLE_SCANNER: 'false'
+      ENABLE_IDLE: 'false'
+      IDLE_INTERVAL_MS: '0'
+      ENABLE_AGENT_POD_GC: 'false'
+      ENABLE_CHROME_PVC_GC: 'false'
+      ENABLE_CLUSTER_MONITOR: 'false'
+      ENABLE_AGENT_RUN_SWEEPER: 'false'
+      EMAIL_RETRY_INTERVAL_MS: '0'
+      EMAIL_GC_INTERVAL_MS: '0'
+      DB_GC_INTERVAL_MS: '0'
+      LLM_ROLLUP_INTERVAL_MS: '0'
+      WORKSPACE_CLEANUP_INTERVAL_MS: '0'
+      POLL_SWEEP_INTERVAL_MS: '0'
+    networks: [isolated]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=128m
+      - /app/server/uploads:uid=1000,gid=1000,mode=0700,size=32m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 2g
+networks:
+  isolated:
+    internal: true

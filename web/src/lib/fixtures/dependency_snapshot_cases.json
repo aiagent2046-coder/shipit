@@ -1,0 +1,638 @@
+[
+  {
+    "name": "checked",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": "checked",
+    "notice_titles": [],
+    "fragments": [
+      "2 of 2 dependency versions checked. Advisory assessments: 1 affected; 2 unaffected; 0 unknown.",
+      "source age in days: cvelist: 2, github-reviewed: 3.",
+      "GitHub-reviewed GHSA",
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    ]
+  },
+  {
+    "name": "partial",
+    "coverage": {
+      "status": "partial",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 1,
+        "not_in_catalog": 3
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {
+        "unsupported_osv_version": 1
+      },
+      "manifest_gap_reason_counts": {
+        "dynamic_dependencies_without_lock": 1
+      },
+      "incomplete_manifests": {
+        "private-app/requirements.txt": "unresolved"
+      },
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 1
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": "partial",
+    "notice_titles": [
+      "Dependency snapshot incomplete"
+    ],
+    "fragments": [
+      "1 unknown",
+      "3 unique package/version entries absent",
+      "unsupported osv version: 1",
+      "dynamic dependencies without lock: 1",
+      "evaluations omitted: 1"
+    ]
+  },
+  {
+    "name": "seven-day-boundary",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-22T00:00:00Z"
+    },
+    "status": "checked",
+    "notice_titles": [
+      "Dependency snapshot stale"
+    ],
+    "fragments": [
+      "Stale at the recorded check; source age in days: cvelist: 6, github-reviewed: 7."
+    ]
+  },
+  {
+    "name": "future-source-date",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-14T00:00:00Z"
+    },
+    "status": "checked",
+    "notice_titles": [
+      "Dependency snapshot freshness unknown"
+    ],
+    "fragments": [
+      "Unknown; a source timestamp is later"
+    ]
+  },
+  {
+    "name": "legacy-snapshot-without-check-time",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": null,
+    "status": "checked",
+    "notice_titles": [
+      "Dependency snapshot freshness unknown"
+    ],
+    "fragments": [
+      "Unknown; check time is not recorded."
+    ]
+  },
+  {
+    "name": "unavailable-retained",
+    "coverage": {
+      "status": "unavailable",
+      "limitations": [
+        "cve_catalog_invalid"
+      ]
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": null,
+      "checked_at": null,
+      "retained_findings": 2
+    },
+    "status": "unavailable",
+    "notice_titles": [
+      "Dependency snapshot unavailable",
+      "Earlier dependency findings retained"
+    ],
+    "fragments": [
+      "bundled advisory snapshot"
+    ]
+  },
+  {
+    "name": "partial-retained",
+    "coverage": {
+      "status": "partial",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 1,
+        "not_in_catalog": 3
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {
+        "unsupported_osv_version": 1
+      },
+      "manifest_gap_reason_counts": {
+        "dynamic_dependencies_without_lock": 1
+      },
+      "incomplete_manifests": {
+        "private-app/requirements.txt": "unresolved"
+      },
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 1
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z",
+      "retained_findings": 2
+    },
+    "status": "partial",
+    "notice_titles": [
+      "Dependency snapshot incomplete",
+      "Earlier dependency findings retained"
+    ],
+    "fragments": [
+      "unsupported osv version: 1"
+    ]
+  },
+  {
+    "name": "boolean-count",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": true,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": null,
+    "notice_titles": [
+      "Dependency snapshot unreadable"
+    ],
+    "fragments": [
+      "Coverage not recorded or unreadable"
+    ]
+  },
+  {
+    "name": "contradictory-complete",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 0,
+        "unknown": 1,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": null,
+    "notice_titles": [
+      "Dependency snapshot unreadable"
+    ],
+    "fragments": [
+      "Coverage not recorded or unreadable"
+    ]
+  },
+  {
+    "name": "unhashable-status",
+    "coverage": {
+      "status": [
+        "checked"
+      ],
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": null,
+    "notice_titles": [
+      "Dependency snapshot unreadable"
+    ],
+    "fragments": [
+      "Coverage not recorded or unreadable"
+    ]
+  },
+  {
+    "name": "prototype-source",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "constructor": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": null,
+    "notice_titles": [
+      "Dependency snapshot unreadable"
+    ],
+    "fragments": [
+      "Coverage not recorded or unreadable"
+    ]
+  },
+  {
+    "name": "invalid-date",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-02-30T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": null,
+    "notice_titles": [
+      "Dependency snapshot unreadable"
+    ],
+    "fragments": [
+      "Coverage not recorded or unreadable"
+    ]
+  },
+  {
+    "name": "absent",
+    "coverage": null,
+    "metadata": null,
+    "status": null,
+    "notice_titles": [],
+    "fragments": []
+  },
+  {
+    "name": "invalid-timezone-offset",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00+00:90"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": null,
+    "notice_titles": [
+      "Dependency snapshot unreadable"
+    ],
+    "fragments": [
+      "Coverage not recorded or unreadable"
+    ]
+  },
+  {
+    "name": "unsupported-binary-bun",
+    "coverage": {
+      "status": "partial",
+      "dependencies_found": 0,
+      "dependencies_checked": 0,
+      "status_counts": {
+        "affected": 0,
+        "unaffected": 0,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {
+        "unsupported_bun_binary_lockfile": 1
+      },
+      "incomplete_manifests": {
+        "bun.lockb": "unsupported"
+      },
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": "partial",
+    "notice_titles": [
+      "Dependency snapshot incomplete"
+    ],
+    "fragments": [
+      "Binary bun.lockb is unsupported; provide a text bun.lock",
+      "0 of 0 dependency versions checked."
+    ]
+  }
+]

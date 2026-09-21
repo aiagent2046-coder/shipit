@@ -109,3 +109,27 @@ input[type=file]::file-selector-button{border:1px solid #3d3d43;border-radius:5p
 .contextual-findings{margin-top:12px;border-top:1px solid var(--border);padding-top:18px}
 .contextual-findings>summary{cursor:pointer;font-size:15px;font-weight:550}
 .finding-metadata{color:var(--muted);font-size:12px!important}
+.owner-report-summary{padding:21px 23px;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:22px 0;overflow-wrap:anywhere}
+.owner-report-summary p,.owner-coverage-notes{font-size:13px}
+.owner-coverage-notes{color:var(--muted);padding-left:20px}
+.owner-report-link{text-decoration:underline;text-underline-offset:3px;color:var(--accent);font-size:13px}
+.owner-card-fields{font-size:13px;margin:18px 0}
+.owner-card-fields>div{margin-top:14px}
+.owner-card-fields dt{font-weight:600}
+.owner-card-fields dd{margin:4px 0 0;color:var(--muted)}
+.owner-card-fields p{margin:4px 0}
+.owner-developer-details>summary{cursor:pointer;font-size:13px;color:var(--muted)}
+.owner-original-finding{margin-top:12px;padding:12px}
+.owner-finding{scroll-margin-top:20px}
+.owner-roadmap{margin:24px 0;overflow-wrap:anywhere}
+.owner-roadmap>h3{font-size:20px;margin-bottom:8px}
+.roadmap-stage{margin-top:24px}
+.roadmap-stage>h4{font-size:15px;margin:0 0 12px;color:var(--accent)}
+.roadmap-task{padding:18px 20px;border:1px solid var(--border);border-radius:10px;background:var(--surface);margin:10px 0;scroll-margin-top:20px}
+.roadmap-task h5{font-size:15px;margin:0 0 8px;line-height:1.5}
+.roadmap-task p,.roadmap-task summary{font-size:13px;line-height:1.65}
+.roadmap-task summary{cursor:pointer;color:var(--accent)}
+.roadmap-task a{text-decoration:underline;text-underline-offset:3px}
+.roadmap-task .owner-card-fields>dt{margin-top:12px}
+.roadmap-task ul{padding-left:20px;margin:4px 0}
+.roadmap-finding-anchor,#roadmap-coverage{scroll-margin-top:20px}
