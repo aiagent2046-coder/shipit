@@ -88,6 +88,18 @@ def test_corrupt_or_overclaiming_saved_card_cannot_be_rendered_as_checked(path, 
     assert not any(label == "Upgrade review" for label, _ in snapshot_finding_rows(finding["claim_evidence"]))
 
 
+def test_unsupported_ecosystem_without_recipe_does_not_crash_report():
+    finding = sample()
+    evidence = finding["claim_evidence"]
+    card = evidence["remediation"]
+    evidence["ecosystem"] = card["binding"]["ecosystem"] = "RubyGems"
+    card.update(recipe=None, status="manual_review", candidate_versions=[])
+    assert remediation_record(evidence) is None
+    rows = snapshot_finding_rows(evidence)
+    assert rows
+    assert not any(label == "Upgrade review" for label, _ in rows)
+
+
 def test_missing_manual_record_hash_does_not_crash_report():
     finding = sample()
     card = finding["claim_evidence"]["remediation"]
