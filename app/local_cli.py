@@ -25,6 +25,7 @@ from app.scan.browser import ScanSession
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS
 from app.scan.security_agent import agent_record
 from app.scan.version import AUDIT_ENGINE_VERSION
+from app.scan.remediation_catalog import remediation_hint, remediation_record
 
 # Keep local archives within both the static and offline dependency matcher budgets.
 MAX_FILES = 20_000
@@ -223,6 +224,9 @@ def _range_preview(row: dict) -> dict:
 
 def _dependency_task(findings: list[dict]) -> dict:
     evidence = findings[0]["claim_evidence"]
+    cards = [remediation_record(f.get("claim_evidence")) for f in findings]
+    # A grouped task must not promote one member's plan over missing or different evidence.
+    remediation = cards[0] if cards and cards[0] is not None and all(c == cards[0] for c in cards) else None
     occurrences = {json.dumps(row, sort_keys=True): row for finding in findings
                    for row in finding["claim_evidence"].get("occurrences", []) if isinstance(row, dict)}
     locations = [occurrences[key] for key in sorted(occurrences)]
@@ -271,7 +275,9 @@ def _dependency_task(findings: list[dict]) -> dict:
         "additional_advisory_ids": max(0, len(advisory_ids) - 8),
         "advisories": advisories, "additional_advisory_details": max(0, len(findings) - 5),
         "explanation": "The locked version matches these catalog advisories; reachability is not assessed.",
-        "action": ("Review the linked advisories and their individual ranges; update the dependency and lockfile. "
+        **({"remediation": remediation} if remediation is not None else {}),
+        "action": (remediation_hint(remediation) if remediation is not None else
+                   "Review the linked advisories and their individual ranges; update the dependency and lockfile. "
                    "A fixed boundary for one advisory is not a safe version for all advisories. "
                    + ("Development scope can still affect builds and CI." if scope == "development"
                       else "Verify where the affected functionality runs.")),
@@ -411,6 +417,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     patterns = commands.add_parser("patterns", help="show the bundled weakness and verification cards")
     patterns.add_argument("--json", action="store_true", help="complete machine-readable pattern catalog")
+    recipes = commands.add_parser("recipes", help="show the bundled advisory-backed upgrade recipes")
+    recipes.add_argument("--json", action="store_true", help="complete machine-readable recipe catalog")
     for name in ("scan", "watch", "history"):
         command = commands.add_parser(name)
         command.add_argument("project", type=Path)
@@ -425,6 +433,16 @@ def main(argv: list[str] | None = None) -> int:
     update = commands.add_parser("update")
     update.add_argument("--revision", required=True, help="full Shipit commit SHA; this command uses the network")
     args = parser.parse_args(argv)
+    if args.command == "recipes":
+        from app.scan.remediation_catalog import recipe_catalog
+        catalog = recipe_catalog()
+        if args.json:
+            print(json.dumps(catalog, ensure_ascii=False))
+        else:
+            print(f"Drydock remediation catalog {catalog['catalog_version']}; review plans, no automatic updates")
+            for recipe in catalog["recipes"]:
+                print(json.dumps(recipe))
+        return 0
     if args.command == "patterns":
         from app.scan.pattern_catalog import catalog_manifest
         catalog = catalog_manifest()

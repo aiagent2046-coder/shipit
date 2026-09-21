@@ -20,6 +20,7 @@ from app.sca.lockfiles import (
     collect_dependency_inventory, dependency_exclusion_reason, normalize_pypi,
     occurrence_evidence, occurrence_summary,
 )
+from app.scan.remediation_catalog import UpgradeBudget, plan_dependency_upgrade, remediation_hint
 
 RULE_ID = "dependency-cve-match"
 MAX_ARCHIVE_BYTES = 50_000_000
@@ -483,6 +484,7 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
         ],
     }
     findings = []
+    remediation_budget = UpgradeBudget()
     result = {"findings": findings, "coverage": coverage}
     packages = catalog.get("packages") if isinstance(catalog, dict) else None
     if sources is None or not isinstance(packages, dict):
@@ -567,6 +569,7 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
         # is incomplete; never emit a positive based on that partial group.
         truncated = coverage["advisory_evaluations"] >= MAX_EVALUATIONS and coverage["evaluations_truncated"] > 0
         assessments = []
+        remediation = None
         for group_id, group in grouped.items():
             statuses = {assessment["status"] for _, assessment, _ in group}
             status = next(iter(statuses)) if len(statuses) == 1 and not truncated else "unknown"
@@ -648,6 +651,13 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
                 evidence["cve_id"] = cve_id
             if ghsa_id:
                 evidence["ghsa_id"] = ghsa_id
+            if remediation is None:
+                remediation = plan_dependency_upgrade(
+                    dep.ecosystem, name, dep.version, entries, sources,
+                    identities_complete=identities_complete and not truncated, budget=remediation_budget,
+                )
+            # Persist the recipe with its source binding, including honest manual-review outcomes.
+            evidence["remediation"] = remediation
             findings.append({
                 "rule_id": RULE_ID,
                 "title": f"{name} {dep.version} matches {advisory_id}",
@@ -659,10 +669,7 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
                     "reachability and exploitability have not been verified. "
                     + occurrence_summary(dep)
                 ),
-                "fix_hint": (
-                    "Review the advisory's affected range and upgrade to a supported "
-                    "fixed version; verify whether the affected functionality is used."
-                ),
+                "fix_hint": remediation_hint(remediation),
                 "source": "dependency", "verification_status": "unverified",
                 "verification_method": "package_version_match",
                 "claim_evidence": evidence,

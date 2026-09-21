@@ -223,6 +223,28 @@ def file_deserialization_acquisition_cases():
                'native': result}
 
 
+def remediation_cases():
+    # Independent expected boundaries from the pinned reviewed package records.
+    for ecosystem, name, vulnerable, fixed in (
+        ('npm', '@apollo/server', '4.7.2', '5.5.0'),
+        ('PyPI', 'adyen', '7.0.0', '7.1.0'),
+    ):
+        for version in (vulnerable, fixed):
+            data = project(ecosystem, name, version)
+            result = scan_archive(data)
+            findings = [f for f in result['report']['findings'] if f['rule_id'] == 'dependency-cve-match']
+            if version == vulnerable:
+                assert findings and all(f['claim_evidence']['remediation']['candidate_versions'] == [fixed]
+                                        for f in findings)
+                expected = {'expect': [{'rule_id': 'dependency-cve-match'}]}
+            else:
+                assert not findings
+                expected = {'forbid': ['dependency-cve-match']}
+            yield {'id': f'advisory-remediation/{ecosystem}/{name}/{version}', 'rule': 'dependency-cve-match',
+                   'polarity': 'positive' if version == vulnerable else 'negative',
+                   'archive': base64.b64encode(data).decode(), 'expected': expected, 'native': result}
+
+
 def main():
     if "--portable" in sys.argv:
         # Reuse the exact uploaded bytes: independently rebuilt ZIP timestamps
@@ -242,6 +264,7 @@ def main():
                       'archive': base64.b64encode(data).decode(), 'expected': expected,
                       'native': scan_archive(data)})
     cases.extend(provenance_cases())
+    cases.extend(remediation_cases())
     cases.extend(acquisition_cases())
     cases.extend(deserialization_acquisition_cases())
     cases.extend(file_deserialization_acquisition_cases())

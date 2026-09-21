@@ -23,9 +23,20 @@ def dependency_findings(findings):
             if finding.get("rule_id") == "dependency-cve-match"]
 
 
-def retained(findings):
-    return [{**finding, "claim_evidence": {**finding["claim_evidence"],
-             "snapshot_check_status": "retained_not_reconfirmed"}} for finding in findings]
+def assert_retained(actual, findings):
+    expected = [{**finding, "claim_evidence": {**finding["claim_evidence"],
+                 "snapshot_check_status": "retained_not_reconfirmed"}} for finding in findings]
+    assert len(actual) == len(expected)
+    for current, previous in zip(actual, expected):
+        # Keep every original fact and the saved recipe. Its active suggestion
+        # must acknowledge that the failed refresh did not recheck candidates.
+        assert {k: v for k, v in current.items() if k != "fix_hint"} == {
+            k: v for k, v in previous.items() if k != "fix_hint"}
+        if previous["claim_evidence"].get("remediation") is not None:
+            assert "not been reconfirmed" in current["fix_hint"]
+            assert "Advisory-fixed upgrade candidates:" not in current["fix_hint"]
+        else:
+            assert current["fix_hint"] == previous["fix_hint"]
 
 
 @pytest.mark.parametrize("change", ["introduced", "withdrawn"])
@@ -75,7 +86,7 @@ async def test_catalog_failure_keeps_latest_embedded_baseline_and_original_histo
     paid_c = await run_audit_job(raw, llm_client=client, audit_repo=repo, account_id="paid")
     baseline_c = paid_c["score_json"]["free_baseline"]
     manifest_c = baseline_c["score"]["scan_manifest"]
-    assert dependency_findings(baseline_c["findings"]) == retained(findings_b)
+    assert_retained(dependency_findings(baseline_c["findings"]), findings_b)
     assert manifest_c["dependency_cve"]["status"] == "unavailable"
     assert manifest_c["dependency_snapshot"].get("retained_findings", 0) == len(findings_b)
     assert baseline_c["source_audit_id"] == preview_a["id"]
@@ -125,7 +136,7 @@ async def test_first_standalone_failure_preserves_prior_included_dependency_evid
     monkeypatch.setattr(worker, "_run_scan_offthread", runner)
     paid_c = await run_audit_job(raw, llm_client=client, audit_repo=repo, account_id="paid")
     baseline_c = paid_c["score_json"]["free_baseline"]
-    assert dependency_findings(baseline_c["findings"]) == retained(old_findings)
+    assert_retained(dependency_findings(baseline_c["findings"]), old_findings)
     assert [finding for finding in baseline_c["findings"]
             if finding.get("rule_id") != "dependency-cve-match"] == preview_c["findings_json"]
     assert baseline_c["score"]["scan_manifest"]["model"] == "new-preview-model"

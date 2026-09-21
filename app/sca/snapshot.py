@@ -9,6 +9,7 @@ from app.local_store import MAX_CATALOG_BYTES, decode_catalog
 from app.scan.cve_evidence import empty_cve_summary
 from app.scan.cve_match import RULE_ID, match_archive
 from app.sca.lockfiles import normalize_pypi
+from app.scan.remediation_catalog import CATALOG_VERSION as REMEDIATION_CATALOG_VERSION
 
 CATALOG_PATH = Path(__file__).resolve().parents[1] / "data/cve-catalog.json"
 CHECKSUM_PATH = CATALOG_PATH.with_suffix(".json.sha256")
@@ -23,6 +24,7 @@ def _inputs() -> tuple[bytes, bytes, str | None, str]:
     parts = []
     failure = None
     digest = hashlib.sha256(b"drydock-bundled-catalog-v1\0")
+    digest.update(REMEDIATION_CATALOG_VERSION.encode("ascii") + b"\0")
     for path, limit in ((CATALOG_PATH, MAX_CATALOG_BYTES), (CHECKSUM_PATH, 1024)):
         try:
             with path.open("rb") as handle:
@@ -123,7 +125,12 @@ def refresh_snapshot(score: dict, findings: list[dict], raw: bytes) -> dict:
     for finding in current:
         current_ids.setdefault(identity(finding), set()).update(advisory_ids(finding))
     retained = [
-        {**finding, "claim_evidence": {
+        {**finding,
+         **({"fix_hint": "The current check could not reconfirm this dependency match. "
+                         "Repeat the advisory check before choosing an upgrade; previously recorded "
+                         "upgrade candidates have not been reconfirmed."}
+            if (finding.get("claim_evidence") or {}).get("remediation") is not None else {}),
+         "claim_evidence": {
             **(finding.get("claim_evidence") or {}),
             "snapshot_check_status": "retained_not_reconfirmed",
         }}
