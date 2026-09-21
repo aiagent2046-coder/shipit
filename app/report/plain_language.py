@@ -393,6 +393,13 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
     rid = str(finding.get("rule_id", ""))
     own_risk = str(finding.get("explanation", "")).strip()
     own_fix = str(finding.get("fix_hint", "")).strip()
+    evidence = finding.get("claim_evidence")
+    if (rid == "dependency-cve-match" and isinstance(evidence, dict)
+            and evidence.get("remediation") is not None
+            and evidence.get("snapshot_check_status") == "retained_not_reconfirmed"):
+        return (finding.get("title") or "Recorded dependency match", own_risk,
+                "The current check could not reconfirm this dependency match. Repeat the advisory check "
+                "before choosing an upgrade; previously recorded upgrade candidates have not been reconfirmed.")
     if rid in PLAIN and rid in CREDENTIAL_RULES:
         what, risk, fix = PLAIN[rid]
         if rid == "sql-secret-assignment" and not str(finding.get("file", "")).lower().endswith((".sql", ".psql")):

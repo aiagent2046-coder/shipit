@@ -13,6 +13,11 @@ the next review step. Supported FastAPI/Psycopg SQL investigations collect
 missing source facts and record their actions and stop reason. This stage makes
 no model calls and applies no patches.
 
+Dependency findings include [advisory-backed remediation cards](advisory-remediation-catalog.md).
+Inspect the reusable npm/PyPI recipes with `drydock-local recipes --json`.
+Candidate upgrades are checked against all recorded advisories for the package;
+compatibility and application behavior remain to be verified.
+
 This release supports Linux/macOS with Python 3.12+ (Windows: WSL). The
 standalone distribution is named `drydock-local`; it contains four runtime
 dependencies (PyYAML, tree-sitter, tree-sitter-typescript and pglast), the shared
