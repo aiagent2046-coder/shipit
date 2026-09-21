@@ -114,9 +114,11 @@ source bindings, retained reports, and the bundled examples above.
 ### Real package-manager contracts
 
 Two repository-owned consumer fixtures now exercise the installation part of
-the recipes. Run them explicitly on Linux with Python 3.12, Node 24 and npm 11:
+the recipes. Run them explicitly on Linux with Python 3.12, Node 24 and npm 11,
+from an environment containing the locked scanner dependencies:
 
 ```bash
+python -m pip install --require-hashes -r requirements.txt
 python scripts/verify_dependency_remediation.py --case npm --output-dir /tmp/drydock-npm-contract
 python scripts/verify_dependency_remediation.py --case pypi --output-dir /tmp/drydock-pypi-contract
 ```

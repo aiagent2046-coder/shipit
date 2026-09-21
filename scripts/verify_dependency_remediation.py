@@ -86,7 +86,8 @@ def command(args, cwd, env, log, *, install=False, timeout=120):
 def execution_env(home: Path) -> dict:
     # Network proxy/CA settings can be necessary in CI; package-manager config,
     # auth tokens, NODE_OPTIONS and PYTHONPATH cannot select code or registries.
-    names = {'PATH', 'SYSTEMROOT', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS',
+    names = {'PATH', 'SYSTEMROOT', 'LD_LIBRARY_PATH', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+             'REQUESTS_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS',
              'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
              'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
              'NPM_CONFIG_HTTPS_PROXY', 'NPM_CONFIG_PROXY', 'NPM_CONFIG_NOPROXY',

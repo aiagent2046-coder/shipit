@@ -35,6 +35,8 @@ jobs:
       - name: Pin npm used to regenerate the fixture lock
         if: matrix.case == 'npm'
         run: npm install --global npm@11.9.0 --ignore-scripts --no-audit --no-fund
+      - name: Install locked scanner dependencies
+        run: python -m pip install --require-hashes -r requirements.txt
       - name: Install, scan and check before, after and restored dependencies
         env:
           CONTRACT_CASE: ${{ matrix.case }}

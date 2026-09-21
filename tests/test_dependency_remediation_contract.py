@@ -265,3 +265,17 @@ def test_existing_evidence_is_rejected_before_any_execution(monkeypatch, tmp_pat
     with pytest.raises(FileExistsError):
         contract.main(['--case', 'npm', '--output-dir', str(tmp_path)])
     assert marker.read_text() == 'prior evidence'
+
+
+def test_network_and_runtime_environment_survives_without_package_config(monkeypatch, tmp_path):
+    # These runtime/CA values are required by setup-python and managed proxies.
+    for key in ('LD_LIBRARY_PATH', 'NODE_EXTRA_CA_CERTS', 'NPM_CONFIG_HTTPS_PROXY'):
+        monkeypatch.setenv(key, 'required-host-setting')
+    for key in ('NODE_OPTIONS', 'PYTHONPATH', 'NPM_TOKEN', 'PIP_EXTRA_INDEX_URL', 'GITHUB_TOKEN'):
+        monkeypatch.setenv(key, 'must-not-propagate')
+    env = contract.execution_env(tmp_path)
+    assert all(env[key] == 'required-host-setting'
+               for key in ('LD_LIBRARY_PATH', 'NODE_EXTRA_CA_CERTS', 'NPM_CONFIG_HTTPS_PROXY'))
+    assert 'must-not-propagate' not in env.values()
+    # npm refuses to load the same config path twice, including /dev/null.
+    assert env['NPM_CONFIG_USERCONFIG'] != env['NPM_CONFIG_GLOBALCONFIG']
