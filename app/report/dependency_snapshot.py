@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime
 import re
 
+from app.scan.remediation_catalog import remediation_hint, remediation_record
+
 
 SCOPE_REASONS = {"dependency_snapshot_scope", "dependency_runtime_reachability_not_checked"}
 SOURCE_REPOSITORIES = {
@@ -206,4 +208,18 @@ def snapshot_finding_rows(value: object) -> list[tuple[str, str]]:
             continue
         rows.append((f"Finding snapshot source: {SOURCE_LABELS[name]}",
                      f"{source['repository']}; commit: {source['commit']}; generated: {source['generated_at']}."))
-    return rows or [("Finding snapshot source", "Not recorded or unreadable for this finding.")]
+    if not rows:
+        rows.append(("Finding snapshot source", "Not recorded or unreadable for this finding."))
+    card = remediation_record(value)
+    if card is not None:
+        recipe = card["recipe"]
+        rows.append(("Remediation recipe", f"{recipe['id']}; revision {recipe['revision']}"))
+        rows.append(("Upgrade review", remediation_hint(card)))
+        if card["reason_codes"]:
+            rows.append(("Upgrade review limits", ", ".join(card["reason_codes"])))
+        rows.append(("Remediation evidence", f"{card['advisory_count']} package advisory records; "
+                     f"{card['evaluations']} candidate assessments; "
+                     f"records SHA-256: {card['binding'].get('records_sha256') or 'not evaluated'}."))
+        rows.extend(("Update step", step) for step in recipe["steps"])
+        rows.extend(("Verification required", step) for step in recipe["verification"])
+    return rows
