@@ -1,0 +1,51 @@
+name: dependency-remediation-contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-remediation-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trusted-fixture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [npm, pypi]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12.14'
+      - uses: actions/setup-node@v7
+        if: matrix.case == 'npm'
+        with:
+          node-version: '24.19.0'
+      - name: Pin npm used to regenerate the fixture lock
+        if: matrix.case == 'npm'
+        run: npm install --global npm@11.9.0 --ignore-scripts --no-audit --no-fund
+      - name: Install, scan and check before, after and restored dependencies
+        env:
+          CONTRACT_CASE: ${{ matrix.case }}
+        run: >-
+          python scripts/verify_dependency_remediation.py --case "$CONTRACT_CASE"
+          --output-dir "$RUNNER_TEMP/dependency-contract-$CONTRACT_CASE"
+      - name: Preserve evidence including unsuccessful runs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-contract-${{ matrix.case }}
+          path: ${{ runner.temp }}/dependency-contract-${{ matrix.case }}
+          if-no-files-found: error
+          retention-days: 14
