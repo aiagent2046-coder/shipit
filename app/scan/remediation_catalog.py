@@ -184,7 +184,8 @@ def _remediation_record(evidence: object) -> dict | None:
             or "records_sha256" not in binding):
         return None
     recipe = card.get("recipe")
-    if recipe != _RECIPES.get(binding["ecosystem"]):
+    if (binding["ecosystem"] not in _RECIPES or not isinstance(recipe, dict)
+            or recipe != _RECIPES[binding["ecosystem"]]):
         return None
     if (card.get("automatic_apply") is not False or card.get("runtime_verified") is not False
             or card.get("compatibility") != "not_assessed"
