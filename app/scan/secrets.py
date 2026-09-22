@@ -1232,14 +1232,27 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
             # that wrapper must not turn the same SQL predicate into a secret
             # assignment when the repository itself is scanned.
             is_sql = name.lower().removesuffix(".fixture").endswith(".sql")
+            string_bindings = _literal_string_bindings(text)
             shell_substitutions = None
             next_line_offset = 0
             for lineno, raw_line in enumerate(text.splitlines(keepends=True), start=1):
                 line_offset = next_line_offset
                 next_line_offset += len(raw_line)
                 line = raw_line.rstrip("\r\n")
+                resolved_line = None
                 for rule in RULES:
-                    m = rule.pattern.search(line)
+                    # Only the NAME-keyed assignment rules read through a
+                    # binding chain. Value-format rules must keep seeing the
+                    # original line: their literal already matches on the
+                    # binding line, and a rewritten use would double-report
+                    # one secret (MEASURED: expected counts broke by 2>1).
+                    if rule.id in {"generic-assignment", "sql-secret-assignment"}:
+                        if resolved_line is None:
+                            resolved_line = _resolve_assignment_rhs(line, string_bindings)
+                        matched_line = resolved_line
+                    else:
+                        matched_line = line
+                    m = rule.pattern.search(matched_line)
                     if not m:
                         continue
                     if regions is None:
@@ -1248,7 +1261,7 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                         if name.endswith(".py") and size <= min(MAX_PYTHON_BYTES, remaining):
                             remaining -= size
                             regions = python_regions(text)
-                    for candidate in rule.pattern.finditer(line):
+                    for candidate in rule.pattern.finditer(matched_line):
                         if rule.id == "sql-secret-assignment" and _js_variable_declaration(name, line, candidate):
                             continue
                         if (rule.id == "generic-assignment"
@@ -1298,6 +1311,42 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                                           title="Credential-shaped name in a translation label (informational)",
                                           source_context={"kind": "translation_label"})
                     yield finding, m.group(0)
+
+
+_QUOTED_LITERAL = r"(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')"
+_SIMPLE_STRING_BINDING = re.compile(
+    r"^\s*(?:const\s+|let\s+|var\s+)?([A-Za-z_$][\w$]*)\s*=\s*" + _QUOTED_LITERAL + r"\s*;?\s*$",
+    re.M,
+)
+_ASSIGN_RHS_IDENT = re.compile(r"(?<![=!<>])=\s*([A-Za-z_$][\w$]*)\s*$")
+
+
+def _literal_string_bindings(text: str) -> dict[str, str]:
+    """Name -> the quoted literal token it is assigned exactly once."""
+    counts: dict[str, int] = {}
+    bindings: dict[str, str] = {}
+    for match in _SIMPLE_STRING_BINDING.finditer(text):
+        name = match.group(1)
+        counts[name] = counts.get(name, 0) + 1
+        bindings[name] = match.group(2)
+    return {name: token for name, token in bindings.items() if counts.get(name) == 1}
+
+
+def _resolve_assignment_rhs(line: str, bindings: dict[str, str]) -> str:
+    """`const api_key = holder` where holder is an unambiguous local literal.
+
+    The assignment rule matches a QUOTED value on the name's own line, so a
+    chain (`const holder = "sk-..."; const api_key = holder`) hid the leak.
+    The value is knowable from the file alone -- reading it is reading. The
+    rewrite happens ON the evidence line, so every finding keeps its line.
+    MEASURED: the generic-assignment variant of the metamorphic probe."""
+    match = _ASSIGN_RHS_IDENT.search(line)
+    if match is None:
+        return line
+    token = bindings.get(match.group(1))
+    if token is None:
+        return line
+    return line[:match.start(1)] + token + line[match.end(1):]
 
 
 def scan_secrets(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[SecretFinding]:

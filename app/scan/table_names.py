@@ -101,6 +101,39 @@ class NamedTables:
     has_dynamic_from: bool = False
 
 
+_FROM_IDENT = re.compile(r"\.from\(\s*([A-Za-z_$][\w$]*)\s*\)")
+_STRING_BINDING = re.compile(
+    r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
+    r"(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)"
+)
+
+
+def _resolve_from_idents(text: str) -> str:
+    """`.from(tableName)` where the name is an unambiguous local string binding.
+
+    The client matcher takes only literal strings (see above): a `.from(name)`
+    names no table to a regex. But a name whose ONLY assignment is a string
+    literal one line up is knowable from the file alone -- reading it is
+    reading, not guessing. MEASURED: hoisting the literal into a local
+    silenced the schema-drift variant of the metamorphic probe. Names with
+    zero or several assignments, and template literals with substitutions,
+    are left exactly as they were (the dynamic-from floor stays)."""
+    counts = {}
+    bindings = {}
+    for match in _STRING_BINDING.finditer(text):
+        name, token = match.group(1), match.group(2)
+        counts[name] = counts.get(name, 0) + 1
+        if "\\" not in token and "${" not in token:
+            bindings[name] = token
+
+    def substitute(match):
+        name = match.group(1)
+        if counts.get(name) != 1 or name not in bindings:
+            return match.group(0)
+        return f".from({bindings[name]})"
+    return _FROM_IDENT.sub(substitute, text)
+
+
 def read_named_tables(fileobj: BinaryIO) -> NamedTables:
     """Table names the repository's own code and generated types mention.
 
@@ -114,6 +147,7 @@ def read_named_tables(fileobj: BinaryIO) -> NamedTables:
             if (not name.lower().endswith(_SOURCE_EXTS)
                     or is_non_production_path(name)):
                 continue
+            text = _resolve_from_idents(text)
             for match in _FROM_CALL.finditer(text):
                 found.from_code.add(match.group(1).lower())
             if _TYPES_MARKER in text:
