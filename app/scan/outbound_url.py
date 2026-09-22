@@ -24,7 +24,7 @@ from typing import BinaryIO
 from app.scan.checks import CheckFinding
 from app.scan.literal_values import UNRESOLVED, LiteralContext, literal_context
 from app.scan.rule_coverage import RuleCoverage, mark_analysis_limit, track_analysis_limits
-from app.scan.scope_statements import BLOCK_STATEMENTS, block_arms, statically_true
+from app.scan.scope_statements import BLOCK_STATEMENTS, block_arms, certain_try, statically_true
 
 RULE_ID = "python-outbound-request-unvalidated-url"
 _METHODS = frozenset({"delete", "get", "head", "options", "patch", "post", "put", "request", "stream"})
@@ -754,6 +754,10 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
             # A literal-true guard is no condition at all: its body is the
             # flat case and its orelse is dead code. Inline the body into the
             # SAME state -- no copy, no forget -- and skip the orelse.
+            _scan_declarations(stmt.body, state, path, findings)
+        elif certain_try(stmt):
+            # A handler-less try guards nothing (scope_statements.certain_try):
+            # its body runs as the flat form.
             _scan_declarations(stmt.body, state, path, findings)
         elif isinstance(stmt, BLOCK_STATEMENTS):
             # Header bindings and stores in an earlier try/loop arm can replace

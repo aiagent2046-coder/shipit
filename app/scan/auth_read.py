@@ -18,6 +18,7 @@ from app.scan.checks import CheckFinding
 from app.scan.scope_statements import (
     BLOCK_STATEMENTS,
     compatible_routes,
+    certain_try,
     route_conditions,
     scope_statements,
     statically_true,
@@ -205,6 +206,8 @@ def _certain_body(body: list[ast.stmt]) -> list[ast.stmt]:
     flat: list[ast.stmt] = []
     for node in body:
         if isinstance(node, ast.If) and statically_true(node.test):
+            flat.extend(_certain_body(node.body))
+        elif certain_try(node):
             flat.extend(_certain_body(node.body))
         else:
             flat.append(node)

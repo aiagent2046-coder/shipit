@@ -37,6 +37,8 @@ module, import it, or evaluate any expression inside it.
 from __future__ import annotations
 
 import ast
+
+from app.scan.scope_statements import certain_try, statically_true
 import hashlib
 import zipfile
 import zlib
@@ -603,8 +605,17 @@ class _QueryFlow:
                 self.assign(node.target, value, state)
             elif isinstance(node, ast.If):
                 self.expression(node.test, state, stable)
-                state = _merge_states(self.block(node.body, state.copy(), stable, captures),
-                                      self.block(node.orelse, state.copy(), stable, captures))
+                if statically_true(node.test):
+                    # A literal-true guard is no choice: the body runs and the
+                    # orelse never does. Merging both arms would dilute the
+                    # literal set (_merge_states trusts a literal only on
+                    # every path). MEASURED: wrapping a parameterised-query
+                    # safe constant in if True: emptied the known set and the
+                    # clean code got reported.
+                    state = self.block(node.body, state, stable, captures)
+                else:
+                    state = _merge_states(self.block(node.body, state.copy(), stable, captures),
+                                          self.block(node.orelse, state.copy(), stable, captures))
             elif isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
                 self.expression(node.test if isinstance(node, ast.While) else node.iter, state, stable)
                 entry = state.copy()
@@ -622,6 +633,10 @@ class _QueryFlow:
                     self.expression(item.context_expr, state, stable)
                     if item.optional_vars:
                         self.assign(item.optional_vars, _UNKNOWN, state)
+                state = self.block(node.body, state, stable, captures)
+            elif isinstance(node, (ast.Try, ast.TryStar)) and certain_try(node):
+                # A handler-less try guards nothing (certain_try): its body
+                # runs as the flat form, no paths to merge.
                 state = self.block(node.body, state, stable, captures)
             elif isinstance(node, (ast.Try, ast.TryStar)):
                 body = self.block(node.body, state.copy(), stable, captures)

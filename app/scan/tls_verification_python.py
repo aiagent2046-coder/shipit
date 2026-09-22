@@ -11,7 +11,7 @@ from __future__ import annotations
 import ast
 from collections import Counter
 
-from app.scan.scope_statements import statically_true
+from app.scan.scope_statements import certain_try, statically_true
 
 _METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options", "request"})
 _CONSTRUCTORS = {
@@ -278,6 +278,10 @@ def python_evidence(text, *, incomplete_reason: dict[str, str] | None = None):
                     # but wrong here. MEASURED: wrapping `session =
                     # requests.Session()` in `if True:` silenced both tls
                     # block variants of the metamorphic probe.
+                    block(statement.body, state)
+                elif certain_try(statement):
+                    # A handler-less try guards nothing (certain_try): its
+                    # body runs as the flat form.
                     block(statement.body, state)
                 elif isinstance(statement, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.TryStar, ast.Match)):
                     before = state.copy()

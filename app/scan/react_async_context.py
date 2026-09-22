@@ -540,6 +540,18 @@ def _boolean_setter(stmt, setters):
     return name in setters and len(args) == 1 and args[0].type in {"true", "false"}
 
 
+def _trivial_finalizer(stmt) -> bool:
+    """No finally clause, or a `finally {}` with nothing in it.
+
+    The finalizer field is the whole finally_clause; its trivial form is a
+    single empty statement_block inside it."""
+    finalizer = stmt.child_by_field_name("finalizer")
+    if finalizer is None:
+        return True
+    bodies = finalizer.named_children
+    return len(bodies) == 1 and not any(bodies[0].named_children)
+
+
 def _certain_following(stmt):
     """The statement a statically true guard wraps, or the statement itself.
 
@@ -550,22 +562,28 @@ def _certain_following(stmt):
     MEASURED: wrapping the effect silenced all three
     react-unchecked-http-success variants of the metamorphic probe.
     """
-    if stmt.type != "if_statement" or stmt.child_by_field_name("alternative") is not None:
-        return stmt
-    while stmt.type == "if_statement" and stmt.child_by_field_name("alternative") is None:
-        condition = _text(stmt.child_by_field_name("condition") or "").strip()
-        while condition.startswith("(") and condition.endswith(")"):
-            condition = condition[1:-1].strip()
-        if condition != "true":
+    while True:
+        if stmt.type == "if_statement" and stmt.child_by_field_name("alternative") is None:
+            condition = _text(stmt.child_by_field_name("condition") or "").strip()
+            while condition.startswith("(") and condition.endswith(")"):
+                condition = condition[1:-1].strip()
+            if condition != "true":
+                return stmt
+            inner = stmt.child_by_field_name("consequence")
+        elif (stmt.type == "try_statement"
+              and stmt.child_by_field_name("handler") is None
+              and _trivial_finalizer(stmt)):
+            # A handler-less try guards nothing (the tree-sitter twin of
+            # app.scan.scope_statements.certain_try).
+            inner = stmt.child_by_field_name("body")
+        else:
             return stmt
-        consequence = stmt.child_by_field_name("consequence")
-        if consequence is None:
+        if inner is None:
             return stmt
-        statements = _children(consequence) if consequence.type == "statement_block" else [consequence]
+        statements = _children(inner) if inner.type == "statement_block" else [inner]
         if len(statements) != 1:
             return stmt
         stmt = statements[0]
-    return stmt
 
 
 def _caught_side_effect(stmt):

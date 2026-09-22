@@ -217,6 +217,26 @@ def _js_statically_true(node) -> bool:
     return text == "true"
 
 
+def _js_certain_try(node) -> bool:
+    """try { X } finally {} with no catch: X runs as the flat form does.
+
+    The tree-sitter twin of app.scan.scope_statements.certain_try -- a
+    handler-less try guards nothing (its finalizer cannot swallow the
+    outcome). MEASURED: try-wrapping silenced the helper variants of the
+    metamorphic probe."""
+    if node is None or node.type != "try_statement":
+        return False
+    if node.child_by_field_name("handler") is not None:
+        return False
+    finalizer = node.child_by_field_name("finalizer")
+    if finalizer is None:
+        return True
+    # The finalizer field is the whole `finally_clause`; its trivial form is a
+    # single empty statement_block inside it.
+    bodies = finalizer.named_children
+    return len(bodies) == 1 and not any(bodies[0].named_children)
+
+
 def _plain_draw(value):
     """A Math.random call anywhere in the expression, without helper hops."""
     if value is None or value.type in _DEFERRED_BODIES:
@@ -238,14 +258,21 @@ def _return_draws(body):
         return _plain_draw(body)  # arrow function with an expression body
     statements = [child for child in body.named_children if child.type != "comment"]
     # A literal-true guard is no condition: `if (true) { return Math.random() }`
-    # returns the draw the same way the flat form does. MEASURED: wrapping the
-    # return silenced three helper cases of the metamorphic probe.
-    while (len(statements) == 1 and statements[0].type == "if_statement"
-           and _js_statically_true(statements[0])):
-        consequence = statements[0].child_by_field_name("consequence")
-        if consequence is None or consequence.type != "statement_block":
+    # returns the draw the same way the flat form does -- and so does a
+    # handler-less try around it. MEASURED: wrapping the return silenced three
+    # helper cases of the metamorphic probe per wrapper form.
+    while len(statements) == 1:
+        wrapped = statements[0]
+        if wrapped.type == "if_statement" and _js_statically_true(wrapped):
+            inner = wrapped.child_by_field_name("consequence")
+        elif _js_certain_try(wrapped):
+            inner = wrapped.child_by_field_name("body")
+        else:
+            break
+        if inner is None:
             return False
-        statements = [child for child in consequence.named_children if child.type != "comment"]
+        statements = ([child for child in inner.named_children if child.type != "comment"]
+                      if inner.type == "statement_block" else [inner])
     if len(statements) != 1 or statements[0].type != "return_statement":
         return False
     values = [child for child in statements[0].named_children if child.type != "comment"]

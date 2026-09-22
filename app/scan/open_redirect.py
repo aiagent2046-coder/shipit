@@ -56,7 +56,7 @@ from app.scan.outbound_url import (
     _walk,
 )
 from app.scan.rule_coverage import RuleCoverage, track_analysis_limits
-from app.scan.scope_statements import block_arms, scope_statements, statically_true
+from app.scan.scope_statements import block_arms, certain_try, scope_statements, statically_true
 
 RULE_ID = "python-open-redirect-unvalidated-url"
 
@@ -232,6 +232,10 @@ def _import_context(body: list[ast.stmt], state: _State) -> None:
         elif isinstance(stmt, ast.If) and statically_true(stmt.test):
             # A literal-true guard is not conditional: its stores are certain
             # (app.scan.scope_statements.statically_true).
+            _import_context(stmt.body, state)
+        elif certain_try(stmt):
+            # A handler-less try guards nothing: its body runs as the flat
+            # form (app.scan.scope_statements.certain_try).
             _import_context(stmt.body, state)
         else:
             _forget_stores(stmt, state)
