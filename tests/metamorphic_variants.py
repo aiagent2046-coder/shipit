@@ -6,13 +6,21 @@ replacement for the LLM escape hunt (scripts/hunt_detector_escapes.py) --
 the classes the hunt found are pinned here as generators, so they keep
 firing on every rule instead of once per hunt round.
 
-Design rules, each learned from the hunt:
+Design rules, each learned from the hunt or measured by this generator:
 
 - a variant that no longer parses is DISCARDED before scanning and reported
   as `unparseable` -- a broken rewrite is a broken probe, never an escape;
 - renames touch only identifier spans the parser found (Python) or names
   proven not to be property keys/attributes (JS) -- renaming inside a
   string or a property key changes what the code IS;
+- there is deliberately NO key_case transform for JS option objects.
+  MEASURED: all 7 incidents it produced were the scanner being RIGHT on a
+  changed program. JavaScript option names are case-sensitive -- Express
+  silently ignores `{ HttpOnly: true }` and leaves the cookie readable by
+  scripts (a real defect), and express-session ignores `{ HttpOnly: false }`
+  and keeps its safe default. Renaming an option key is a predicted-change
+  edit, not an invariant one. (Header spellings like `Set-Cookie: ...
+  HttpOnly` ARE case-variant vocabulary and are pinned by the corpus.)
 - new names are neutral (`holder_*`): a rename that introduces a
   credential word changes the verdict for a correct reason (see
   test_renaming_a_local_variable_changes_nothing).
@@ -327,12 +335,6 @@ def _mask_js_literals_and_comments(text: str) -> str:
         lambda m: " " * (m.end() - m.start()), text
     )
 
-_KEY_TOKENS = {
-    "httpOnly": ["httpOnly", "HttpOnly", "HTTPONLY", "httponly"],
-    "sameSite": ["sameSite", "SameSite", "SAMESITE", "samesite"],
-}
-
-
 def js_local_const(text: str) -> str | None:
     """Hoist one call-site literal into a local const above its line."""
     lines = text.splitlines(keepends=True)
@@ -354,28 +356,6 @@ def js_local_const(text: str) -> str | None:
             lines.insert(index, f"{indent}const holder_a = {lit};\n")
             return "".join(lines)
     return None
-
-
-def js_key_case(text: str) -> str | None:
-    """Option keys in another letter case: `httpOnly` -> `HttpOnly`.
-
-    The hunt's PascalCase escape (8/8 until the key vocabularies grew). The
-    rewrite goes TO a casing the file does not already use, so the variant
-    is always a real case change and never a no-op.
-    """
-    out = text
-    changed = False
-    for _family, variants in _KEY_TOKENS.items():
-        present = [v for v in variants if re.search(rf"\b{v}\b", out)]
-        if not present:
-            continue
-        target = next((v for v in variants if v not in present), None)
-        if target is None:
-            continue
-        for variant in present:
-            out = re.sub(rf"\b{variant}\b", target, out)
-            changed = True
-    return out if changed and out != text else None
 
 
 def js_numeric_bool(text: str) -> str | None:
@@ -475,7 +455,6 @@ TRANSFORMS: tuple[Transform, ...] = (
     Transform("dead_branch", "python", py_dead_branch),
     Transform("comment_shift", "python", py_comment_shift),
     Transform("local_const", "js", js_local_const, "literal -> local (hunt r1)"),
-    Transform("key_case", "js", js_key_case, "PascalCase keys (hunt r1)"),
     Transform("numeric_bool", "js", js_numeric_bool, "httpOnly: 0 (hunt r3)"),
     Transform("rename_locals", "js", js_rename_locals, "res -> outgoingRes (hunt r1)"),
     Transform("block_nest", "js", js_block_nest),

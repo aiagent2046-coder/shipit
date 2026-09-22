@@ -38,8 +38,6 @@ PINNED: list[tuple[str, str, str]] = [
     ("insecure-session-cookie-attributes",
      "js-cookie-name-from-a-local-binding", "local_const"),
     ("insecure-session-cookie-attributes",
-     "js-express-httponly-false", "key_case"),
-    ("insecure-session-cookie-attributes",
      "js-express-httponly-false", "numeric_bool"),
     ("insecure-session-cookie-attributes",
      "js-express-cookie-without-options", "rename_locals"),
