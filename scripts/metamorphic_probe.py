@@ -39,6 +39,20 @@ from tests.detectors.conftest import discover_cases, load_expected  # noqa: E402
 from tests.detectors.test_golden_corpus import assert_case  # noqa: E402
 from tests.metamorphic_variants import TRANSFORMS, variant_entries  # noqa: E402
 
+# Rules whose evidence is the IDENTIFIER NAME itself: credential words in a
+# variable name (generic-assignment -- the repo's own metamorphic test says
+# "the VALUE is what the scanner reads", and for this rule that is
+# deliberately not true), secret-shaped target names (insecure-randomness's
+# _secret filter), and dependency identity across sibling routes
+# (python-route-read-auth-consistency). For these, renaming a local is a
+# PREDICTED-CHANGE edit: the name is what the scanner reads. MEASURED: all 20
+# rename incidents of the full sweep landed on exactly these three rules.
+NAME_EVIDENCE_RULES = frozenset({
+    "generic-assignment",
+    "insecure-randomness",
+    "python-route-read-auth-consistency",
+})
+
 
 def case_entries(case_dir: Path) -> dict[str, str]:
     entries: dict[str, str] = {}
@@ -112,11 +126,18 @@ def main() -> int:
                 cell[0] += 1
             else:
                 cell[1] += 1
+                predicted = (
+                    transform.id == "rename_locals" and rule_id in NAME_EVIDENCE_RULES
+                )
                 incidents.append({
                     "case": f"{rule_id}/{polarity}/{case_dir.name}",
                     "polarity": polarity,
                     "transform": f"{transform.lang}:{transform.id}",
-                    "kind": "escape" if polarity == "positive" else "noise",
+                    "kind": (
+                        "predicted-name-evidence" if predicted
+                        else "escape" if polarity == "positive"
+                        else "noise"
+                    ),
                 })
 
     print(f"cases={len(cases)} applied_variants={n_applied} "
@@ -138,7 +159,9 @@ def main() -> int:
 
     escaped = [i for i in incidents if i["kind"] == "escape"]
     noisy = [i for i in incidents if i["kind"] == "noise"]
-    print(f"\nESCAPES: {len(escaped)}   NOISE: {len(noisy)}")
+    predicted = [i for i in incidents if i["kind"] == "predicted-name-evidence"]
+    print(f"\nESCAPES: {len(escaped)}   NOISE: {len(noisy)}   "
+          f"PREDICTED (name-evidence rules x rename): {len(predicted)}")
     for item in incidents:
         print(f"  [{item['kind']}] {item['case']} x {item['transform']}")
 
