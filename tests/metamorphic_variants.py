@@ -286,6 +286,102 @@ def py_rename_locals(text: str) -> str | None:
     return _apply_edits(text, edits) if edits else None
 
 
+def py_try_wraps(text: str) -> str | None:
+    """Wrap the first call-bearing single-line statement in try/finally: pass.
+
+    `try: X finally: pass` is what the code already does -- exceptions
+    propagate identically -- but every reader must SEE through the block.
+    The try form is the same one scope_statements documents as readable.
+    """
+    tree = _py_parse(text)
+    if tree is None:
+        return None
+    starts = _line_starts(text)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.stmt) or node.lineno != node.end_lineno:
+            continue
+        if not any(isinstance(child, ast.Call) for child in ast.walk(node)):
+            continue
+        s, e = _span(starts, node)
+        inner = text[s:e]
+        line = text.splitlines()[node.lineno - 1]
+        indent = _indent_of(line)
+        repl = (f"try:\n{indent}    {inner}\n"
+                f"{indent}finally:\n{indent}    pass")
+        return _apply_edits(text, [(s, e, repl)])
+    return None
+
+
+def py_defaulted_param(text: str) -> str | None:
+    """Add an unused defaulted parameter to the first single-line def.
+
+    A signature that grows an optional parameter nobody passes cannot change
+    what the code is, but name- and position-based parameter readers must not
+    lose their place over it.
+    """
+    tree = _py_parse(text)
+    if tree is None:
+        return None
+    starts = _line_starts(text)
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.lineno != node.end_lineno or not node.args.args:
+            continue
+        last = node.args.args[-1]
+        s, e = _span(starts, last)
+        if text[e:e + 1] not in {"", ")", ",", ":"} and not text[e:].lstrip().startswith(")"):
+            continue
+        return _apply_edits(text, [(e, e, ", _extra=None")])
+    return None
+
+
+def js_try_wraps(text: str) -> str | None:
+    """Wrap the first wrappable statement in try/finally with an empty finalizer.
+
+    Same claim as py_try_wraps. const/let declarations are skipped for the
+    block-scope reason documented in js_block_nest.
+    """
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.endswith(";") or "{" in stripped or "}" in stripped:
+            continue
+        if stripped.startswith(("import", "export", "//", "/*", "*", "const ", "let ")):
+            continue
+        indent = _indent_of(line)
+        lines[index] = (f"{indent}try {{\n{indent}    {stripped}\n"
+                        f"{indent}}} finally {{}}\n")
+        return "".join(lines)
+    return None
+
+
+def js_defaulted_param(text: str) -> str | None:
+    """Add an unused defaulted parameter to the first function declaration."""
+    match = re.search(r"function\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)", text)
+    if match is None or not match.group(1).strip():
+        return None
+    # place after the last parameter text (group 1 span ends before ')')
+    return _apply_edits(text, [(match.end(1), match.end(1), ", _extra = undefined")])
+
+
+def js_export_form(text: str) -> str | None:
+    """`export function save` -> `function save` + `export { save };` below.
+
+    The named re-export form is how real modules forward their API; a reader
+    must not lose the export because the specifier moved to the bottom.
+    (Cross-file re-export chains need a multi-file variant API and are out of
+    this transform's reach -- the docstring says so rather than pretending.)
+    """
+    match = re.search(r"^export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", text, re.M)
+    if match is None:
+        return None
+    name = match.group(1)
+    edits = [(match.start(), match.start() + len("export "), "")]
+    suffix = f"\nexport {{ {name} }};\n"
+    return _apply_edits(text, edits) + suffix
+
+
 def py_dead_branch(text: str) -> str | None:
     """Insert an unreachable decoy block after imports (or the docstring)."""
     tree = _py_parse(text)
@@ -502,7 +598,12 @@ TRANSFORMS: tuple[Transform, ...] = (
     Transform("concat_split", "python", py_concat_split),
     Transform("block_nest", "python", py_block_nest),
     Transform("rename_locals", "python", py_rename_locals, "hunt r1 receiver names"),
+    Transform("try_wraps", "python", py_try_wraps, "try/finally: pass"),
+    Transform("defaulted_param", "python", py_defaulted_param),
     Transform("dead_branch", "python", py_dead_branch),
+    Transform("try_wraps", "js", js_try_wraps, "try/finally {}"),
+    Transform("defaulted_param", "js", js_defaulted_param),
+    Transform("export_form", "js", js_export_form, "named re-export"),
     Transform("comment_shift", "python", py_comment_shift),
     Transform("local_const", "js", js_local_const, "literal -> local (hunt r1)"),
     Transform("numeric_bool", "js", js_numeric_bool, "httpOnly: 0 (hunt r3)"),
