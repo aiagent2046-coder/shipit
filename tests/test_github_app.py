@@ -75,9 +75,14 @@ def test_mint_app_jwt_is_really_signed_and_verifiable(keypair):
     assert decoded["iat"] == int(now) - 60
     assert decoded["exp"] == int(now) + 9 * 60
 
-    # A tampered token must fail verification against the real public key.
+    # Keep canonical base64url so decoding reaches signature verification.
+    header, payload, encoded_signature = token.split(".")
+    signature = bytearray(jwt.utils.base64url_decode(encoded_signature.encode("ascii")))
+    signature[0] ^= 1
+    tampered_signature = jwt.utils.base64url_encode(bytes(signature)).decode("ascii")
+    tampered_token = ".".join((header, payload, tampered_signature))
     with pytest.raises(jwt.InvalidSignatureError):
-        jwt.decode(token[:-4] + "abcd", public_pem, algorithms=["RS256"])
+        jwt.decode(tampered_token, public_pem, algorithms=["RS256"])
 
 
 def test_mint_app_jwt_valid_real_newline_key_unchanged(keypair):

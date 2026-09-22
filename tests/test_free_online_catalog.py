@@ -259,8 +259,11 @@ def test_incomplete_refresh_retains_previous_matches_with_their_original_provena
     assert manifest["dependency_cve"]["status"] == "partial"
     assert manifest["dependency_snapshot"]["retained_findings"] == 1
     expected = deepcopy(dependency_findings(initial["findings"]))
-    for finding in expected:
+    for finding, current in zip(expected, dependency_findings(refreshed["findings"]), strict=True):
         finding["claim_evidence"]["snapshot_check_status"] = "retained_not_reconfirmed"
+        assert "not been reconfirmed" in current["fix_hint"]
+        assert "Advisory-fixed upgrade candidates:" not in current["fix_hint"]
+        finding["fix_hint"] = current["fix_hint"]
     assert dependency_findings(refreshed["findings"]) == expected
     assert refreshed["score"]["total"] == initial["score"]["total"]
     assert initial == original

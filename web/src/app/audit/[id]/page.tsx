@@ -8,6 +8,7 @@ import { getAudit, reportUrl, ApiError } from "@/lib/api";
 import { RESULT_PREFIX } from "@/components/AuditForm";
 import { findingCounts } from "@/lib/evidence";
 import { AuditCoverage } from "@/components/AuditCoverage";
+import { CopyAuditLink } from "@/components/CopyAuditLink";
 import { FindingsList, OwnerReportSummary, PreviewHistory, SeveritySummary } from "@/components/FindingsList";
 import { projectOwnerReport } from "@/lib/ownerReport";
 import { projectOwnerRoadmap } from "@/lib/ownerRoadmap";
@@ -212,6 +213,8 @@ function AuditPageInner() {
                 </div>
               </div>
             </div>
+
+            <CopyAuditLink />
 
             <div className="my-6 border-t border-border" />
             <OwnerReportSummary projection={ownerProjection} />
