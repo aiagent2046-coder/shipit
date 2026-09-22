@@ -605,9 +605,9 @@ def _import_context(body: list[ast.stmt], state: _PathState) -> None:
             # (app.scan.scope_statements.statically_true).
             _import_context(stmt.body, state)
         elif certain_try(stmt):
-            # A handler-less try guards nothing: its body runs as the flat
-            # form (app.scan.scope_statements.certain_try).
-            _import_context(stmt.body, state)
+            # A handler-less try guards nothing: body AND finally run as the
+            # flat form (app.scan.scope_statements.certain_try).
+            _import_context([*stmt.body, *stmt.finalbody], state)
         else:
             _forget_stores(stmt, state)
 

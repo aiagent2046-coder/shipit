@@ -208,7 +208,11 @@ def _certain_body(body: list[ast.stmt]) -> list[ast.stmt]:
         if isinstance(node, ast.If) and statically_true(node.test):
             flat.extend(_certain_body(node.body))
         elif certain_try(node):
-            flat.extend(_certain_body(node.body))
+            # finally runs whether or not the body raised: both lists are
+            # certain (handlers would be conditional -- certain_try excludes
+            # them). MEASURED: flattening body alone lost the routes a
+            # test_route_block_declarations fixture keeps in a finally arm.
+            flat.extend(_certain_body([*node.body, *node.finalbody]))
         else:
             flat.append(node)
     return flat

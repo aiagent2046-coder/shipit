@@ -757,8 +757,8 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
             _scan_declarations(stmt.body, state, path, findings)
         elif certain_try(stmt):
             # A handler-less try guards nothing (scope_statements.certain_try):
-            # its body runs as the flat form.
-            _scan_declarations(stmt.body, state, path, findings)
+            # body AND finally run as the flat form.
+            _scan_declarations([*stmt.body, *stmt.finalbody], state, path, findings)
         elif isinstance(stmt, BLOCK_STATEMENTS):
             # Header bindings and stores in an earlier try/loop arm can replace
             # an imported client or router before a declaration is reached.

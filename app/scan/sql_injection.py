@@ -635,9 +635,9 @@ class _QueryFlow:
                         self.assign(item.optional_vars, _UNKNOWN, state)
                 state = self.block(node.body, state, stable, captures)
             elif isinstance(node, (ast.Try, ast.TryStar)) and certain_try(node):
-                # A handler-less try guards nothing (certain_try): its body
-                # runs as the flat form, no paths to merge.
-                state = self.block(node.body, state, stable, captures)
+                # A handler-less try guards nothing (certain_try): body AND
+                # finally run as the flat form, no paths to merge.
+                state = self.block([*node.body, *node.finalbody], state, stable, captures)
             elif isinstance(node, (ast.Try, ast.TryStar)):
                 body = self.block(node.body, state.copy(), stable, captures)
                 paths = [self.block(node.orelse, body, stable, captures) if body is not None else None]
