@@ -204,6 +204,47 @@ def value_has_placeholder_marker(value: str) -> bool:
     return any(marker in low for marker in _PLACEHOLDER_MARKERS)
 
 
+# An OBVIOUSLY made-up value: self-evidently not real secret bytes. Distinct
+# from value_has_placeholder_marker, which reads a value that ANNOUNCES itself
+# as a stand-in; this reads its SHAPE. Together they decide whether a hit in a
+# test file is a fixture (shown, not charged to the score) or a possible real
+# leak that must keep its charge (see _NO_PENALTY_CONTEXTS in scoring.py).
+#
+# Every signal here is one a randomly generated credential does not have: real
+# secret bytes are high-entropy, so they carry no run of one character four
+# times, no ascending run (abcd / 012345), no ellipsis, no example/test host,
+# and none of these self-labelling words. A value with none of these is left as
+# `test_file` on purpose -- a real key pasted into a test is indistinguishable
+# from a fake one, and the conservative direction keeps that leak charged.
+_SYNTHETIC_WORDS = (
+    "placeholder", "dummy", "fake", "not-real", "not_real", "notreal",
+    "test-only", "test_only", "redacted", "changeme", "change_me", "change-me",
+    "forlogs",
+)
+_ELLIPSIS_RE = re.compile(r"\.\.\.|…")
+
+
+def value_looks_synthetic(value: str) -> bool:
+    """An obviously made-up value: an ellipsis (a demonstrative truncation) or a
+    self-labelling word that cannot appear in real secret bytes.
+
+    Deliberately NARROW -- structure alone (a run of one character, an
+    ascending run, a test/example host) is NOT enough, though it marks obvious
+    fakes too. MEASURED conflict: `AKIA` + "A"*16 and a localhost dev DSN are
+    both obvious fakes by shape, but test_realistic_secret_in_test_path_is_
+    damped_but_kept and test_a_local_dsn_still_takes_the_ordinary_path_damping
+    require them to stay `test_file`, on the recorded policy that "a realistic
+    fake key is realistic precisely because it doesn't say fake in it" and that
+    damping "caps, it never drops". So only a value that CANNOT be real bytes
+    is damped to a fixture; anything a real credential could spell keeps its
+    charge. See those tests before widening this.
+    """
+    if _ELLIPSIS_RE.search(value):
+        return True
+    low = value.lower()
+    return any(word in low for word in _SYNTHETIC_WORDS)
+
+
 def _is_labelled_test_harness_value(name: str, rule: SecretRule, matched: str) -> bool:
     """Recognize disposable literals without treating scripts/ as test code.
 
@@ -696,7 +737,7 @@ def _shell_substitution_offsets(name: str, text: str) -> set[int]:
     their own languages. Treating the entire workflow as shell would hide
     genuine credentials there, so use YAML node spans to delimit run code.
     """
-    lower = name.lower()
+    lower = name.lower().removesuffix(".fixture")
     if lower.endswith((".md", ".mdx")):
         # Only explicitly shell-labelled fenced blocks have shell expansion
         # semantics. Prose, other languages and quoted heredocs remain data.
@@ -1131,7 +1172,8 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
         title = f"{title} (CI service container)"
         context = "ci_service"
-    elif ((_is_test_fixture_path(name) and value_has_placeholder_marker(matched))
+    elif ((_is_test_fixture_path(name)
+            and (value_has_placeholder_marker(matched) or value_looks_synthetic(matched)))
           or _is_labelled_test_harness_value(name, rule, matched)):
         severity = _TEST_PLACEHOLDER_SEVERITY
         confidence = round(confidence * _TEST_PLACEHOLDER_CONFIDENCE_FACTOR, 2)
