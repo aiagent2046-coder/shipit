@@ -318,22 +318,65 @@ _JS_LITERAL = re.compile(r"\"(?:[^\"\\\n]|\\.){4,}\"|'(?:[^'\\\n]|\\.){4,}'")
 _JS_BINDING = re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)")
 _JS_FUNC_PARAMS = re.compile(r"function\s*[A-Za-z_$]*\s*\(([^)]*)\)")
 _JS_ARROW_PARAMS = re.compile(r"(?:\(|([A-Za-z_$][\w$]*))\s*=>")
-_JS_STRINGS_COMMENTS = re.compile(
-    r"\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`"
-    r"|//[^\n]*|/\*.*?\*/",
-    re.S,
-)
-
-
 def _mask_js_literals_and_comments(text: str) -> str:
     """Blank strings and comments with spaces, preserving every offset.
 
     Matches found in the MASKED text are guaranteed to be code: anything
-    inside a literal or a comment has been blanked away.
+    inside a literal or a comment has been blanked away. Template literal
+    SUBSTITUTIONS (${...}) are code and stay visible -- MEASURED: masking
+    them whole left `${fragment}` unrenamed while `const fragment` moved,
+    and the "variant" became a broken program (garbage escapes on the sql
+    rule's safe forms).
     """
-    return _JS_STRINGS_COMMENTS.sub(
-        lambda m: " " * (m.end() - m.start()), text
-    )
+    out = list(text)
+    size = len(out)
+
+    def blank(start, end):
+        for index in range(start, min(end, size)):
+            if out[index] not in "\r\n":
+                out[index] = " "
+
+    def scan(index, stop_at_brace):
+        while index < size:
+            char = text[index]
+            if stop_at_brace and char == "}":
+                return index
+            if char in "'\"":
+                start, index = index, index + 1
+                while index < size and text[index] != char:
+                    index += 2 if text[index] == "\\" else 1
+                blank(start, index + 1)
+                index += 1
+            elif char == "`":
+                start, index = index, index + 1
+                while index < size and text[index] != "`":
+                    if text[index] == "\\":
+                        blank(index, index + 2)
+                        index += 2
+                    elif text[index] == "$" and index + 1 < size and text[index + 1] == "{":
+                        blank(index, index + 2)
+                        index = scan(index + 2, True)
+                        blank(index, index + 1)
+                        index += 1
+                    else:
+                        blank(index, index + 1)
+                        index += 1
+                blank(start if index >= size else index, index + 1)
+                index += 1
+            elif char == "/" and index + 1 < size and text[index + 1] == "/":
+                end = text.find("\n", index)
+                blank(index, size if end < 0 else end)
+                index = size if end < 0 else end
+            elif char == "/" and index + 1 < size and text[index + 1] == "*":
+                end = text.find("*/", index + 2)
+                blank(index, size if end < 0 else end + 2)
+                index = size if end < 0 else end + 2
+            else:
+                index += 1
+        return index
+
+    scan(0, False)
+    return "".join(out)
 
 def js_local_const(text: str) -> str | None:
     """Hoist one call-site literal into a local const above its line."""
