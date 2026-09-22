@@ -96,6 +96,18 @@ class _Value:
 _UNKNOWN = _Value()
 
 
+def _js_false(node) -> bool:
+    """A literal false -- or the number 0, which is one in JavaScript.
+
+    MEASURED: the metamorphic probe's numeric-bool rewrites (rejectUnauthorized:
+    0) escaped tls while the cookie rule had learned this shape in the hunt
+    (its _bool_value reads 0/1). One claim, two readers, half-delivered."""
+    return node is not None and (
+        node.type == "false"
+        or (node.type == "number" and _text(node).strip() in {"0", "0.0"})
+    )
+
+
 def js_evidence(text, tsx=False, *, incomplete_reason: dict[str, str] | None = None):
     # With ASCII bytes and no escapes, every supported setting must contain one
     # of these exact property names. Escaped or Unicode source always reaches
@@ -169,7 +181,7 @@ def js_evidence(text, tsx=False, *, incomplete_reason: dict[str, str] | None = N
                 key = _property(child.child_by_field_name("key"))
                 if key == "rejectUnauthorized":
                     val = _unwrap(child.child_by_field_name("value"))
-                    selected = child if val is not None and val.type == "false" else None
+                    selected = child if _js_false(val) else None
                 elif not key:
                     selected = None  # An unknown computed key can replace the setting.
             elif child.type == "spread_element":
@@ -262,7 +274,7 @@ def js_evidence(text, tsx=False, *, incomplete_reason: dict[str, str] | None = N
                 "instance:https.Agent.options.rejectUnauthorized",
                 "https.globalAgent.options.rejectUnauthorized",
             }:
-                if raw is not None and raw.type == "false":
+                if _js_false(raw):
                     emit(target, "sets HTTPS agent options.rejectUnauthorized=false")
             else:
                 invalidate(resolve(target.child_by_field_name("object"), bindings), bindings)

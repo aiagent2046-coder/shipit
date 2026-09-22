@@ -273,6 +273,25 @@ def _local_string_bindings(root, budget: list[int]) -> dict[str, str]:
         literal = _string_value(value) or (_leading_string(value) if value.type != "string" else "")
         if literal:
             bindings[_text(name)] = literal
+    # MEASURED: a two-hop chain (`name = holder = "session_id"`) silenced every
+    # variant of the local-binding case -- follow unambiguous chains with a
+    # small bound instead of stopping at one hop.
+    for _ in range(3):
+        changed = False
+        for node in _walk(root, budget):
+            if node.type != "variable_declarator":
+                continue
+            name = node.child_by_field_name("name")
+            value = node.child_by_field_name("value")
+            if (name is None or value is None or name.type != "identifier"
+                    or value.type != "identifier"):
+                continue
+            key, target = _text(name), _text(value)
+            if key not in bindings and target in bindings:
+                bindings[key] = bindings[target]
+                changed = True
+        if not changed:
+            break
     return bindings
 
 
@@ -482,6 +501,19 @@ def _document_cookie_evidence(node, literals: dict[str, str],
     if _text(left) != "document.cookie":
         return []
     literal = _leading_string(right)
+    if not literal and right.type == "binary_expression":
+        # `holder_a + "=" + token` where holder_a is a known binding: the
+        # leading NAME comes from the binding, the same claim the flat literal
+        # makes. Walk the left spine (`+` is left-associative) to the first
+        # name. MEASURED: hoisting the leading literal into a local silenced
+        # every document.cookie variant of the metamorphic probe.
+        lead = right
+        while lead is not None and lead.type == "binary_expression":
+            lead = lead.child_by_field_name("left")
+        if lead is not None and lead.type == "identifier" and _visible_binding(
+            _text(lead), node, declarations
+        ):
+            literal = literals.get(_text(lead), "")
     if not literal and _visible_binding(_text(right), node, declarations):
         literal = literals.get(_text(right), "")
     # The leading text is the name itself in `"auth_token" + "=" + value`, and
