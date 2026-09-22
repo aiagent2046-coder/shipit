@@ -1,0 +1,10 @@
+{
+  "description": "The success setter is wrapped in a literal-true guard: the body always runs, so the effect is the same as the flat form. MEASURED: this exact wrap silenced every react variant of the metamorphic probe until _certain_following learned to look through statically true guards (a conditional guard stays opaque on purpose).",
+  "expect": [
+    {
+      "rule_id": "react-unchecked-http-success",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

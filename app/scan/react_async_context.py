@@ -540,6 +540,34 @@ def _boolean_setter(stmt, setters):
     return name in setters and len(args) == 1 and args[0].type in {"true", "false"}
 
 
+def _certain_following(stmt):
+    """The statement a statically true guard wraps, or the statement itself.
+
+    `if (true) { setX(true); }` runs the setter the same way the flat form
+    does, so the effect is what follows the fetch in kind. A CONDITIONAL
+    guard stays opaque: its body may not run (the same claim
+    app.scan.scope_statements.statically_true makes on the Python side).
+    MEASURED: wrapping the effect silenced all three
+    react-unchecked-http-success variants of the metamorphic probe.
+    """
+    if stmt.type != "if_statement" or stmt.child_by_field_name("alternative") is not None:
+        return stmt
+    while stmt.type == "if_statement" and stmt.child_by_field_name("alternative") is None:
+        condition = _text(stmt.child_by_field_name("condition") or "").strip()
+        while condition.startswith("(") and condition.endswith(")"):
+            condition = condition[1:-1].strip()
+        if condition != "true":
+            return stmt
+        consequence = stmt.child_by_field_name("consequence")
+        if consequence is None:
+            return stmt
+        statements = _children(consequence) if consequence.type == "statement_block" else [consequence]
+        if len(statements) != 1:
+            return stmt
+        stmt = statements[0]
+    return stmt
+
+
 def _caught_side_effect(stmt):
     """An optional synchronous call enclosed by an empty catch can fall through.
 
@@ -573,6 +601,7 @@ def _http_success_check(stmt, response, nodes, body, states, visible, routers):
     for following in _children(stmt.parent):
         if following.start_byte < stmt.end_byte:
             continue
+        following = _certain_following(following)
         state = next((s for s in visible if _literal_setter(following, states[s], "true")), None)
         effect, binding = ("success_state", state) if state else (None, None)
         parts = _children(following)
