@@ -1,0 +1,663 @@
+{
+  "findings": [
+    {
+      "rule_id": "dependency-cve-match",
+      "title": "requests 2.31.0 matches GHSA-9hjg-9r4m-mvj7",
+      "severity": "high",
+      "confidence": 0.9,
+      "category": "Security",
+      "file": "requirements.txt",
+      "line": 2,
+      "explanation": "The resolved PyPI package version is listed as affected by GHSA-9hjg-9r4m-mvj7 in the bundled advisory snapshot. Application reachability and exploitability have not been verified. Recorded manifest locations: requirements.txt (unknown; not marked direct).",
+      "fix_hint": "Advisory-fixed upgrade candidates: 2.33.0. These versions were checked against all recorded advisories for this package in this snapshot. Review compatibility, update the dependency and resolved lockfile, then repeat the scan and application tests. No update has been applied or runtime-verified.",
+      "source": "dependency",
+      "verification_status": "unverified",
+      "verification_method": "package_version_match",
+      "claim_evidence": {
+        "version": 1,
+        "package": "requests",
+        "ecosystem": "PyPI",
+        "installed_version": "2.31.0",
+        "manifest": "requirements.txt",
+        "dependency_scope": "unknown",
+        "direct": false,
+        "dependency_groups": [],
+        "occurrences": [
+          {
+            "manifest": "requirements.txt",
+            "line": 2,
+            "direct": false,
+            "dependency_scope": "unknown",
+            "dependency_groups": []
+          }
+        ],
+        "occurrences_recorded": true,
+        "advisory_id": "GHSA-9hjg-9r4m-mvj7",
+        "advisory_ids": [
+          "CVE-2024-47081",
+          "GHSA-9hjg-9r4m-mvj7"
+        ],
+        "url": "https://github.com/advisories/GHSA-9hjg-9r4m-mvj7",
+        "snapshot": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+          "generated_at": "2026-09-21T10:42:57Z"
+        },
+        "snapshot_sources": [
+          {
+            "name": "github-reviewed",
+            "repository": "https://github.com/github/advisory-database",
+            "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+            "generated_at": "2026-09-21T09:36:26Z"
+          }
+        ],
+        "matched_ranges": [
+          {
+            "events": [
+              {
+                "introduced": "0"
+              },
+              {
+                "fixed": "2.32.4"
+              }
+            ],
+            "type": "ECOSYSTEM"
+          }
+        ],
+        "matched_versions": [],
+        "default_status_used": false,
+        "reachability": "not_assessed",
+        "ghsa_id": "GHSA-9hjg-9r4m-mvj7",
+        "remediation": {
+          "schema_version": 1,
+          "catalog_version": "2026-09-21.1",
+          "recipe": {
+            "id": "pypi-dependency-upgrade",
+            "revision": 1,
+            "steps": [
+              "Review the advisory and release notes for a listed candidate and check Python/API compatibility.",
+              "Update the requirement or the parent dependency that brings in a transitive package.",
+              "Regenerate resolved requirements or the lockfile with the project's existing dependency workflow."
+            ],
+            "verification": [
+              "Regenerate the resolved dependency file and confirm every affected installation was updated.",
+              "Repeat the advisory scan; preserve unknown or incomplete results as unresolved.",
+              "Run the application's build and regression tests, including the affected feature when available."
+            ]
+          },
+          "binding": {
+            "ecosystem": "PyPI",
+            "package": "requests",
+            "installed_version": "2.31.0",
+            "sources": {
+              "cvelist": {
+                "repository": "https://github.com/CVEProject/cvelistV5",
+                "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+                "generated_at": "2026-09-21T10:42:57Z"
+              },
+              "github-reviewed": {
+                "repository": "https://github.com/github/advisory-database",
+                "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+                "generated_at": "2026-09-21T09:36:26Z"
+              }
+            },
+            "sources_sha256": "8ef299c67c6e05094352e6628eba94073e0800c564e3751cfe42c7f9a0b41f39",
+            "records_sha256": "7a21b8764b64f3fe99e47c7f8e2aa4330d9ba9cbc524be87f8f864dd68eb66b5"
+          },
+          "status": "candidates_available",
+          "candidate_versions": [
+            "2.33.0"
+          ],
+          "reason_codes": [
+            "candidate_still_affected"
+          ],
+          "automatic_apply": false,
+          "runtime_verified": false,
+          "compatibility": "not_assessed",
+          "advisory_count": 8,
+          "evaluations": 15
+        }
+      }
+    },
+    {
+      "rule_id": "dependency-cve-match",
+      "title": "requests 2.31.0 matches GHSA-9wx4-h78v-vm56",
+      "severity": "high",
+      "confidence": 0.9,
+      "category": "Security",
+      "file": "requirements.txt",
+      "line": 2,
+      "explanation": "The resolved PyPI package version is listed as affected by GHSA-9wx4-h78v-vm56 in the bundled advisory snapshot. Application reachability and exploitability have not been verified. Recorded manifest locations: requirements.txt (unknown; not marked direct).",
+      "fix_hint": "Advisory-fixed upgrade candidates: 2.33.0. These versions were checked against all recorded advisories for this package in this snapshot. Review compatibility, update the dependency and resolved lockfile, then repeat the scan and application tests. No update has been applied or runtime-verified.",
+      "source": "dependency",
+      "verification_status": "unverified",
+      "verification_method": "package_version_match",
+      "claim_evidence": {
+        "version": 1,
+        "package": "requests",
+        "ecosystem": "PyPI",
+        "installed_version": "2.31.0",
+        "manifest": "requirements.txt",
+        "dependency_scope": "unknown",
+        "direct": false,
+        "dependency_groups": [],
+        "occurrences": [
+          {
+            "manifest": "requirements.txt",
+            "line": 2,
+            "direct": false,
+            "dependency_scope": "unknown",
+            "dependency_groups": []
+          }
+        ],
+        "occurrences_recorded": true,
+        "advisory_id": "GHSA-9wx4-h78v-vm56",
+        "advisory_ids": [
+          "CVE-2024-35195",
+          "GHSA-9wx4-h78v-vm56"
+        ],
+        "url": "https://github.com/advisories/GHSA-9wx4-h78v-vm56",
+        "snapshot": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+          "generated_at": "2026-09-21T10:42:57Z"
+        },
+        "snapshot_sources": [
+          {
+            "name": "github-reviewed",
+            "repository": "https://github.com/github/advisory-database",
+            "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+            "generated_at": "2026-09-21T09:36:26Z"
+          }
+        ],
+        "matched_ranges": [
+          {
+            "events": [
+              {
+                "introduced": "0"
+              },
+              {
+                "fixed": "2.32.0"
+              }
+            ],
+            "type": "ECOSYSTEM"
+          }
+        ],
+        "matched_versions": [],
+        "default_status_used": false,
+        "reachability": "not_assessed",
+        "ghsa_id": "GHSA-9wx4-h78v-vm56",
+        "remediation": {
+          "schema_version": 1,
+          "catalog_version": "2026-09-21.1",
+          "recipe": {
+            "id": "pypi-dependency-upgrade",
+            "revision": 1,
+            "steps": [
+              "Review the advisory and release notes for a listed candidate and check Python/API compatibility.",
+              "Update the requirement or the parent dependency that brings in a transitive package.",
+              "Regenerate resolved requirements or the lockfile with the project's existing dependency workflow."
+            ],
+            "verification": [
+              "Regenerate the resolved dependency file and confirm every affected installation was updated.",
+              "Repeat the advisory scan; preserve unknown or incomplete results as unresolved.",
+              "Run the application's build and regression tests, including the affected feature when available."
+            ]
+          },
+          "binding": {
+            "ecosystem": "PyPI",
+            "package": "requests",
+            "installed_version": "2.31.0",
+            "sources": {
+              "cvelist": {
+                "repository": "https://github.com/CVEProject/cvelistV5",
+                "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+                "generated_at": "2026-09-21T10:42:57Z"
+              },
+              "github-reviewed": {
+                "repository": "https://github.com/github/advisory-database",
+                "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+                "generated_at": "2026-09-21T09:36:26Z"
+              }
+            },
+            "sources_sha256": "8ef299c67c6e05094352e6628eba94073e0800c564e3751cfe42c7f9a0b41f39",
+            "records_sha256": "7a21b8764b64f3fe99e47c7f8e2aa4330d9ba9cbc524be87f8f864dd68eb66b5"
+          },
+          "status": "candidates_available",
+          "candidate_versions": [
+            "2.33.0"
+          ],
+          "reason_codes": [
+            "candidate_still_affected"
+          ],
+          "automatic_apply": false,
+          "runtime_verified": false,
+          "compatibility": "not_assessed",
+          "advisory_count": 8,
+          "evaluations": 15
+        }
+      }
+    },
+    {
+      "rule_id": "dependency-cve-match",
+      "title": "requests 2.31.0 matches GHSA-gc5v-m9x4-r6x2",
+      "severity": "high",
+      "confidence": 0.9,
+      "category": "Security",
+      "file": "requirements.txt",
+      "line": 2,
+      "explanation": "The resolved PyPI package version is listed as affected by GHSA-gc5v-m9x4-r6x2 in the bundled advisory snapshot. Application reachability and exploitability have not been verified. Recorded manifest locations: requirements.txt (unknown; not marked direct).",
+      "fix_hint": "Advisory-fixed upgrade candidates: 2.33.0. These versions were checked against all recorded advisories for this package in this snapshot. Review compatibility, update the dependency and resolved lockfile, then repeat the scan and application tests. No update has been applied or runtime-verified.",
+      "source": "dependency",
+      "verification_status": "unverified",
+      "verification_method": "package_version_match",
+      "claim_evidence": {
+        "version": 1,
+        "package": "requests",
+        "ecosystem": "PyPI",
+        "installed_version": "2.31.0",
+        "manifest": "requirements.txt",
+        "dependency_scope": "unknown",
+        "direct": false,
+        "dependency_groups": [],
+        "occurrences": [
+          {
+            "manifest": "requirements.txt",
+            "line": 2,
+            "direct": false,
+            "dependency_scope": "unknown",
+            "dependency_groups": []
+          }
+        ],
+        "occurrences_recorded": true,
+        "advisory_id": "GHSA-gc5v-m9x4-r6x2",
+        "advisory_ids": [
+          "CVE-2026-25645",
+          "GHSA-gc5v-m9x4-r6x2"
+        ],
+        "url": "https://github.com/advisories/GHSA-gc5v-m9x4-r6x2",
+        "snapshot": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+          "generated_at": "2026-09-21T10:42:57Z"
+        },
+        "snapshot_sources": [
+          {
+            "name": "github-reviewed",
+            "repository": "https://github.com/github/advisory-database",
+            "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+            "generated_at": "2026-09-21T09:36:26Z"
+          }
+        ],
+        "matched_ranges": [
+          {
+            "events": [
+              {
+                "introduced": "0"
+              },
+              {
+                "fixed": "2.33.0"
+              }
+            ],
+            "type": "ECOSYSTEM"
+          }
+        ],
+        "matched_versions": [],
+        "default_status_used": false,
+        "reachability": "not_assessed",
+        "ghsa_id": "GHSA-gc5v-m9x4-r6x2",
+        "remediation": {
+          "schema_version": 1,
+          "catalog_version": "2026-09-21.1",
+          "recipe": {
+            "id": "pypi-dependency-upgrade",
+            "revision": 1,
+            "steps": [
+              "Review the advisory and release notes for a listed candidate and check Python/API compatibility.",
+              "Update the requirement or the parent dependency that brings in a transitive package.",
+              "Regenerate resolved requirements or the lockfile with the project's existing dependency workflow."
+            ],
+            "verification": [
+              "Regenerate the resolved dependency file and confirm every affected installation was updated.",
+              "Repeat the advisory scan; preserve unknown or incomplete results as unresolved.",
+              "Run the application's build and regression tests, including the affected feature when available."
+            ]
+          },
+          "binding": {
+            "ecosystem": "PyPI",
+            "package": "requests",
+            "installed_version": "2.31.0",
+            "sources": {
+              "cvelist": {
+                "repository": "https://github.com/CVEProject/cvelistV5",
+                "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+                "generated_at": "2026-09-21T10:42:57Z"
+              },
+              "github-reviewed": {
+                "repository": "https://github.com/github/advisory-database",
+                "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+                "generated_at": "2026-09-21T09:36:26Z"
+              }
+            },
+            "sources_sha256": "8ef299c67c6e05094352e6628eba94073e0800c564e3751cfe42c7f9a0b41f39",
+            "records_sha256": "7a21b8764b64f3fe99e47c7f8e2aa4330d9ba9cbc524be87f8f864dd68eb66b5"
+          },
+          "status": "candidates_available",
+          "candidate_versions": [
+            "2.33.0"
+          ],
+          "reason_codes": [
+            "candidate_still_affected"
+          ],
+          "automatic_apply": false,
+          "runtime_verified": false,
+          "compatibility": "not_assessed",
+          "advisory_count": 8,
+          "evaluations": 15
+        }
+      }
+    }
+  ],
+  "coverage": {
+    "status": "partial",
+    "status_counts": {
+      "affected": 3,
+      "unaffected": 5,
+      "unknown": 1,
+      "not_in_catalog": 0
+    },
+    "dependencies_found": 2,
+    "dependencies_checked": 2,
+    "packages_in_catalog": 2,
+    "advisory_evaluations": 10,
+    "unresolved_ranges": 2,
+    "manifests": [
+      "requirements.txt"
+    ],
+    "incomplete_manifests": {},
+    "inventory_truncated": 0,
+    "findings_truncated": 0,
+    "evaluations_truncated": 0,
+    "unknown_reason_counts": {
+      "incomplete_advisory_sources": 1
+    },
+    "details_truncated": 0,
+    "manifest_gap_reason_counts": {},
+    "manifest_gap_details": [],
+    "manifest_gap_details_truncated": 0,
+    "excluded_manifests": {},
+    "excluded_manifests_truncated": 0,
+    "source": {
+      "repository": "https://github.com/CVEProject/cvelistV5",
+      "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+      "generated_at": "2026-09-21T10:42:57Z"
+    },
+    "sources": {
+      "cvelist": {
+        "repository": "https://github.com/CVEProject/cvelistV5",
+        "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+        "generated_at": "2026-09-21T10:42:57Z"
+      },
+      "github-reviewed": {
+        "repository": "https://github.com/github/advisory-database",
+        "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+        "generated_at": "2026-09-21T09:36:26Z"
+      }
+    },
+    "details": [
+      {
+        "package": "PyPI:pytest",
+        "version": "7.4.0",
+        "manifest": "requirements.txt",
+        "occurrences": [
+          {
+            "manifest": "requirements.txt",
+            "line": 1,
+            "direct": false,
+            "dependency_scope": "unknown",
+            "dependency_groups": []
+          }
+        ],
+        "occurrences_recorded": true,
+        "advisory": "CVE-2025-71176",
+        "reason": "incomplete_advisory_sources",
+        "assessments": [
+          {
+            "source": "cvelist",
+            "advisory": "CVE-2025-71176",
+            "status": "unknown",
+            "reason": "unsupported_version_type"
+          },
+          {
+            "source": "github-reviewed",
+            "advisory": "GHSA-6w46-j5rx-g56g",
+            "status": "affected",
+            "reason": null
+          }
+        ],
+        "assessments_truncated": 0
+      }
+    ],
+    "catalog_stats": {
+      "affected_seen": 607550,
+      "ghsa_affected_seen": 64805,
+      "ghsa_indexed_entries": 14816,
+      "ghsa_indexed_packages": 5070,
+      "ghsa_indexed_records": 13103,
+      "ghsa_invalid_affected": 3,
+      "ghsa_invalid_records": 0,
+      "ghsa_reviewed": 35729,
+      "ghsa_seen": 35729,
+      "ghsa_unreviewed": 0,
+      "ghsa_unsupported_aliases": 0,
+      "ghsa_unsupported_ecosystems": 44059,
+      "ghsa_unsupported_ranges": 0,
+      "ghsa_unsupported_schema": 0,
+      "ghsa_withdrawn": 1086,
+      "indexed_entries": 1780,
+      "indexed_entries_total": 16596,
+      "indexed_packages": 307,
+      "indexed_packages_total": 5185,
+      "indexed_records": 1578,
+      "invalid_affected": 60,
+      "invalid_records": 1,
+      "published": 377336,
+      "rejected": 18363,
+      "seen": 395699,
+      "unsupported_applicability": 1133,
+      "unsupported_packages": 605710,
+      "unsupported_schema": 0
+    },
+    "limitations": [
+      "Only exact registry package versions in supported lockfiles are compared with this snapshot.",
+      "Locked platform, optional and development variants are included; runtime selection is not evaluated.",
+      "A package/version match does not establish reachable or exploitable application code.",
+      "Absence from the snapshot, unsupported ranges, and no matches do not establish a clean or safe project.",
+      "PyPI comparisons support numeric releases and canonical a/b/rc prereleases; epochs, post/dev/local versions and other spellings remain unsupported. npm comparisons require SemVer; CVE range lower bound '0' means the earliest version."
+    ]
+  },
+  "inventory": [
+    {
+      "ecosystem": "PyPI",
+      "package": "pytest",
+      "version": "7.4.0",
+      "complete": true,
+      "assessments": [
+        {
+          "advisory_ids": [
+            "CVE-2025-71176",
+            "GHSA-6w46-j5rx-g56g"
+          ],
+          "status": "unknown",
+          "reported": false
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "package": "requests",
+      "version": "2.31.0",
+      "complete": true,
+      "assessments": [
+        {
+          "advisory_ids": [
+            "CVE-2014-1830",
+            "GHSA-652x-xj99-gmcc"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2024-47081",
+            "GHSA-9hjg-9r4m-mvj7"
+          ],
+          "status": "affected",
+          "reported": true
+        },
+        {
+          "advisory_ids": [
+            "CVE-2024-35195",
+            "GHSA-9wx4-h78v-vm56"
+          ],
+          "status": "affected",
+          "reported": true
+        },
+        {
+          "advisory_ids": [
+            "CVE-2014-1829",
+            "GHSA-cfj3-7x9c-4p3h"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2026-25645",
+            "GHSA-gc5v-m9x4-r6x2"
+          ],
+          "status": "affected",
+          "reported": true
+        },
+        {
+          "advisory_ids": [
+            "CVE-2023-32681",
+            "GHSA-j8r2-6x86-q33q"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2015-2296",
+            "GHSA-pg2w-x9wp-vw92"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2018-18074",
+            "GHSA-x84v-xcm2-53pg"
+          ],
+          "status": "unaffected",
+          "reported": false
+        }
+      ]
+    }
+  ],
+  "target_entry_assessments": [
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "affected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [
+        {
+          "events": [
+            {
+              "introduced": "0"
+            },
+            {
+              "fixed": "2.32.4"
+            }
+          ],
+          "type": "ECOSYSTEM"
+        }
+      ],
+      "matched_versions": []
+    },
+    {
+      "status": "affected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [
+        {
+          "events": [
+            {
+              "introduced": "0"
+            },
+            {
+              "fixed": "2.32.0"
+            }
+          ],
+          "type": "ECOSYSTEM"
+        }
+      ],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "affected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [
+        {
+          "events": [
+            {
+              "introduced": "0"
+            },
+            {
+              "fixed": "2.33.0"
+            }
+          ],
+          "type": "ECOSYSTEM"
+        }
+      ],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    }
+  ]
+}

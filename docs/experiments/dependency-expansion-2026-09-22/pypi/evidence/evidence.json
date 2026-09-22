@@ -1,0 +1,258 @@
+{
+  "status": "passed",
+  "upstream_repository": "https://github.com/lmeilibr/vtex",
+  "upstream_commit": "c957049c51b7e070e6c91f6212ade5216f7343cb",
+  "scanner_commit": "0b5c981412ad0a9ab62ad4a7a6da1b90a0acd67b",
+  "catalog_sha256": "e8cc8c6a60e29331c42f0c50bbdb57484766b947d377afc966c723ec7b3347af",
+  "target": "PyPI:requests",
+  "candidate": "2.33.0",
+  "unrelated_dependency_changes": [],
+  "stages": [
+    {
+      "stage": "before",
+      "manifest_sha256": "39842561dc1c255e5b53953bf45cb1340b6246eb9bd361401be2f0b4c37bf83f",
+      "target_findings": 3,
+      "target_entry_statuses": [
+        "unaffected",
+        "affected",
+        "affected",
+        "unaffected",
+        "affected",
+        "unaffected",
+        "unaffected",
+        "unaffected"
+      ],
+      "coverage": {
+        "affected": 3,
+        "unaffected": 5,
+        "unknown": 1,
+        "not_in_catalog": 0
+      },
+      "installed_inventory": [
+        "certifi==2026.7.22",
+        "charset-normalizer==3.5.1",
+        "idna==3.20",
+        "iniconfig==2.3.0",
+        "packaging==26.3",
+        "pluggy==1.6.0",
+        "pytest==7.4.0",
+        "requests==2.31.0",
+        "urllib3==2.8.0"
+      ],
+      "upstream_tests": {
+        "passed": 2,
+        "scope": "unit import smoke tests only"
+      },
+      "consumer": {
+        "installed_version": "2.31.0",
+        "consumer_checks_passed": [
+          "product GET URL",
+          "request authentication and content headers",
+          "configured timeout forwarded",
+          "success JSON and pagination token",
+          "pagination query parameters",
+          "404 response mapping",
+          "timeout exception preserved"
+        ],
+        "consumer_checks_count": 7,
+        "upstream_regression": {
+          "id": "CVE-2024-47081",
+          "credential_misbinding_observed": true,
+          "method": "prepare_request_only",
+          "requests_sent": 0,
+          "application_reachability": "not_established"
+        }
+      },
+      "import_origin": {
+        "prefix": "/workspace/scratch/756198ae107e/pypi-expansion/evidence/venv-before",
+        "requests_file": "/workspace/scratch/756198ae107e/pypi-expansion/evidence/venv-before/lib/python3.12/site-packages/requests/__init__.py"
+      },
+      "pip_check": "passed"
+    },
+    {
+      "stage": "after",
+      "manifest_sha256": "4c4c30c5906ca6edbde55045406d2f913d6520d1039aa051cbb82865c2c20303",
+      "target_findings": 0,
+      "target_entry_statuses": [
+        "unaffected",
+        "unaffected",
+        "unaffected",
+        "unaffected",
+        "unaffected",
+        "unaffected",
+        "unaffected",
+        "unaffected"
+      ],
+      "coverage": {
+        "affected": 0,
+        "unaffected": 8,
+        "unknown": 1,
+        "not_in_catalog": 0
+      },
+      "installed_inventory": [
+        "certifi==2026.7.22",
+        "charset-normalizer==3.5.1",
+        "idna==3.20",
+        "iniconfig==2.3.0",
+        "packaging==26.3",
+        "pluggy==1.6.0",
+        "pytest==7.4.0",
+        "requests==2.33.0",
+        "urllib3==2.8.0"
+      ],
+      "upstream_tests": {
+        "passed": 2,
+        "scope": "unit import smoke tests only"
+      },
+      "consumer": {
+        "installed_version": "2.33.0",
+        "consumer_checks_passed": [
+          "product GET URL",
+          "request authentication and content headers",
+          "configured timeout forwarded",
+          "success JSON and pagination token",
+          "pagination query parameters",
+          "404 response mapping",
+          "timeout exception preserved"
+        ],
+        "consumer_checks_count": 7,
+        "upstream_regression": {
+          "id": "CVE-2024-47081",
+          "credential_misbinding_observed": false,
+          "method": "prepare_request_only",
+          "requests_sent": 0,
+          "application_reachability": "not_established"
+        }
+      },
+      "import_origin": {
+        "prefix": "/workspace/scratch/756198ae107e/pypi-expansion/evidence/venv-after",
+        "requests_file": "/workspace/scratch/756198ae107e/pypi-expansion/evidence/venv-after/lib/python3.12/site-packages/requests/__init__.py"
+      },
+      "pip_check": "passed"
+    },
+    {
+      "stage": "restore",
+      "manifest_sha256": "39842561dc1c255e5b53953bf45cb1340b6246eb9bd361401be2f0b4c37bf83f",
+      "target_findings": 3,
+      "target_entry_statuses": [
+        "unaffected",
+        "affected",
+        "affected",
+        "unaffected",
+        "affected",
+        "unaffected",
+        "unaffected",
+        "unaffected"
+      ],
+      "coverage": {
+        "affected": 3,
+        "unaffected": 5,
+        "unknown": 1,
+        "not_in_catalog": 0
+      },
+      "installed_inventory": [
+        "certifi==2026.7.22",
+        "charset-normalizer==3.5.1",
+        "idna==3.20",
+        "iniconfig==2.3.0",
+        "packaging==26.3",
+        "pluggy==1.6.0",
+        "pytest==7.4.0",
+        "requests==2.31.0",
+        "urllib3==2.8.0"
+      ],
+      "upstream_tests": {
+        "passed": 2,
+        "scope": "unit import smoke tests only"
+      },
+      "consumer": {
+        "installed_version": "2.31.0",
+        "consumer_checks_passed": [
+          "product GET URL",
+          "request authentication and content headers",
+          "configured timeout forwarded",
+          "success JSON and pagination token",
+          "pagination query parameters",
+          "404 response mapping",
+          "timeout exception preserved"
+        ],
+        "consumer_checks_count": 7,
+        "upstream_regression": {
+          "id": "CVE-2024-47081",
+          "credential_misbinding_observed": true,
+          "method": "prepare_request_only",
+          "requests_sent": 0,
+          "application_reachability": "not_established"
+        }
+      },
+      "import_origin": {
+        "prefix": "/workspace/scratch/756198ae107e/pypi-expansion/evidence/venv-restore",
+        "requests_file": "/workspace/scratch/756198ae107e/pypi-expansion/evidence/venv-restore/lib/python3.12/site-packages/requests/__init__.py"
+      },
+      "pip_check": "passed"
+    }
+  ],
+  "limitations": [
+    "Upstream unit tests are only two import smoke tests.",
+    "VTEX live integration tests require a real account and were not run.",
+    "Seven added consumer checks use the actual VTEX client with an in-memory HTTP adapter.",
+    "The Requests security regression is offline dependency behavior, not proven application exploitability.",
+    "The source manifest has no complete transitive lock; the recorded resolved inventory is experiment-specific.",
+    "Pytest advisory CVE-2025-71176 remains unknown due to incomplete advisory sources in this catalog.",
+    "No claim that the whole project is clean or that all Requests advisories were exercised dynamically."
+  ],
+  "source_files_sha256": {
+    ".github/ISSUE_TEMPLATE/bug_report.md": "a0afc35c4956af8512a302376c19b010f6b8926823e43e3e43157c688d7ec892",
+    ".github/ISSUE_TEMPLATE/feature_request.md": "1f48c52f209a971b8e7eae4120144d28fcf8ee38a7778a7b4d8cf1ab356617d2",
+    ".github/workflows/pythonpackage.yml": "06488557c97dc366ec9d6783caecc1dabf8cd3fa3058e09e3f2b4b0ebce60b7e",
+    ".github/workflows/pythonpublish.yml": "e15b48c2489d87c40781d09336720cfcb3e122e879fdabc343307f79a86e7225",
+    ".github/workflows/testpypipublish.yml": "a04f8239a24adc2295d617c32cce7d245b6d33f552ffd0e5c3309bec464ec7ee",
+    ".gitignore": "b2404c62aae6b6bb84a99a006acd055aa0da33a9a4413db3f898edf0c232bca9",
+    "CONTRIBUTING.MD": "e2531eafd9d6efd5fe1a7ac9c6e7aa98871ced28d8a75ab2c8e3042d550b1bf4",
+    "LICENSE": "b21a8b075de48d96a54d5d8bceef9ffa6c033880677bea65813f8dec7860c33e",
+    "README.md": "7d512623d4a8fa979ab53f5fb650967151c11b0c1326ac74d53d1306e56123f7",
+    "docs/Makefile": "8b6587b859607f200f116e2cb043fc358e1c3a26c326b563bf348453cfc68307",
+    "docs/conf.py": "915c3bec252f419297e9dc209f730f27b5456b54fae79d9ce624d8463f0df02f",
+    "docs/index.rst": "0080a408a63b62c405900bcc09053571775282343663b8e14b31cf8b83ba1159",
+    "docs/make.bat": "b593cd1da19314a43db9a0854f6f92f2c59217571502da3321f9498c02fa16c8",
+    "docs/modules.rst": "6e6f0af8e51197320f89c7977e6c13843f5dc3aee9835386051738012209bcdf",
+    "docs/vtex.api_collections.rst": "e32faa76e8949221ff6b49b66cc89fcccaf33a9673bcb4c78904d0f46c70f524",
+    "docs/vtex.rst": "9eff9216df9796e9a7d27d98ef6d6c5f239643f80ac3efe1dca3c75bd22a23b1",
+    "requirements.txt": "39842561dc1c255e5b53953bf45cb1340b6246eb9bd361401be2f0b4c37bf83f",
+    "setup.py": "09d94bb90bbca22ce2a6fba96f2c0d62a5b92f0626094d9132c5824085f92c34",
+    "tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests/integration_tests/__init__.py": "d84f81f6248849346b0fbd90dee613bc716ba70f12a06794e1db4f0448b26133",
+    "tests/integration_tests/test_catalog_endpoint.py": "75f5fadbb63e0249548c0d1b56420d0a522fde26c3164204fa9967c0d49a700b",
+    "tests/integration_tests/test_gift_card_endpoint.py": "aafd9d2c085ea7acb541257c510e3870f936879b90fff6897162fe11f92f287a",
+    "tests/integration_tests/test_master_data_endpoint.py": "498e825d128285b052347ce952b6b15f5af5202a49438c7b8d76000bfc3cbc3a",
+    "tests/integration_tests/test_order_management_endpoint.py": "94bb35e65b9e2e9c77f28a0f8758d3f8f2d1028f6c813f00071df95d96847066",
+    "tests/integration_tests/test_payments_gateway_endpoint.py": "d4dd36f60b03b735a22321274d54c037f3f6a1b9984ef461664cbcddd585ef3b",
+    "tests/unit_tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests/unit_tests/test_imports.py": "793c4f63d584a8ec6224428a50e07ecfd6eedb2da65e1eabf6669d6389b0227b",
+    "vtex/__init__.py": "a85b7f61851fd86685b195fd111e52b05fb2e6bc4783583c5d06f89daf1c7391",
+    "vtex/api_collections/__init__.py": "613b66f5076835c000417a23168a5dfbe33a7604c2fc7d30d0ec9bccffb2a3c0",
+    "vtex/api_collections/base_api.py": "1c1b5ea8f8aba0b77b841187e75b76073d12663770eb2228c0392a56f56b801e",
+    "vtex/api_collections/catalog.py": "6272d025096bf9732862804f796dd3f547d80433f538f16bf9fe42111e35a36c",
+    "vtex/api_collections/checkout.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/api_collections/customer_credit.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/api_collections/gift_card.py": "e5131759cfe4d10dffac3de3cd0022a32c091b63e6b2d3e3bb40480e5bc11433",
+    "vtex/api_collections/license_manager.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/api_collections/logistics.py": "18dea6c72a158244f89089c2c24714d2aa372d1de520380ac9d84f549af356c0",
+    "vtex/api_collections/master_data.py": "09f38673d35830fc9c7660157379471c6ce0e8f7f1e6834886203223075bd976",
+    "vtex/api_collections/order_management.py": "88530c73c04ea47a641bea9b8e90385fca4cb49c603cf52a8a11fcce2ffb4b5c",
+    "vtex/api_collections/payments_gateway.py": "fd6dad2fc73e477db47538d66d78cd10079d3888560d58190377fa20c645dbf5",
+    "vtex/api_collections/pricing_vault.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/api_collections/rates_and_benefits.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/api_collections/search.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/api_collections/session_manager.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/api_collections/subscriptions.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/api_collections/suggestion.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/api_collections/vtex_do.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "vtex/vtex.py": "1fd933bf6edd7687de5771583695d46a74225b49189d771926039c096bcef971"
+  },
+  "source_digest": "3d6e44383cb24b4e32ff8cb566675ffabb6c155fdbdedb69b0338eb4c70d1570",
+  "scope": "pinned_project_dependency_experiment",
+  "automatic_patch": false,
+  "application_exploitability_verified": false,
+  "whole_project_verified": false
+}
