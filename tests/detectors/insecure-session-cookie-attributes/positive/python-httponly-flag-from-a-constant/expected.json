@@ -1,0 +1,10 @@
+{
+  "description": "The flag is a module constant holding False -- a statically switched-off HttpOnly. The boundary moved from 'is it a literal' to 'is it statically knowable': the sibling-scope and unresolvable-name negatives pin what stays silent, this pins what must now speak.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -55,6 +55,36 @@ _TSX_SUFFIXES = {".tsx", ".jsx"}
 # later. A body that only calls secrets/urandom still matches nothing.
 _RANDOM_METHODS = r"\b(?:random|randint|randrange|choice|getrandbits|uniform|sample)\b"
 
+_CONCATENATED_LITERAL = re.compile(
+    r"""(?P<q>["'])(?P<a>(?:[^\\]|\\.)*?)(?P=q)\s*\+\s*(?P=q)(?P<b>(?:[^\\]|\\.)*?)(?P=q)"""
+)
+
+
+def _fold_literal_concatenations(body: str) -> str:
+    """Collapse `"fully_" + "trusted"` into the one literal it spells.
+
+    MEASURED: the metamorphic probe's concat splits binned real corpus
+    positives as "vuln-removed" -- the marker looked for one literal where
+    the body spelled the same value in two. A statically knowable
+    concatenation is still the vulnerable shape (app.scan.literal_values
+    folds the same construct for the scanners; this is the triage twin).
+
+    Deliberately a FALLBACK, never the primary text: the regex cannot read
+    precedence and will happily fold `" WHERE " + " AND ".join(...)` even
+    though the second literal is a join separator. That fold can destroy a
+    marker (sql-injection's assembly-operator marker is literally `+`), so
+    classify() matches against the raw body first and only retries folded.
+    """
+    out = body
+    for _ in range(4):  # bounded: chains fold left to right
+        folded = _CONCATENATED_LITERAL.sub(
+            lambda m: f"{m.group('q')}{m.group('a')}{m.group('b')}{m.group('q')}", out
+        )
+        if folded == out:
+            break
+        out = folded
+    return out
+
 
 @dataclass(frozen=True)
 class Spec:
@@ -161,13 +191,20 @@ def classify(rule_id: str, filename: str, body: str) -> str:
     spec = SPECS.get(rule_id)
     if spec is None:
         return f"{REVIEW} (no spec)"
+    candidates = (body, _fold_literal_concatenations(body))
     for usage, import_line in spec.imports.items():
-        if re.search(usage, body, re.MULTILINE) and not re.search(import_line, body, re.MULTILINE):
+        if re.search(usage, body, re.MULTILINE) and not any(
+            re.search(import_line, candidate, re.MULTILINE) for candidate in candidates
+        ):
             return "broken (missing import)"
-    for marker in spec.markers:
-        if not re.search(marker, body):
-            return "vuln-removed"
-    if spec.target is not None and not re.search(spec.target, body, re.IGNORECASE):
+    if not any(
+        all(re.search(marker, candidate) for marker in spec.markers)
+        for candidate in candidates
+    ):
+        return "vuln-removed"
+    if spec.target is not None and not any(
+        re.search(spec.target, candidate, re.IGNORECASE) for candidate in candidates
+    ):
         return "no-secret-target"
     return REVIEW
 

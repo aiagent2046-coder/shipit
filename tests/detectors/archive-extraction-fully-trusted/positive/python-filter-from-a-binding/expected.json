@@ -1,0 +1,10 @@
+{
+  "description": "The filter is one line up in an unambiguous same-scope constant. Statically knowable, so the request for fully_trusted extraction is still provable from the file alone.",
+  "expect": [
+    {
+      "rule_id": "archive-extraction-fully-trusted",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

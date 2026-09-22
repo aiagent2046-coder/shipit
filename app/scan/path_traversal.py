@@ -101,7 +101,8 @@ class _PathState(_State):
     def copy(self) -> _PathState:
         result = _PathState()
         for name, value in vars(self).items():
-            if name in ("helpers", "resolve_budget", "module_context", "helper_defaults", "resolved_calls"):
+            if name in ("helpers", "resolve_budget", "module_context", "helper_defaults",
+                        "resolved_calls", "literals"):
                 setattr(result, name, value)
             elif hasattr(value, "copy"):
                 setattr(result, name, value.copy())
@@ -186,7 +187,7 @@ def _helper_return(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.expr | Non
 
 
 _HELPER_SHARED = frozenset({"helpers", "resolve_budget", "helper_depth", "module_context",
-                            "helper_defaults", "resolved_calls"})
+                            "helper_defaults", "resolved_calls", "literals"})
 
 
 def _capture_argument(name: str, expr: ast.AST, source: _PathState) -> _PathState:

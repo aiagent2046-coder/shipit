@@ -216,6 +216,8 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
                                          '"session_token", token'),
     "python-flag-comes-from-a-variable": ("app/login.py", "httponly=HTTP_ONLY",
                                           "httponly=False"),
+    "python-flag-from-a-sibling-scope": ("app/login.py", "httponly=flag",
+                                         "httponly=False"),
     "python-cookie-name-is-not-resolvable": ("app/login.py", "set_cookie(name, token)",
                                              'set_cookie("session_id", token)'),
     "python-django-samesite-python-none": ("app/settings.py", "SESSION_COOKIE_SAMESITE = None",

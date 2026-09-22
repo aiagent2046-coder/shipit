@@ -1,0 +1,10 @@
+{
+  "description": "SameSite=None one line up in a local constant -- the same defect as the literal form. String 'None' is the cross-site value (the Python None value is the safe one, pinned by python-django-samesite-python-none).",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

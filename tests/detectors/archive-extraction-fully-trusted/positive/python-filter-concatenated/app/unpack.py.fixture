@@ -1,0 +1,4 @@
+import tarfile
+
+with tarfile.open(upload) as tar:
+    tar.extractall(dest, filter="fully_" + "trusted")

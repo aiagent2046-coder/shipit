@@ -1,0 +1,8 @@
+import tarfile
+
+with tarfile.open(upload) as tar:
+    tar.extractall(dest, filter=mode)
+
+
+def defaults():
+    mode = "fully_trusted"

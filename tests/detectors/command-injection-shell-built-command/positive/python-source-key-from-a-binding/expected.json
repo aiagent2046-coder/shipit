@@ -1,0 +1,10 @@
+{
+  "description": "The request source key is a module constant -- the taint source is knowable from the file alone. Same class as the cookie name held in a constant: the probe measured 1 of 1 escapes here before the shared source reader resolved keys.",
+  "expect": [
+    {
+      "rule_id": "command-injection-shell-built-command",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

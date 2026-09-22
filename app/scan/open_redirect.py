@@ -30,6 +30,8 @@ import ast
 import zipfile
 
 from app.scan.rule_coverage import remaining_findings
+
+from app.scan.literal_values import literal_context
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
@@ -285,7 +287,7 @@ def scan_open_redirect(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
                 continue
             try:
                 with track_analysis_limits() as limits:
-                    _scan_scope(tree.body, _State(), info.filename, findings)
+                    _scan_scope(tree.body, _State(literals=literal_context(tree)), info.filename, findings)
             except _FindingLimitReached:
                 accounting.skip("finding_limit")
             except RecursionError:

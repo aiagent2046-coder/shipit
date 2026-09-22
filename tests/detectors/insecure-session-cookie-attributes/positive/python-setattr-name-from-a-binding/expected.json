@@ -1,0 +1,10 @@
+{
+  "description": "The setting NAME is held in a module constant -- the route to the setting does not change the claim (the same line the setattr docstring draws). Statically knowable names are read, not guessed.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,10 @@
+{
+  "description": "The JSON field key is a module constant one hop from the subscript. The probe measured the concat split of this exact key as a silent escape; keys are names, and statically knowable names are evidence.",
+  "expect": [
+    {
+      "rule_id": "python-outbound-request-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

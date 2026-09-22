@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
+from app.scan.literal_values import LiteralContext, literal_context
 from app.scan.rule_coverage import remaining_findings, RuleCoverage
 from app.scan.unsafe_deserialization import _Imports, _Scope
 
@@ -77,12 +78,15 @@ def _open_call(node: ast.AST | None, imports: _Imports, scope: _Scope | None) ->
             and imports.qualified(node.func, scope) in _OPEN_CALLS)
 
 
-def _fully_trusted_filter(call: ast.Call) -> bool:
-    """A literal filter="fully_trusted" keyword; ** spreads stay unknown.
+def _fully_trusted_filter(call: ast.Call, context: LiteralContext) -> bool:
+    """A statically known filter="fully_trusted" keyword; ** spreads stay unknown.
 
     A ** spread can carry or override the filter at runtime, so its presence
-    disqualifies the call. filter is keyword-only in every version that has
-    it, so only the keyword form is recognized.
+    disqualifies the call. filter is keyword-only in every version that has it,
+    so only the keyword form is recognized. Static knowledge includes
+    unambiguous bindings and literal concatenations (app.scan.literal_values) --
+    a filter handed through a variable one line up is still knowable from the
+    file alone.
     """
     seen = False
     for keyword in call.keywords:
@@ -94,7 +98,7 @@ def _fully_trusted_filter(call: ast.Call) -> bool:
             return False
         seen = True
         value = keyword.value
-        if not (isinstance(value, ast.Constant) and value.value == "fully_trusted"):
+        if context.resolve(value) != "fully_trusted":
             return False
     return seen
 
@@ -115,7 +119,9 @@ def _unbound_bare_name(node: ast.AST, name: str, scope: _Scope, imports: _Import
     return True
 
 
-def _dynamic_mutations(imports: _Imports) -> tuple[bool, set[_BindingKey]]:
+def _dynamic_mutations(
+    imports: _Imports, context: LiteralContext
+) -> tuple[bool, set[_BindingKey]]:
     """Conservative, proven setattr/patch mutations relevant to this rule.
 
     Replacing tarfile.open makes every constructor result in the file unknown.
@@ -128,12 +134,13 @@ def _dynamic_mutations(imports: _Imports) -> tuple[bool, set[_BindingKey]]:
 
     def note(target: ast.AST, member: ast.AST, scope: _Scope) -> None:
         nonlocal tarfile_mutated
-        if not isinstance(member, ast.Constant) or not isinstance(member.value, str):
+        member_name = context.resolve(member)
+        if not isinstance(member_name, str):
             return
         qualified = imports.qualified(target, scope)
-        if member.value == "open" and qualified in {"tarfile", "tarfile.TarFile"}:
+        if member_name == "open" and qualified in {"tarfile", "tarfile.TarFile"}:
             tarfile_mutated = True
-        elif member.value in _EXTRACT_MEMBERS and isinstance(target, ast.Name):
+        elif member_name in _EXTRACT_MEMBERS and isinstance(target, ast.Name):
             receivers.add(_binding_key(scope, target.id))
 
     for call, scope in imports.calls:
@@ -147,8 +154,7 @@ def _dynamic_mutations(imports: _Imports) -> tuple[bool, set[_BindingKey]]:
                 and not any(isinstance(arg, ast.Starred) for arg in call.args[:2])):
             note(call.args[0], call.args[1], scope)
         elif (target in _PATCH_CALLS and call.args
-              and isinstance(call.args[0], ast.Constant)
-              and call.args[0].value in {"tarfile.open", "tarfile.TarFile.open"}):
+              and context.resolve(call.args[0]) in {"tarfile.open", "tarfile.TarFile.open"}):
             tarfile_mutated = True
     return tarfile_mutated, receivers
 
@@ -244,8 +250,9 @@ def _binding_reaches(binding: _Binding, call: ast.Call, scope: _Scope,
 
 
 def _evidence(tree: ast.Module) -> list[_Evidence]:
+    context = literal_context(tree)
     imports = _Imports(tree)
-    tarfile_mutated, dynamic_receiver_mutations = _dynamic_mutations(imports)
+    tarfile_mutated, dynamic_receiver_mutations = _dynamic_mutations(imports, context)
     if tarfile_mutated:
         return []
     candidates, invalid = _bindings(tree, imports)
@@ -269,7 +276,7 @@ def _evidence(tree: ast.Module) -> list[_Evidence]:
             proven_receiver = True
         else:
             continue
-        if proven_receiver and _fully_trusted_filter(node):
+        if proven_receiver and _fully_trusted_filter(node, context):
             found.append(_Evidence(node.lineno))
     return found
 

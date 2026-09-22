@@ -1,0 +1,10 @@
+{
+  "description": "The cookie NAME is held in a function-local constant one line above the call. The JS half resolved this shape since the first hunt round (8 of 8 rewrites moved the name into a local const); the Python half went silent until literal_values followed unambiguous local bindings. The metamorphic probe measured the gap at 5 of 5 python positives.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

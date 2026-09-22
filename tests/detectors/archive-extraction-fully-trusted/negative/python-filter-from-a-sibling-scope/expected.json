@@ -1,0 +1,7 @@
+{
+  "description": "The filter name is bound in a sibling function that runs elsewhere. Following it would assert a value the file cannot show at the call -- visibility is the boundary, not literacy. The mutation writes the literal at the call, which must fire.",
+  "expect": [],
+  "forbid": [
+    "archive-extraction-fully-trusted"
+  ]
+}
