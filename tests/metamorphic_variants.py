@@ -416,9 +416,16 @@ def js_block_nest(text: str) -> str | None:
             continue
         if stripped.startswith(("import", "export", "//", "/*", "*")):
             continue
+        if stripped.startswith(("const ", "let ")):
+            # `const`/`let` are BLOCK-scoped in JavaScript: wrapping the
+            # declaration while the uses stay outside breaks the program
+            # (ReferenceError at run time). MEASURED: this produced garbage
+            # escapes on exactly those cases. `var` is function-scoped and
+            # safe to wrap, so only const/let declarations are skipped.
+            continue
         indent = _indent_of(line)
         lines[index] = (
-            f"if (true) {{\n{indent}    {stripped}\n{indent}}}\n"
+            f"{indent}if (true) {{\n{indent}    {stripped}\n{indent}}}\n"
         )
         return "".join(lines)
     return None

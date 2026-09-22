@@ -200,6 +200,23 @@ def _python_evidence(text):
     return sorted(set(found))
 
 
+def _js_statically_true(node) -> bool:
+    """`if (true) {...}` with no else -- the tree-sitter twin of
+    app.scan.scope_statements.statically_true (a literal-true guard is not
+    conditional; its consequence always runs)."""
+    if node is None or node.type != "if_statement":
+        return False
+    if node.child_by_field_name("alternative") is not None:
+        return False
+    condition = node.child_by_field_name("condition")
+    if condition is None:
+        return False
+    text = _text(condition).strip()
+    while text.startswith("(") and text.endswith(")"):
+        text = text[1:-1].strip()
+    return text == "true"
+
+
 def _plain_draw(value):
     """A Math.random call anywhere in the expression, without helper hops."""
     if value is None or value.type in _DEFERRED_BODIES:
@@ -220,6 +237,15 @@ def _return_draws(body):
     if body.type != "statement_block":
         return _plain_draw(body)  # arrow function with an expression body
     statements = [child for child in body.named_children if child.type != "comment"]
+    # A literal-true guard is no condition: `if (true) { return Math.random() }`
+    # returns the draw the same way the flat form does. MEASURED: wrapping the
+    # return silenced three helper cases of the metamorphic probe.
+    while (len(statements) == 1 and statements[0].type == "if_statement"
+           and _js_statically_true(statements[0])):
+        consequence = statements[0].child_by_field_name("consequence")
+        if consequence is None or consequence.type != "statement_block":
+            return False
+        statements = [child for child in consequence.named_children if child.type != "comment"]
     if len(statements) != 1 or statements[0].type != "return_statement":
         return False
     values = [child for child in statements[0].named_children if child.type != "comment"]

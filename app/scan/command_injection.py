@@ -51,7 +51,7 @@ from app.scan.outbound_url import (
     _walk,
 )
 from app.scan.rule_coverage import RuleCoverage, track_analysis_limits
-from app.scan.scope_statements import block_arms, scope_statements
+from app.scan.scope_statements import block_arms, scope_statements, statically_true
 
 RULE_ID = "command-injection-shell-built-command"
 
@@ -237,6 +237,10 @@ def _import_context(body: list[ast.stmt], state: _State) -> None:
                 _bind(target, stmt.value, state)
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _bind(ast.Name(id=stmt.name), None, state)
+        elif isinstance(stmt, ast.If) and statically_true(stmt.test):
+            # A literal-true guard is not conditional: its stores are certain
+            # (app.scan.scope_statements.statically_true).
+            _import_context(stmt.body, state)
         else:
             _forget_stores(stmt, state)
 

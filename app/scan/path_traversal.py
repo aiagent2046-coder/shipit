@@ -45,7 +45,7 @@ from app.scan.outbound_url import (
     _walk,
 )
 from app.scan.rule_coverage import RuleCoverage, track_analysis_limits
-from app.scan.scope_statements import scope_statements
+from app.scan.scope_statements import scope_statements, statically_true
 
 RULE_ID = "path-traversal-file-sink"
 # Bound distinct helper calls (including return propagation) and body traversals.
@@ -600,6 +600,10 @@ def _import_context(body: list[ast.stmt], state: _PathState) -> None:
                 # Every real rebinding above re-adds the name to `shadowed`, so
                 # only the one clean declaration stays resolvable.
                 state.shadowed.discard(stmt.name)
+        elif isinstance(stmt, ast.If) and statically_true(stmt.test):
+            # A literal-true guard is not conditional: its stores are certain
+            # (app.scan.scope_statements.statically_true).
+            _import_context(stmt.body, state)
         else:
             _forget_stores(stmt, state)
 
