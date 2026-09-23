@@ -473,13 +473,24 @@ def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
             ),
         ))
 
-    if not any(n.rsplit("/", 1)[-1] == "Dockerfile" for n in files):
-        alternatives = sorted(n for n in files
-                              if n.endswith(_DEPLOY_CONFIG_SUFFIXES)
-                              or n.rsplit("/", 1)[-1] in _DEPLOY_CONFIG_NAMES
-                              # Dockerfile.prod / Dockerfile.dev: containers
-                              # exist, just not under the exact name above.
-                              or n.rsplit("/", 1)[-1].startswith("Dockerfile."))
+    alternatives = sorted(n for n in files
+                          if n.endswith(_DEPLOY_CONFIG_SUFFIXES)
+                          or n.rsplit("/", 1)[-1] in _DEPLOY_CONFIG_NAMES
+                          # Dockerfile.prod / Dockerfile.dev: containers
+                          # exist, just not under the exact name above.
+                          or n.rsplit("/", 1)[-1].startswith("Dockerfile."))
+    # A package published to PyPI or npm has no deployment to inventory: it is
+    # installed, not hosted, so "no Dockerfile" is noise there. MEASURED on
+    # NandhaKishorM/laya (a PyPI decision-engine library) -- the sole finding in
+    # an otherwise clean scan. Suppress when the project is packaged
+    # (pyproject/setup.py/setup.cfg) AND carries no deployment config at all; a
+    # package that ships a compose file is deploying something and keeps the
+    # inventory. A bare app.py with no packaging metadata still reports -- that
+    # is the shape this rule is for.
+    _PACKAGE_META_NAMES = {"pyproject.toml", "setup.py", "setup.cfg"}
+    is_packaged = any(n.rsplit("/", 1)[-1] in _PACKAGE_META_NAMES for n in files)
+    if (not any(n.rsplit("/", 1)[-1] == "Dockerfile" for n in files)
+            and not (is_packaged and not alternatives)):
         findings.append(CheckFinding(
             "no-dockerfile", "No Dockerfile found in the archive",
             severity="low", confidence=0.9, category="Deploy",

@@ -134,6 +134,22 @@ def test_alternative_deployment_is_visible_inventory_not_a_penalty():
     assert not any(f.rule_id == 'no-dockerfile' for f in run_checks(archive({'Dockerfile': 'FROM scratch'})))
 
 
+def test_a_package_without_deployment_is_not_told_to_add_a_dockerfile():
+    """MEASURED on NandhaKishorM/laya (a PyPI decision-engine library): the sole
+    finding in an otherwise clean scan was "no Dockerfile" -- noise on an
+    installed package, which is hosted nowhere. A packaged project
+    (pyproject/setup.py) carrying no deployment config is not deploying and must
+    stay quiet; one that DOES ship a deploy config keeps the inventory; a bare
+    app.py (no packaging metadata) is still the shape this rule is for."""
+    packaged = {'pyproject.toml': '[project]\nname = "x"\n', 'src/x.py': 'def f(): pass\n'}
+    assert not any(f.rule_id == 'no-dockerfile' for f in run_checks(archive(packaged)))
+    shipped = dict(packaged, **{'docker-compose.yml': 'services: {}\n'})
+    f = next(f for f in run_checks(archive(shipped)) if f.rule_id == 'no-dockerfile')
+    assert f.context == 'deployment_inventory'
+    bare = next(f for f in run_checks(archive({'app.py': 'pass'})) if f.rule_id == 'no-dockerfile')
+    assert bare.context is None
+
+
 def test_source_roles_survive_the_static_pipeline_and_do_not_exclude_other_findings():
     from app.scan.static import run_static_scan
     buf = archive({'scripts/check.py': '# ' + uri(), 'deploy/app.service': '[Service]',
