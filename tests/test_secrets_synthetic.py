@@ -61,7 +61,7 @@ def test_an_ascending_run_is_not_synthetic():
 
 
 def test_a_host_is_not_synthetic():
-    assert not value_looks_synthetic("postgresql://u:p@localhost:5432/db")
+    assert not value_looks_synthetic("postgresql://u:p@localhost:5432/db")  # scan-allow: fixture DSN
 
 
 # --- context assignment in a test file --------------------------------------
