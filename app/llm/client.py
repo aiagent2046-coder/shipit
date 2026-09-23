@@ -171,7 +171,17 @@ def supports_sampling_params(model: str) -> bool:
     return model not in MODELS_WITHOUT_SAMPLING_PARAMS
 
 
-TIMEOUT = httpx.Timeout(120.0, connect=10.0)
+# Read timeout for ONE completion request. 120s default: measured enough for
+# every non-reasoning provider (claude-haiku-4.5 completed all four rubrics
+# of a 1,403-file repo in 75s total, 2026-09-24) and short enough to degrade
+# to an honest failed rubric instead of hanging a worker. Reasoning models
+# need more: glm-5.3-flash with the output ceiling raised to 32768 stopped
+# returning at the length boundary and then outlived this timeout mid-think
+# ("The read operation timed out", calls=0, measured 2026-09-24). Such runs
+# set LLM_READ_TIMEOUT (seconds) together with RUBRIC_MAX_TOKENS. A bad
+# value fails at import, like PAID_AUDIT_PASSES.
+LLM_READ_TIMEOUT = float(os.environ.get("LLM_READ_TIMEOUT", "120"))
+TIMEOUT = httpx.Timeout(LLM_READ_TIMEOUT, connect=10.0)
 TRANSIENT_RETRIES = 2      # extra attempts per provider on 5xx/transport errors
 RETRY_BACKOFF_S = 2.0      # linear: 2s, then 4s
 
