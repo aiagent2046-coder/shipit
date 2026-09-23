@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from source_guards import export_tracked_snapshot, prepare_scanner_snapshot
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--scanner", type=Path, required=True)
 parser.add_argument("--project", type=Path, required=True)
@@ -16,6 +18,13 @@ a.scanner = a.scanner.resolve()
 a.project = a.project.resolve()
 a.output = a.output.resolve()
 a.output.mkdir(parents=True, exist_ok=False)
+PIN = "c957049c51b7e070e6c91f6212ade5216f7343cb"
+SCANNER = "0b5c981412ad0a9ab62ad4a7a6da1b90a0acd67b"
+
+# Export Git objects before importing scanner or project code. No checkout-local
+# conftest, shadow modules, ignored files or bytecode can enter either snapshot.
+a.scanner = prepare_scanner_snapshot(a.scanner, a.output / "scanner", SCANNER)
+a.project = export_tracked_snapshot(a.project, a.output / "project", PIN)
 sys.path.insert(0, str(a.scanner / "scripts"))
 from verify_dependency_remediation import (  # noqa: E402
     Case,
@@ -23,9 +32,6 @@ from verify_dependency_remediation import (  # noqa: E402
     remediation_record,
     scan,
 )
-
-PIN = "c957049c51b7e070e6c91f6212ade5216f7343cb"
-SCANNER = "0b5c981412ad0a9ab62ad4a7a6da1b90a0acd67b"
 
 
 def sha(raw):
@@ -49,19 +55,13 @@ def run(args, log, *, cwd=a.project, env=None):
     return p.stdout
 
 
-assert subprocess.check_output(["git", "-C", str(a.project), "rev-parse", "HEAD"], text=True).strip() == PIN
-assert subprocess.check_output(["git", "-C", str(a.scanner), "rev-parse", "HEAD"], text=True).strip() == SCANNER
 catalog_raw = (a.scanner / "app/data/cve-catalog.json").read_bytes()
 assert sha(catalog_raw) == "e8cc8c6a60e29331c42f0c50bbdb57484766b947d377afc966c723ec7b3347af"
 catalog = json.loads(catalog_raw)
 case = Case("PyPI", "requests", "2.31.0", "2.33.0", "vtex", "0.2.0", 7)
 manifest = a.project / "requirements.txt"
-original = subprocess.check_output(["git", "-C", str(a.project), "show", f"{PIN}:requirements.txt"])
-assert manifest.read_bytes() == original
-assert not subprocess.check_output(
-    ["git", "-C", str(a.project), "status", "--porcelain", "--untracked-files=no"], text=True
-)
-source_files = subprocess.check_output(["git", "-C", str(a.project), "ls-files", "-z"]).decode().split("\0")
+original = manifest.read_bytes()
+source_files = sorted(str(path.relative_to(a.project)) for path in a.project.rglob("*") if path.is_file())
 source_hashes = {name: sha((a.project / name).read_bytes()) for name in source_files if name}
 source_digest = sha(json.dumps(source_hashes, sort_keys=True).encode())
 home = a.output / "home"

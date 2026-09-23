@@ -55,12 +55,14 @@ git -C /tmp/vtex-card-example checkout --detach c957049c51b7e070e6c91f6212ade521
   --output /tmp/vtex-card-evidence-new
 ```
 
-Keep `probe.py` and `environment-before.txt` next to `run_experiment.py`. Output must not exist. Installation uses registry wheels only, no project build hook or setup script. The runner verifies the project commit and tracked-file cleanliness, the scanner commit and catalog digest, the installed version and import origin, card candidate membership, complete target assessments, unchanged unrelated dependency inventory, and restoration. Each stage has a 180-second subprocess timeout.
+Keep `probe.py`, `source_guards.py` and `environment-before.txt` next to `run_experiment.py`. Output must not exist. Installation uses registry wheels only, no project build hook or setup script. Before importing scanner or project code, the runner verifies both checkout commits and rejects modified tracked scanner files under `app/` or `scripts/`. It then exports committed Git blobs into new `output/project` and `output/scanner` directories. Untracked or ignored files (including `conftest.py`, shadow modules and bytecode) cannot enter these snapshots; project working-tree changes are excluded and the supplied checkout is never modified. Symlinks and submodules are rejected. The runner verifies the catalog digest, the installed version and import origin, card candidate membership, complete target assessments, unchanged unrelated dependency inventory, and restoration. Each stage has a 180-second subprocess timeout.
 
 Before execution, the pinned project's setup file, unit tests, Vtex/BaseApi code, imported API modules and relevant integration fixtures were inspected. Source is imported directly; `setup.py`, project install hooks and live integration scripts are not executed. Installation receives a filtered environment with an isolated home; automatic pytest plugin discovery is disabled.
 
 The initial three-stage run is retained. The subsequent source-vs-Git, package-origin and `uv pip check` checks were read-only checks against those completed environments; the experiment was not rerun merely to regenerate logs. The checked-in runner also enforces those checks on future executions.
 
 Evidence includes full scan JSON, stage inventories, source hashes, consumer probe JSON, upstream pytest JUnit XML and logs, and installation/check logs. Venv directories and the upstream clone are not report artifacts.
+
+Offline guard regressions cover untracked pytest hooks, ignored/import-shadowing inputs, modified staged and unstaged scanner code, revision mismatch and symlink rejection. They require no registry installs.
 
 The final runner and probe received guard and formatting refinements after that initial execution; they are not presented as byte-for-byte copies of the initially executed scripts. Ruff passes using the scanner repository configuration.
