@@ -179,9 +179,40 @@ class ScoredFinding:
     claim_evidence: dict | None = None
 
 
+# Findings a report must SHOW but must not CHARGE against a category score.
+#
+# MEASURED on a dogfood audit of this very repository (aiagent2046-coder/shipit,
+# 2026-09-22): 151 findings, 136 of them under tests/ and the shipped code clean
+# apart from three commented-out lines -- yet Security scored 0.0, because
+# damped fixture/doc placeholders were charged at the same weight as a live leak
+# in running code. The category answered "is this safe to put in front of users"
+# with the loudest possible NO over a repository whose shipped code is clean. A
+# subscore is a claim about the RUNNING code, and it must not be decided by a
+# count of test data.
+#
+# These findings stay in the report -- the damping layer (SecretFinding.context)
+# already marks them and people DO paste a live key into a template, so nothing
+# is dropped. They are simply not evidence against the running code, and a
+# penalty that averages away is the wrong instrument for a stand-in.
+#
+# `test_file` is included by explicit operator decision (2026-09-22) -- the one
+# place this trades away safety. A real secret pasted into a test is
+# indistinguishable from a fake key in an assertion, and charging `test_file` is
+# what made every thorough repo read as unsafe: MEASURED on the dogfood audit,
+# 117 of 161 findings sat in tests/ and Security pinned at 0.0 over clean
+# shipped code. The reasoning is that Security answers "is this safe to put in
+# front of users", and test code never runs in front of them. The finding is
+# still REPORTED at medium in its own section (damping caps, it never drops) --
+# only the score is blind to it. Revisit if a genuine leak-in-test is ever
+# masked by a green headline.
+_NO_PENALTY_CONTEXTS = frozenset({"test_fixture", "doc_example", "test_file"})
+
+
 def _score(findings: list[ScoredFinding]) -> float:
     penalty = sum(
-        SEVERITY_WEIGHT[f.severity] * f.confidence for f in findings
+        SEVERITY_WEIGHT[f.severity] * f.confidence
+        for f in findings
+        if f.context not in _NO_PENALTY_CONTEXTS
     )
     return round(max(0.0, min(10.0, 10.0 - penalty)), 1)
 

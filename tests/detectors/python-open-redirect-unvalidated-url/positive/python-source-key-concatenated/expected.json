@@ -1,0 +1,10 @@
+{
+  "description": "The redirect target key is two concatenated literals -- statically 'next'. The same source reader serves command-injection and outbound-url; one fix, three rules.",
+  "expect": [
+    {
+      "rule_id": "python-open-redirect-unvalidated-url",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

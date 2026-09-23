@@ -18,6 +18,7 @@ from app.ratelimit import (
     DEFAULT_LIMIT,
     RateLimiter,
     RateLimitExceeded,
+    RateLimitStoreError,
     RedisRateLimiter,
     limiter_from_env,
 )
@@ -45,6 +46,17 @@ class FakeRedis:
         # Mirrors _WINDOW_LUA: INCR, set expiry only on the first hit, return
         # (count, pttl_ms). PTTL is -2 when the key is missing (never here,
         # since INCR just created it) and -1 when it has no expiry.
+        if "INCR" not in script:
+            # _PEEK_LUA: read-only twin -- report count and TTL, mutate
+            # nothing, expire nothing (a missing key reads as count0/-2).
+            self._evict_if_expired(key)
+            current = self._counts.get(key, 0)
+            exp = self._expire_at.get(key)
+            if key in self._counts and exp is not None:
+                pttl = int(exp - self._clock_ms())
+            else:
+                pttl = -2
+            return [current, pttl]
         self._evict_if_expired(key)
         current = self._counts.get(key, 0) + 1
         self._counts[key] = current
@@ -174,3 +186,71 @@ def test_audit_endpoint_429s_with_redis_limiter():
         assert int(resp.headers["retry-after"]) > 0
     finally:
         app.dependency_overrides.pop(get_rate_limiter, None)
+
+
+# --- store outage (fail-closed, not an allow) -----------------------------
+
+def test_store_failure_raises_store_error_not_an_allow():
+    class DownRedis:
+        def eval(self, script, numkeys, key, window_ms):
+            raise ConnectionError("redis gone")
+
+    limiter = RedisRateLimiter(DownRedis(), limit=3, window_seconds=100)
+    try:
+        limiter.check("1.2.3.4")
+        assert False, "expected RateLimitStoreError, not a silent allow"
+    except RateLimitStoreError as exc:
+        # the wrapped message keeps the failure TYPE and nothing else —
+        # neither the counted key nor the connection URL may travel in it
+        assert "ConnectionError" in str(exc)
+        assert "redis://" not in str(exc)
+
+
+def test_audit_endpoint_503_when_store_unavailable():
+    class BrokenLimiter:
+        limit = 3
+
+        def peek(self, key, limit=None):
+            raise RateLimitStoreError(
+                "rate limit store unavailable: ConnectionError"
+            )
+
+        def check(self, key, limit=None):
+            raise RateLimitStoreError(
+                "rate limit store unavailable: ConnectionError"
+            )
+
+    app.dependency_overrides[get_rate_limiter] = lambda: BrokenLimiter()
+    try:
+        client = TestClient(app)
+        resp = client.post(
+            "/v1/audits",
+            files={"archive": ("app.zip", make_valid_zip(), "application/zip")},
+        )
+        # Fail-closed deny as an explicit 503 with a reason the client can act
+        # on. If the exception handler were missing or mis-registered, this
+        # TestClient would RAISE RateLimitStoreError out of the test (its
+        # raise_server_exceptions default) instead of returning a response —
+        # so this assertion also pins the handler's very existence.
+        assert resp.status_code == 503
+        assert resp.json()["detail"]["reason"] == "rate_limit_unavailable"
+        assert "fail-closed" in resp.json()["detail"]["detail"]
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+
+
+# --- peek: the read-only pre-read gate ------------------------------------
+
+def test_rejected_peek_does_not_consume_quota():
+    fake = FakeRedis()
+    limiter = RedisRateLimiter(fake, limit=1, window_seconds=100)
+    limiter.check("1.2.3.4")            # consumes the single unit
+    for _ in range(3):                   # pre-read gate fires repeatedly...
+        try:
+            limiter.peek("1.2.3.4")
+            assert False, "expected RateLimitExceeded"
+        except RateLimitExceeded:
+            pass
+    # ...but the store's counter never moved: peek is read-only, so a burst
+    # of rejected requests cannot drag a legitimate caller deeper into debt
+    assert fake._counts["ratelimit:1.2.3.4"] == 1

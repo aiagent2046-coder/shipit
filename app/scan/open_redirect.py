@@ -30,6 +30,8 @@ import ast
 import zipfile
 
 from app.scan.rule_coverage import remaining_findings
+
+from app.scan.literal_values import literal_context
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
@@ -54,7 +56,7 @@ from app.scan.outbound_url import (
     _walk,
 )
 from app.scan.rule_coverage import RuleCoverage, track_analysis_limits
-from app.scan.scope_statements import block_arms, scope_statements
+from app.scan.scope_statements import block_arms, certain_try, scope_statements, statically_true
 
 RULE_ID = "python-open-redirect-unvalidated-url"
 
@@ -227,6 +229,14 @@ def _import_context(body: list[ast.stmt], state: _State) -> None:
                 _bind(target, stmt.value, state)
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             _bind(ast.Name(id=stmt.name), None, state)
+        elif isinstance(stmt, ast.If) and statically_true(stmt.test):
+            # A literal-true guard is not conditional: its stores are certain
+            # (app.scan.scope_statements.statically_true).
+            _import_context(stmt.body, state)
+        elif certain_try(stmt):
+            # A handler-less try guards nothing: body AND finally run as the
+            # flat form (app.scan.scope_statements.certain_try).
+            _import_context([*stmt.body, *stmt.finalbody], state)
         else:
             _forget_stores(stmt, state)
 
@@ -285,7 +295,7 @@ def scan_open_redirect(fileobj: BinaryIO, *, coverage: dict | None = None) -> li
                 continue
             try:
                 with track_analysis_limits() as limits:
-                    _scan_scope(tree.body, _State(), info.filename, findings)
+                    _scan_scope(tree.body, _State(literals=literal_context(tree)), info.filename, findings)
             except _FindingLimitReached:
                 accounting.skip("finding_limit")
             except RecursionError:

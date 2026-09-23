@@ -1,0 +1,10 @@
+{
+  "description": "The settings key is two concatenated literals -- statically the same name. The metamorphic probe measured this exact split as a silent escape before literal_values folded it.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

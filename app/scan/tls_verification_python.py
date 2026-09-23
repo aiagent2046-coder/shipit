@@ -11,6 +11,8 @@ from __future__ import annotations
 import ast
 from collections import Counter
 
+from app.scan.scope_statements import certain_try, statically_true
+
 _METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options", "request"})
 _CONSTRUCTORS = {
     "requests.Session": "requests.Session",
@@ -268,6 +270,19 @@ def python_evidence(text, *, incomplete_reason: dict[str, str] | None = None):
                 elif isinstance(statement, (ast.Global, ast.Nonlocal)):
                     for name in statement.names:
                         state.pop(name, None)
+                elif isinstance(statement, ast.If) and statically_true(statement.test):
+                    # A literal-true guard is no condition: its body runs
+                    # unconditionally and its orelse never does. Inline the
+                    # body into the SAME state -- the conservative tail below
+                    # forgets block stores, which is right for `if enabled:`
+                    # but wrong here. MEASURED: wrapping `session =
+                    # requests.Session()` in `if True:` silenced both tls
+                    # block variants of the metamorphic probe.
+                    block(statement.body, state)
+                elif certain_try(statement):
+                    # A handler-less try guards nothing (certain_try): body
+                    # AND finally run as the flat form.
+                    block([*statement.body, *statement.finalbody], state)
                 elif isinstance(statement, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.TryStar, ast.Match)):
                     before = state.copy()
                     for field, value in ast.iter_fields(statement):

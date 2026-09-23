@@ -15,7 +15,14 @@ import zipfile
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
-from app.scan.scope_statements import BLOCK_STATEMENTS, compatible_routes, route_conditions, scope_statements
+from app.scan.scope_statements import (
+    BLOCK_STATEMENTS,
+    compatible_routes,
+    certain_try,
+    route_conditions,
+    scope_statements,
+    statically_true,
+)
 from app.scan.secrets import is_non_production_path
 
 RULE_ID = "python-route-read-auth-consistency"
@@ -185,6 +192,32 @@ class _ScopeBindings:
     non_dependencies: dict[str, int] = field(default_factory=dict)
 
 
+def _certain_body(body: list[ast.stmt]) -> list[ast.stmt]:
+    """A scope's statements with statically true guards inlined.
+
+    MEASURED (scripts/metamorphic_probe.py): wrapping `router = APIRouter()`
+    in `if True:` broke route pairing in 17 variants across the two auth
+    rules. The docstring of _scope_routes keeps conditional router builds
+    unknown on purpose ("a router built conditionally has an uncertain
+    identity") -- but a literal-true guard is not a condition: its body
+    always runs and its orelse never does. Conditional blocks keep the
+    conservative treatment (app.scan.scope_statements.statically_true).
+    """
+    flat: list[ast.stmt] = []
+    for node in body:
+        if isinstance(node, ast.If) and statically_true(node.test):
+            flat.extend(_certain_body(node.body))
+        elif certain_try(node):
+            # finally runs whether or not the body raised: both lists are
+            # certain (handlers would be conditional -- certain_try excludes
+            # them). MEASURED: flattening body alone lost the routes a
+            # test_route_block_declarations fixture keeps in a finally arm.
+            flat.extend(_certain_body([*node.body, *node.finalbody]))
+        else:
+            flat.append(node)
+    return flat
+
+
 def _scope_stores(scope: ast.AST) -> Counter:
     """Visible bindings in one lexical scope, without entering child scopes."""
     names: Counter = Counter()
@@ -247,7 +280,7 @@ def _scope_bindings(scope: ast.AST, inherited: _ScopeBindings | None = None) -> 
         non_dependencies.pop(name, None)
         if name in dependencies:
             dependencies[name] = "unknown_module" if "module" in dependencies[name] else "unknown"
-    for node in scope.body:
+    for node in _certain_body(getattr(scope, "body", [])):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 name = alias.asname or alias.name.split(".")[0]
@@ -438,7 +471,7 @@ def _scope_routes(scope, factories: set[str], methods: set[str]):
     if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
         available_factories.difference_update(arg.arg for arg in ast.walk(scope.args) if isinstance(arg, ast.arg))
     routes = []
-    for node in scope.body:
+    for node in _certain_body(getattr(scope, "body", [])):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if len(node.decorator_list) != 1:
                 # Another decorator can change the callable or its contract.

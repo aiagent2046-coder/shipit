@@ -34,8 +34,10 @@ from __future__ import annotations
 import re
 import zipfile
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import BinaryIO
 
+from app.scan.check_loading import is_native_import_error
 from app.scan.secrets import _iter_text_files, is_non_production_path
 
 # `.from('table')` / `.from("table")`, the one call every supabase-js read goes
@@ -101,6 +103,105 @@ class NamedTables:
     has_dynamic_from: bool = False
 
 
+_FROM_IDENT = re.compile(r"\.from\(\s*([A-Za-z_$][\w$]*)\s*\)")
+@lru_cache(maxsize=2)
+def _parser(tsx: bool):
+    # Literal table names remain readable in the native-free browser profile.
+    # Only the optional alias resolver needs the native grammar.
+    import tree_sitter_typescript
+    from tree_sitter import Language, Parser
+
+    grammar = (tree_sitter_typescript.language_tsx if tsx
+               else tree_sitter_typescript.language_typescript)
+    return Parser(Language(grammar()))
+
+
+def _resolve_from_idents(text: str, *, tsx: bool = False) -> str:
+    """Resolve plain string declarations with proven scope and no other uses.
+
+    Only a declaration and direct `.from(name)` reads may mention the name.
+    Assignments, parameters, aliases and other uses leave it unknown. This
+    deliberately narrow rule also rejects duplicate or shadowing declarations;
+    it must not invent a table name that a live probe would then query.
+    """
+    if not _FROM_IDENT.search(text):
+        return text
+    source = text.encode("utf-8")
+    try:
+        parser = _parser(tsx)
+    except ImportError as exc:
+        if not is_native_import_error(exc):
+            raise
+        return text  # Preserve the existing dynamic-from disclosure.
+    root = parser.parse(source).root_node
+    if root.has_error:
+        return text
+    nodes = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        if len(nodes) > 60_000:
+            return text
+        stack.extend(node.named_children)
+
+    bindings = {}
+    invalid = set()
+    reads = {}
+    identifiers = {}
+    for node in nodes:
+        if node.type in {"identifier", "shorthand_property_identifier_pattern",
+                         "shorthand_property_identifier", "type_identifier"}:
+            identifiers.setdefault(node.text, []).append(node)
+        if node.type == "variable_declarator":
+            name = node.child_by_field_name("name")
+            value = node.child_by_field_name("value")
+            if name is None or name.type != "identifier":
+                continue
+            if name.text in bindings:
+                invalid.add(name.text)
+            # Reject expression prefixes, escapes and substituted templates.
+            if (value is None or value.type not in {"string", "template_string"}
+                    or b"\\" in value.text or b"${" in value.text):
+                invalid.add(name.text)
+                continue
+            declaration = node.parent
+            scope = declaration.parent if declaration is not None else None
+            if scope is None or scope.type not in {"program", "statement_block"}:
+                invalid.add(name.text)
+                continue
+            bindings[name.text] = (name, node, value, scope)
+        elif node.type == "call_expression":
+            function = node.child_by_field_name("function")
+            args = node.child_by_field_name("arguments")
+            if function is None or function.type != "member_expression" or args is None:
+                continue
+            prop = function.child_by_field_name("property")
+            if (prop is not None and prop.text == b"from"
+                    and len(args.named_children) == 1
+                    and args.named_children[0].type == "identifier"):
+                arg = args.named_children[0]
+                reads.setdefault(arg.text, []).append(arg)
+
+    replacements = []
+    for key, (name, declaration, value, scope) in bindings.items():
+        uses = reads.get(key, [])
+        allowed = {name.id, *(use.id for use in uses)}
+        if key in invalid or any(node.id not in allowed for node in identifiers.get(key, [])):
+            continue
+        for use in uses:
+            if declaration.end_byte > use.start_byte:
+                continue
+            parent = use.parent
+            while parent is not None and parent != scope:
+                parent = parent.parent
+            if parent == scope:
+                replacements.append((use.start_byte, use.end_byte, value.text))
+    for start, end, value in sorted(replacements, reverse=True):
+        source = source[:start] + value + source[end:]
+    return source.decode("utf-8")
+
+
 def read_named_tables(fileobj: BinaryIO) -> NamedTables:
     """Table names the repository's own code and generated types mention.
 
@@ -114,6 +215,8 @@ def read_named_tables(fileobj: BinaryIO) -> NamedTables:
             if (not name.lower().endswith(_SOURCE_EXTS)
                     or is_non_production_path(name)):
                 continue
+            if name.lower().endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")):
+                text = _resolve_from_idents(text, tsx=name.lower().endswith((".tsx", ".jsx")))
             for match in _FROM_CALL.finditer(text):
                 found.from_code.add(match.group(1).lower())
             if _TYPES_MARKER in text:

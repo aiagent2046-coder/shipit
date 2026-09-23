@@ -45,7 +45,7 @@ from app.scan.outbound_url import (
     _walk,
 )
 from app.scan.rule_coverage import RuleCoverage, track_analysis_limits
-from app.scan.scope_statements import scope_statements
+from app.scan.scope_statements import certain_try, scope_statements, statically_true
 
 RULE_ID = "path-traversal-file-sink"
 # Bound distinct helper calls (including return propagation) and body traversals.
@@ -101,7 +101,8 @@ class _PathState(_State):
     def copy(self) -> _PathState:
         result = _PathState()
         for name, value in vars(self).items():
-            if name in ("helpers", "resolve_budget", "module_context", "helper_defaults", "resolved_calls"):
+            if name in ("helpers", "resolve_budget", "module_context", "helper_defaults",
+                        "resolved_calls", "literals"):
                 setattr(result, name, value)
             elif hasattr(value, "copy"):
                 setattr(result, name, value.copy())
@@ -186,7 +187,7 @@ def _helper_return(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.expr | Non
 
 
 _HELPER_SHARED = frozenset({"helpers", "resolve_budget", "helper_depth", "module_context",
-                            "helper_defaults", "resolved_calls"})
+                            "helper_defaults", "resolved_calls", "literals"})
 
 
 def _capture_argument(name: str, expr: ast.AST, source: _PathState) -> _PathState:
@@ -599,6 +600,14 @@ def _import_context(body: list[ast.stmt], state: _PathState) -> None:
                 # Every real rebinding above re-adds the name to `shadowed`, so
                 # only the one clean declaration stays resolvable.
                 state.shadowed.discard(stmt.name)
+        elif isinstance(stmt, ast.If) and statically_true(stmt.test):
+            # A literal-true guard is not conditional: its stores are certain
+            # (app.scan.scope_statements.statically_true).
+            _import_context(stmt.body, state)
+        elif certain_try(stmt):
+            # A handler-less try guards nothing: body AND finally run as the
+            # flat form (app.scan.scope_statements.certain_try).
+            _import_context([*stmt.body, *stmt.finalbody], state)
         else:
             _forget_stores(stmt, state)
 

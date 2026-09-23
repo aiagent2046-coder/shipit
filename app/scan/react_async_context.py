@@ -540,6 +540,52 @@ def _boolean_setter(stmt, setters):
     return name in setters and len(args) == 1 and args[0].type in {"true", "false"}
 
 
+def _trivial_finalizer(stmt) -> bool:
+    """No finally clause, or a `finally {}` with nothing in it.
+
+    The finalizer field is the whole finally_clause; its trivial form is a
+    single empty statement_block inside it."""
+    finalizer = stmt.child_by_field_name("finalizer")
+    if finalizer is None:
+        return True
+    bodies = finalizer.named_children
+    return len(bodies) == 1 and not any(bodies[0].named_children)
+
+
+def _certain_following(stmt):
+    """The statement a statically true guard wraps, or the statement itself.
+
+    `if (true) { setX(true); }` runs the setter the same way the flat form
+    does, so the effect is what follows the fetch in kind. A CONDITIONAL
+    guard stays opaque: its body may not run (the same claim
+    app.scan.scope_statements.statically_true makes on the Python side).
+    MEASURED: wrapping the effect silenced all three
+    react-unchecked-http-success variants of the metamorphic probe.
+    """
+    while True:
+        if stmt.type == "if_statement" and stmt.child_by_field_name("alternative") is None:
+            condition = _text(stmt.child_by_field_name("condition") or "").strip()
+            while condition.startswith("(") and condition.endswith(")"):
+                condition = condition[1:-1].strip()
+            if condition != "true":
+                return stmt
+            inner = stmt.child_by_field_name("consequence")
+        elif (stmt.type == "try_statement"
+              and stmt.child_by_field_name("handler") is None
+              and _trivial_finalizer(stmt)):
+            # A handler-less try guards nothing (the tree-sitter twin of
+            # app.scan.scope_statements.certain_try).
+            inner = stmt.child_by_field_name("body")
+        else:
+            return stmt
+        if inner is None:
+            return stmt
+        statements = _children(inner) if inner.type == "statement_block" else [inner]
+        if len(statements) != 1:
+            return stmt
+        stmt = statements[0]
+
+
 def _caught_side_effect(stmt):
     """An optional synchronous call enclosed by an empty catch can fall through.
 
@@ -573,6 +619,7 @@ def _http_success_check(stmt, response, nodes, body, states, visible, routers):
     for following in _children(stmt.parent):
         if following.start_byte < stmt.end_byte:
             continue
+        following = _certain_following(following)
         state = next((s for s in visible if _literal_setter(following, states[s], "true")), None)
         effect, binding = ("success_state", state) if state else (None, None)
         parts = _children(following)

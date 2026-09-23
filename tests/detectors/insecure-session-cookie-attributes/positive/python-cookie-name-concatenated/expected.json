@@ -1,0 +1,10 @@
+{
+  "description": "The cookie name is two concatenated literals -- statically the same string. The JS half folds concatenations (leading-string evidence, measured after the hunt's `===` escape); the Python half lost every one of 8 concatenations until literal_values folded them. A concatenation of literals is a literal.",
+  "expect": [
+    {
+      "rule_id": "insecure-session-cookie-attributes",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -22,8 +22,9 @@ from dataclasses import dataclass, field
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
+from app.scan.literal_values import UNRESOLVED, LiteralContext, literal_context
 from app.scan.rule_coverage import RuleCoverage, mark_analysis_limit, track_analysis_limits
-from app.scan.scope_statements import BLOCK_STATEMENTS, block_arms
+from app.scan.scope_statements import BLOCK_STATEMENTS, block_arms, certain_try, statically_true
 
 RULE_ID = "python-outbound-request-unvalidated-url"
 _METHODS = frozenset({"delete", "get", "head", "options", "patch", "post", "put", "request", "stream"})
@@ -73,10 +74,12 @@ class _State:
     models: dict[str, str] = field(default_factory=dict)
     model_fields: dict[str, tuple[str, list[set[str]]] | None] = field(default_factory=dict)
     strings: set[str] = field(default_factory=set)
+    literals: LiteralContext | None = None
 
     def copy(self) -> _State:
         return _State(self.bindings.copy(), self.values.copy(), self.requests.copy(), self.checked.copy(),
-                      self.model_types.copy(), self.models.copy(), self.model_fields.copy(), self.strings.copy())
+                      self.model_types.copy(), self.models.copy(), self.model_fields.copy(), self.strings.copy(),
+                      self.literals)
 
 
 def _attr_name(node: ast.AST) -> str:
@@ -122,11 +125,25 @@ def _bounded_tree(tree: ast.AST) -> bool:
     return True
 
 
-def _field_key(expr: ast.AST | None) -> str | None:
+def _field_key(expr: ast.AST | None, state: _State | None = None) -> str | None:
+    """A field key: a literal or a statically knowable one (binding/concat).
+
+    MEASURED by the metamorphic probe: splitting `body["endpoint_url"]` into
+    two literals or hoisting the key into a constant silenced the shared
+    source reader for three rules at once. Keys are names, and statically
+    knowable names are evidence (app.scan.literal_values).
+    """
     if isinstance(expr, ast.Constant) and isinstance(expr.value, (str, int)):
-        key = repr(expr.value)
-        return key if len(key) <= 120 else None
-    return None
+        value = expr.value
+    elif state is not None and state.literals is not None:
+        resolved = state.literals.resolve(expr)
+        if resolved is UNRESOLVED or not isinstance(resolved, (str, int)):
+            return None
+        value = resolved
+    else:
+        return None
+    key = repr(value)
+    return key if len(key) <= 120 else None
 
 
 def _annotation(expr: ast.AST | None, state: _State) -> ast.AST | None:
@@ -167,10 +184,10 @@ def _string_value(expr: ast.AST, state: _State) -> bool:
     if key is not None:
         return key in state.strings
     receiver = None
-    if isinstance(expr, ast.Subscript) and _field_key(expr.slice):
+    if isinstance(expr, ast.Subscript) and _field_key(expr.slice, state):
         receiver = expr.value
     elif (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
-          and expr.func.attr == "get" and expr.args and _field_key(expr.args[0])):
+          and expr.func.attr == "get" and expr.args and _field_key(expr.args[0], state)):
         # An unknown default may be a custom object with an unrelated strip().
         if (len(expr.args) > 2 or (len(expr.args) > 1 and not _string_value(expr.args[1], state))
                 or any(kw.arg != "default" or not _string_value(kw.value, state) for kw in expr.keywords)):
@@ -193,7 +210,7 @@ def _request_read(expr: ast.AST, state: _State) -> set[str]:
     if isinstance(expr, ast.Await):
         return _request_read(expr.value, state)
     if isinstance(expr, ast.Subscript):
-        key = _field_key(expr.slice)
+        key = _field_key(expr.slice, state)
         return {f"{origin}[{key}]" for origin in _request_read(expr.value, state)} if key else set()
     if isinstance(expr, ast.Attribute):
         if isinstance(expr.value, ast.Name) and expr.value.id in state.requests and expr.attr in _REQUEST_ATTRS:
@@ -201,7 +218,7 @@ def _request_read(expr: ast.AST, state: _State) -> set[str]:
         return {f"{origin}.{expr.attr}" for origin in _request_read(expr.value, state)}
     if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute):
         if expr.func.attr in {"get", "getlist"} and expr.args:
-            key = _field_key(expr.args[0])
+            key = _field_key(expr.args[0], state)
             return {f"{origin}[{key}]" for origin in _request_read(expr.func.value, state)} if key else set()
         if expr.func.attr in {"body", "form", "json"}:
             return {origin + "()" for origin in _request_read(expr.func, state)}
@@ -236,7 +253,7 @@ def _skeleton(expr: ast.AST, state: _State) -> tuple[str, list[set[str]]] | None
         source = _skeleton(expr.value, state)
         # A JSON/query value can be indexed; do not turn a fixed-host URL local
         # into a caller-controlled whole URL merely because it has a subscript.
-        key = _field_key(expr.slice)
+        key = _field_key(expr.slice, state)
         if source and source[0] == _MARKER and key:
             return _MARKER, [{f"{origin}[{key}]" for origin in source[1][0]}]
         return None
@@ -733,6 +750,15 @@ def _scan_declarations(body: list[ast.stmt], state: _State, path: str,
                 _bind(target, stmt.value, state)
         elif isinstance(stmt, ast.ClassDef):
             _declare_model(stmt, state)
+        elif isinstance(stmt, ast.If) and statically_true(stmt.test):
+            # A literal-true guard is no condition at all: its body is the
+            # flat case and its orelse is dead code. Inline the body into the
+            # SAME state -- no copy, no forget -- and skip the orelse.
+            _scan_declarations(stmt.body, state, path, findings)
+        elif certain_try(stmt):
+            # A handler-less try guards nothing (scope_statements.certain_try):
+            # body AND finally run as the flat form.
+            _scan_declarations([*stmt.body, *stmt.finalbody], state, path, findings)
         elif isinstance(stmt, BLOCK_STATEMENTS):
             # Header bindings and stores in an earlier try/loop arm can replace
             # an imported client or router before a declaration is reached.
@@ -814,7 +840,7 @@ def scan_outbound_url(fileobj: BinaryIO, *, coverage: dict | None = None) -> lis
             try:
                 with track_analysis_limits() as limits:
                     if _has_route_declaration(tree.body):
-                        _scan_declarations(tree.body, _State(), info.filename, findings)
+                        _scan_declarations(tree.body, _State(literals=literal_context(tree)), info.filename, findings)
             except _FindingLimitReached:
                 accounting.skip("finding_limit")
             except RecursionError:

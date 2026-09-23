@@ -593,3 +593,20 @@ def test_the_account_payload_advertises_nothing_that_gates_nothing():
         "here is reported by GET /v1/account and reads as a promise. Add one "
         "only together with the code that enforces it."
     )
+
+
+def test_pro_account_can_upload_after_shared_ip_budget_is_spent(monkeypatch):
+    tiny = RateLimiter(limit=1)
+    tiny.check("testclient")
+    monkeypatch.setitem(app.dependency_overrides, get_rate_limiter, lambda: tiny)
+    monkeypatch.setitem(
+        app.dependency_overrides, get_account_repo, lambda: _pro_repo("sk_live_prokey")
+    )
+    response = client.post(
+        "/v1/audits",
+        files={"archive": ("app.zip", make_valid_zip(), "application/zip")},
+        headers={"Authorization": "Bearer sk_live_prokey"},
+    )
+    assert response.status_code == 202
+    assert tiny._windows["testclient"].count == 1
+    assert tiny._windows["account:acct-1"].count == 1

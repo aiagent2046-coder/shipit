@@ -1,0 +1,7 @@
+from django.conf import settings
+
+SETTING = "SESSION_COOKIE_HTTPONLY"
+
+
+def flag_off():
+    setattr(settings, SETTING, False)

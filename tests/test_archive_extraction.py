@@ -137,6 +137,8 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
     "no-filter": ("app/unpack.py", "tar.extractall(dest)",
                   'tar.extractall(dest, filter="fully_trusted")'),
     "filter-variable": ("app/unpack.py", "filter=mode", 'filter="fully_trusted"'),
+    "python-filter-from-a-sibling-scope": ("app/unpack.py", "filter=mode",
+                                          'filter="fully_trusted"'),
     "rebound-name": ("app/unpack.py", "tar = other\n", ""),
     "call-outside-with-block": ("app/unpack.py",
                                 "    pass\ntar.extractall(dest, filter=\"fully_trusted\")",

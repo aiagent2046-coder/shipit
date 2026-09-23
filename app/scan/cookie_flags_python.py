@@ -1,9 +1,10 @@
 """The Python half: cookie-setting calls, and the settings that decide the flags.
 
 WHAT IT READS. A call to `set_cookie`/`set_signed_cookie` whose cookie name is an
-authentication-shaped name -- a literal string, or a module-level constant holding
-one, resolved one hop -- and the HttpOnly/SameSite keywords on that call. Plus the
-two Django settings that decide the same thing for the session cookie,
+authentication-shaped name -- a literal string or a statically known string (an
+unambiguous constant or a literal concatenation, resolved through
+app.scan.literal_values) -- and the HttpOnly/SameSite keywords on that call. Plus
+the two Django settings that decide the same thing for the session cookie,
 `SESSION_COOKIE_HTTPONLY` and `SESSION_COOKIE_SAMESITE`.
 
 WHY THE NAME DECIDES. A theme or locale cookie is read by scripts on purpose, and
@@ -29,10 +30,15 @@ EXCLUSIONS, each one a claim this rule must not make:
   * `delete_cookie` -- clearing a cookie is not setting one.
 
 WHAT IT DOES NOT RESOLVE. Middleware that rewrites the cookie on the way out,
-framework defaults changing between versions, a name built at run time, a local
-constant declared inside the handler (module-level constants are resolved, one
-hop), and any value that arrives as a variable instead of a literal. Positional
-attribute arguments and unpacked keyword arguments are not treated as omissions.
+framework defaults changing between versions, and a name built at run time or by
+an f-string. Statically knowable values now include what the JS half already
+read (cookie_flags_js one-hop evidence): unambiguous constants (module AND
+function-local) and literal concatenations, with the visibility and stability
+rules in app.scan.literal_values. MEASURED by the metamorphic probe: the Python
+half lost the finding on 8 of 8 concatenations and 5 of 5 local constants of the
+cookie name while the JS half held -- one claim, two languages, half-delivered.
+Positional attribute arguments and unpacked keyword arguments are not treated as
+omissions.
 
 WHAT THE FIRST HUNT ROUND CHANGED HERE, measured on model rewrites: the cookie
 name arrived as `set_cookie(name=..., value=...)` (a keyword the signature
@@ -44,9 +50,9 @@ camelCase split now lives in `cookie_names.normalise`.
 from __future__ import annotations
 
 import ast
-from collections import Counter
 
 from app.scan.cookie_names import is_auth_cookie
+from app.scan.literal_values import UNRESOLVED, LiteralContext, literal_context
 
 _COOKIE_CALLS = frozenset({"set_cookie", "set_signed_cookie"})
 _HTTPONLY_KEYS = ("httponly", "http_only")
@@ -58,31 +64,9 @@ _SETTINGS = {
 }
 
 
-def _module_string_constants(tree: ast.Module) -> dict[str, str]:
-    """Module-level `NAME = \"literal\"`, resolved one hop and no further."""
-    constants: dict[str, str] = {}
-    for node in tree.body:
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
-            constants[node.targets[0].id] = node.value.value
-    # A module literal is not evidence for a same-named function parameter or a
-    # value reassigned elsewhere. Resolve only unambiguous, stable names.
-    writes = Counter(node.id for node in ast.walk(tree)
-                     if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store))
-    arguments = {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}
-    for name in list(constants):
-        if writes[name] != 1 or name in arguments:
-            constants.pop(name)
-    return constants
-
-
-def _cookie_name(arg: ast.AST | None, constants: dict[str, str]) -> str:
-    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-        return arg.value
-    if isinstance(arg, ast.Name):
-        return constants.get(arg.id, "")
-    return ""
+def _cookie_name(arg: ast.AST | None, context: LiteralContext) -> str:
+    value = context.resolve(arg)
+    return value if isinstance(value, str) else ""
 
 
 def _keyword(call: ast.Call, keys: tuple[str, ...]) -> ast.AST | None:
@@ -102,11 +86,10 @@ class _Unknown:
 _UNKNOWN = _Unknown()
 
 
-def _literal(node: ast.AST | None) -> object:
-    """The value of a literal, or _UNKNOWN when it is anything else."""
-    if isinstance(node, ast.Constant):
-        return node.value
-    return _UNKNOWN
+def _literal(node: ast.AST | None, context: LiteralContext) -> object:
+    """The statically known value of a flag, or _UNKNOWN when it is anything else."""
+    value = context.resolve(node)
+    return _UNKNOWN if value is UNRESOLVED else value
 
 
 def _named_argument(call: ast.Call, name: str) -> ast.AST | None:
@@ -116,7 +99,7 @@ def _named_argument(call: ast.Call, name: str) -> ast.AST | None:
     return None
 
 
-def _call_evidence(call: ast.Call, constants: dict[str, str]) -> list[tuple[int, str, str]]:
+def _call_evidence(call: ast.Call, context: LiteralContext) -> list[tuple[int, str, str]]:
     callee = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", "")
     if callee not in _COOKIE_CALLS:
         return []
@@ -125,7 +108,7 @@ def _call_evidence(call: ast.Call, constants: dict[str, str]) -> list[tuple[int,
     first = call.args[0] if call.args else _named_argument(call, "key")
     if first is None:
         first = _named_argument(call, "name")
-    name = _cookie_name(first, constants)
+    name = _cookie_name(first, context)
     if not is_auth_cookie(name):
         return []
 
@@ -138,11 +121,11 @@ def _call_evidence(call: ast.Call, constants: dict[str, str]) -> list[tuple[int,
             and not any(keyword.arg is None for keyword in call.keywords)):
         httponly_problem = "no HttpOnly"
     elif httponly_node is not None:
-        httponly = _literal(httponly_node)
+        httponly = _literal(httponly_node, context)
         if httponly is not _UNKNOWN and not httponly:
             httponly_problem = "HttpOnly switched off"
     samesite_problem = ""
-    samesite = _literal(_keyword(call, _SAMESITE_KEYS))
+    samesite = _literal(_keyword(call, _SAMESITE_KEYS), context)
     if isinstance(samesite, str) and samesite.lower() == "none":
         samesite_problem = "SameSite=None"
     problems = [problem for problem in (httponly_problem, samesite_problem) if problem]
@@ -176,7 +159,7 @@ def _setting_finding(setting: str, literal: object, lineno: int) -> list[tuple[i
     return []
 
 
-def _setattr_evidence(call: ast.Call) -> list[tuple[int, str, str]]:
+def _setattr_evidence(call: ast.Call, context: LiteralContext) -> list[tuple[int, str, str]]:
     """`setattr(settings, "SESSION_COOKIE_HTTPONLY", False)` -- the same setting.
 
     MEASURED in the hunt: rewrites reached the setting through setattr, which is
@@ -186,14 +169,13 @@ def _setattr_evidence(call: ast.Call) -> list[tuple[int, str, str]]:
     if getattr(call.func, "id", "") != "setattr" or len(call.args) < 3:
         return []
     name_node = call.args[1]
-    if not (isinstance(name_node, ast.Constant) and isinstance(name_node.value, str)):
+    name = context.resolve(name_node)
+    if not isinstance(name, str) or name not in _SETTINGS:
         return []
-    if name_node.value not in _SETTINGS:
-        return []
-    return _setting_finding(name_node.value, _literal(call.args[2]), call.lineno)
+    return _setting_finding(name, _literal(call.args[2], context), call.lineno)
 
 
-def _settings_evidence(node: ast.Assign | ast.AnnAssign) -> list[tuple[int, str, str]]:
+def _settings_evidence(node: ast.Assign | ast.AnnAssign, context: LiteralContext) -> list[tuple[int, str, str]]:
     """Django's session-cookie settings, however the name is reached.
 
     A bare module-level `SESSION_COOKIE_HTTPONLY = False` is the Django form; the
@@ -209,15 +191,16 @@ def _settings_evidence(node: ast.Assign | ast.AnnAssign) -> list[tuple[int, str,
             name = target.id
         elif isinstance(target, ast.Attribute):
             name = target.attr
-        elif (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
-                and isinstance(target.slice.value, str)):
+        elif isinstance(target, ast.Subscript):
             # `settings["SESSION_COOKIE_HTTPONLY"] = False`: a settings mapping
             # mutated by key, which the hunt produced and which real code does too.
-            name = target.slice.value
+            name = context.resolve(target.slice)
+            if not isinstance(name, str):
+                continue
         else:
             continue
         if name in _SETTINGS:
-            evidence += _setting_finding(name, _literal(node.value), node.lineno)
+            evidence += _setting_finding(name, _literal(node.value, context), node.lineno)
     return evidence
 
 
@@ -227,12 +210,12 @@ def python_evidence(text: str) -> list[tuple[int, str, str]]:
         tree = ast.parse(text)
     except (SyntaxError, ValueError, RecursionError):
         return []
-    constants = _module_string_constants(tree)
+    context = literal_context(tree)
     evidence: list[tuple[int, str, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            evidence += _call_evidence(node, constants)
-            evidence += _setattr_evidence(node)
+            evidence += _call_evidence(node, context)
+            evidence += _setattr_evidence(node, context)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            evidence += _settings_evidence(node)
+            evidence += _settings_evidence(node, context)
     return sorted(evidence)

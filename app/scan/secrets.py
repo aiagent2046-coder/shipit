@@ -11,6 +11,7 @@ Design rules:
 
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import hmac
@@ -23,6 +24,7 @@ from bisect import bisect_right
 from dataclasses import dataclass, replace
 from typing import BinaryIO, Iterator
 
+from app.scan.check_loading import is_native_import_error
 from app.scan.credential_context import (MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context)
 from app.scan.file_scope import GENERATED_DIRECTORIES, is_dependency_path as is_dependency_path
 
@@ -202,6 +204,47 @@ def value_has_placeholder_marker(value: str) -> bool:
     """
     low = value.lower()
     return any(marker in low for marker in _PLACEHOLDER_MARKERS)
+
+
+# An OBVIOUSLY made-up value: self-evidently not real secret bytes. Distinct
+# from value_has_placeholder_marker, which reads a value that ANNOUNCES itself
+# as a stand-in; this reads its SHAPE. Together they decide whether a hit in a
+# test file is a fixture (shown, not charged to the score) or a possible real
+# leak that must keep its charge (see _NO_PENALTY_CONTEXTS in scoring.py).
+#
+# Every signal here is one a randomly generated credential does not have: real
+# secret bytes are high-entropy, so they carry no run of one character four
+# times, no ascending run (abcd / 012345), no ellipsis, no example/test host,
+# and none of these self-labelling words. A value with none of these is left as
+# `test_file` on purpose -- a real key pasted into a test is indistinguishable
+# from a fake one, and the conservative direction keeps that leak charged.
+_SYNTHETIC_WORDS = (
+    "placeholder", "dummy", "fake", "not-real", "not_real", "notreal",
+    "test-only", "test_only", "redacted", "changeme", "change_me", "change-me",
+    "forlogs",
+)
+_ELLIPSIS_RE = re.compile(r"\.\.\.|…")
+
+
+def value_looks_synthetic(value: str) -> bool:
+    """An obviously made-up value: an ellipsis (a demonstrative truncation) or a
+    self-labelling word that cannot appear in real secret bytes.
+
+    Deliberately NARROW -- structure alone (a run of one character, an
+    ascending run, a test/example host) is NOT enough, though it marks obvious
+    fakes too. MEASURED conflict: `AKIA` + "A"*16 and a localhost dev DSN are
+    both obvious fakes by shape, but test_realistic_secret_in_test_path_is_
+    damped_but_kept and test_a_local_dsn_still_takes_the_ordinary_path_damping
+    require them to stay `test_file`, on the recorded policy that "a realistic
+    fake key is realistic precisely because it doesn't say fake in it" and that
+    damping "caps, it never drops". So only a value that CANNOT be real bytes
+    is damped to a fixture; anything a real credential could spell keeps its
+    charge. See those tests before widening this.
+    """
+    if _ELLIPSIS_RE.search(value):
+        return True
+    low = value.lower()
+    return any(word in low for word in _SYNTHETIC_WORDS)
 
 
 def _is_labelled_test_harness_value(name: str, rule: SecretRule, matched: str) -> bool:
@@ -696,7 +739,7 @@ def _shell_substitution_offsets(name: str, text: str) -> set[int]:
     their own languages. Treating the entire workflow as shell would hide
     genuine credentials there, so use YAML node spans to delimit run code.
     """
-    lower = name.lower()
+    lower = name.lower().removesuffix(".fixture")
     if lower.endswith((".md", ".mdx")):
         # Only explicitly shell-labelled fenced blocks have shell expansion
         # semantics. Prose, other languages and quoted heredocs remain data.
@@ -1131,7 +1174,8 @@ def _classify_match(name: str, lineno: int, rule: SecretRule,
         confidence = round(confidence * _DOC_CONFIDENCE_FACTOR, 2)
         title = f"{title} (CI service container)"
         context = "ci_service"
-    elif ((_is_test_fixture_path(name) and value_has_placeholder_marker(matched))
+    elif ((_is_test_fixture_path(name)
+            and (value_has_placeholder_marker(matched) or value_looks_synthetic(matched)))
           or _is_labelled_test_harness_value(name, rule, matched)):
         severity = _TEST_PLACEHOLDER_SEVERITY
         confidence = round(confidence * _TEST_PLACEHOLDER_CONFIDENCE_FACTOR, 2)
@@ -1232,14 +1276,27 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
             # that wrapper must not turn the same SQL predicate into a secret
             # assignment when the repository itself is scanned.
             is_sql = name.lower().removesuffix(".fixture").endswith(".sql")
+            assignment_values = _adjacent_assignment_literals(name, text, coverage=coverage)
             shell_substitutions = None
             next_line_offset = 0
             for lineno, raw_line in enumerate(text.splitlines(keepends=True), start=1):
                 line_offset = next_line_offset
                 next_line_offset += len(raw_line)
                 line = raw_line.rstrip("\r\n")
+                resolved_line = None
                 for rule in RULES:
-                    m = rule.pattern.search(line)
+                    # Only the NAME-keyed assignment rules read through a
+                    # binding chain. Value-format rules must keep seeing the
+                    # original line: their literal already matches on the
+                    # binding line, and a rewritten use would double-report
+                    # one secret (MEASURED: expected counts broke by 2>1).
+                    if rule.id in {"generic-assignment", "sql-secret-assignment"}:
+                        if resolved_line is None:
+                            resolved_line = _resolve_assignment_rhs(line, assignment_values.get(lineno))
+                        matched_line = resolved_line
+                    else:
+                        matched_line = line
+                    m = rule.pattern.search(matched_line)
                     if not m:
                         continue
                     if regions is None:
@@ -1248,7 +1305,7 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                         if name.endswith(".py") and size <= min(MAX_PYTHON_BYTES, remaining):
                             remaining -= size
                             regions = python_regions(text)
-                    for candidate in rule.pattern.finditer(line):
+                    for candidate in rule.pattern.finditer(matched_line):
                         if rule.id == "sql-secret-assignment" and _js_variable_declaration(name, line, candidate):
                             continue
                         if (rule.id == "generic-assignment"
@@ -1298,6 +1355,118 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                                           title="Credential-shaped name in a translation label (informational)",
                                           source_context={"kind": "translation_label"})
                     yield finding, m.group(0)
+
+
+_ASSIGN_RHS_IDENT = re.compile(r"(?<![=!<>])=\s*([A-Za-z_$][\w$]*)\s*;?\s*$")
+
+
+def _adjacent_assignment_literals(
+    name: str, text: str, *, coverage: dict | None = None,
+) -> dict[int, tuple[str, str]]:
+    """Resolve only adjacent simple assignments in the same statement block.
+
+    A file-wide name map cannot prove scope or reaching definitions. Limiting
+    this reader to consecutive statements avoids crossing calls, branches,
+    rebinding and sibling scopes. Comments and strings are parsed as data.
+    More complex flows deliberately remain unresolved.
+    """
+    suffix = name.lower().removesuffix(".fixture")
+    result: dict[int, tuple[str, str]] = {}
+    if suffix.endswith(".py"):
+        if len(text.encode("utf-8")) > MAX_PYTHON_BYTES:
+            return result
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError, RecursionError):
+            return result
+        for owner in ast.walk(tree):
+            for _, body in ast.iter_fields(owner):
+                if not isinstance(body, list):
+                    continue
+                for binding, use in zip(body, body[1:]):
+                    if not (isinstance(binding, ast.Assign) and isinstance(use, ast.Assign)
+                            and len(binding.targets) == len(use.targets) == 1
+                            and isinstance(binding.targets[0], ast.Name)
+                            and isinstance(use.targets[0], ast.Name)
+                            and isinstance(binding.value, ast.Constant)
+                            and isinstance(binding.value.value, str)
+                            and isinstance(use.value, ast.Name)
+                            and use.value.id == binding.targets[0].id
+                            and binding.lineno == binding.end_lineno
+                            and use.lineno == use.end_lineno
+                            and binding.end_lineno < use.lineno):
+                        continue
+                    token = ast.get_source_segment(text, binding.value)
+                    if token and token[0] in "\"'":
+                        result[use.lineno] = (use.value.id, token)
+        return result
+    if not suffix.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
+        return result
+    try:
+        import tree_sitter_typescript
+        from tree_sitter import Language, Parser
+    except ImportError as exc:
+        if not is_native_import_error(exc):
+            raise
+        # Native parsers are absent in the browser runtime. Literal scanning
+        # still works; only this optional alias-reading extension is unavailable.
+        if coverage is not None:
+            limitations = coverage.setdefault("limitations", [])
+            limitation = "javascript_alias_resolution_unavailable"
+            if limitation not in limitations:
+                limitations.append(limitation)
+        return result
+
+    raw = text.encode("utf-8")
+    grammar = (tree_sitter_typescript.language_tsx if suffix.endswith((".jsx", ".tsx"))
+               else tree_sitter_typescript.language_typescript)
+    root = Parser(Language(grammar())).parse(raw).root_node
+    if root.has_error:
+        return result
+
+    def declaration(node):
+        if node.type not in {"lexical_declaration", "variable_declaration"}:
+            return None
+        children = node.named_children
+        if len(children) != 1 or children[0].type != "variable_declarator":
+            return None
+        target = children[0].child_by_field_name("name")
+        value = children[0].child_by_field_name("value")
+        if target is None or target.type != "identifier" or value is None:
+            return None
+        return target, value
+
+    pending = [root]
+    while pending:
+        owner = pending.pop()
+        pending.extend(owner.named_children)
+        if owner.type not in {"program", "statement_block"}:
+            continue
+        for binding, use in zip(owner.named_children, owner.named_children[1:]):
+            first, second = declaration(binding), declaration(use)
+            if first is None or second is None:
+                continue
+            target, value = first
+            _, reference = second
+            if (value.type == "string" and reference.type == "identifier"
+                    and target.text == reference.text
+                    and binding.start_point.row == binding.end_point.row
+                    and use.start_point.row == use.end_point.row
+                    and binding.end_point.row < use.start_point.row):
+                result[use.start_point.row + 1] = (
+                    reference.text.decode("utf-8"), value.text.decode("utf-8"),
+                )
+    return result
+
+
+def _resolve_assignment_rhs(line: str, binding: tuple[str, str] | None) -> str:
+    """Replace only the use whose adjacent literal was proven by the parser."""
+    if binding is None:
+        return line
+    match = _ASSIGN_RHS_IDENT.search(line)
+    if match is None or match.group(1) != binding[0]:
+        return line
+    return line[:match.start(1)] + binding[1] + line[match.end(1):]
 
 
 def scan_secrets(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[SecretFinding]:

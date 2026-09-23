@@ -30,6 +30,33 @@ BLOCK_STATEMENTS = (
 _SCOPE_OPENERS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 
 
+def statically_true(test: ast.AST) -> bool:
+    """Whether a block's test makes its body unconditional: `if True:`.
+
+    MEASURED (scripts/metamorphic_probe.py): wrapping statements in `if True:`
+    silenced 72 python variants across six rules. Every reader copies the
+    state and forgets the block's stores afterwards -- the right treatment
+    for `if enabled:` (the `if enabled: httpx = other_client` measurement this
+    repo already documents) but wrong for a literal-true guard, whose body
+    runs unconditionally and whose orelse never runs. Conditional blocks keep
+    the conservative treatment; a statically true one is inlined.
+    """
+    return isinstance(test, ast.Constant) and bool(test.value)
+
+
+def certain_try(stmt: ast.AST) -> bool:
+    """A try whose BODY is not actually guarded: no except handlers.
+
+    `try: X finally: cleanup()` runs X exactly as the flat form does (the
+    finalizer cannot swallow X's outcome; without a handler nothing catches).
+    Handlers change the flow, so a try WITH them stays opaque. MEASURED
+    (metamorphic try_wraps): wrapping statements in a handler-less try
+    silenced 79 probe variants across the python rules while every flat form
+    fired -- the readers forgot the body's stores along the block path.
+    """
+    return isinstance(stmt, (ast.Try, ast.TryStar)) and not stmt.handlers
+
+
 def scope_statements(scope: ast.AST | list[ast.stmt]) -> Iterator[ast.stmt]:
     """Every statement of one scope, in source order, blocks expanded.
 

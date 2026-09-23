@@ -96,6 +96,15 @@ class _Value:
 _UNKNOWN = _Value()
 
 
+def _js_false(node) -> bool:
+    """Node disables certificate verification only for boolean false.
+
+    TLS normalizes this option with ``!== false``; JavaScript falsiness is
+    not the option's contract (numeric zero still verifies certificates).
+    """
+    return node is not None and node.type == "false"
+
+
 def js_evidence(text, tsx=False, *, incomplete_reason: dict[str, str] | None = None):
     # With ASCII bytes and no escapes, every supported setting must contain one
     # of these exact property names. Escaped or Unicode source always reaches
@@ -169,7 +178,7 @@ def js_evidence(text, tsx=False, *, incomplete_reason: dict[str, str] | None = N
                 key = _property(child.child_by_field_name("key"))
                 if key == "rejectUnauthorized":
                     val = _unwrap(child.child_by_field_name("value"))
-                    selected = child if val is not None and val.type == "false" else None
+                    selected = child if _js_false(val) else None
                 elif not key:
                     selected = None  # An unknown computed key can replace the setting.
             elif child.type == "spread_element":
@@ -262,7 +271,7 @@ def js_evidence(text, tsx=False, *, incomplete_reason: dict[str, str] | None = N
                 "instance:https.Agent.options.rejectUnauthorized",
                 "https.globalAgent.options.rejectUnauthorized",
             }:
-                if raw is not None and raw.type == "false":
+                if _js_false(raw):
                     emit(target, "sets HTTPS agent options.rejectUnauthorized=false")
             else:
                 invalidate(resolve(target.child_by_field_name("object"), bindings), bindings)
