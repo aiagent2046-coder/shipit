@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 import zipfile
 
 from fastapi.testclient import TestClient
@@ -156,6 +157,42 @@ def test_invalid_uploads_do_not_consume_quota():
                 files={"archive": ("app.zip", make_valid_zip(), "application/zip")},
             )
             assert resp.status_code == 202
+    finally:
+        app.dependency_overrides.pop(get_rate_limiter, None)
+
+
+def test_over_budget_rejects_before_the_source_is_read(caplog):
+    """The pre-read half of the split gate.
+
+    Once the budget is spent, even the hostile fixture that normally answers
+    422 at validation must be refused with 429 BEFORE app.main logs
+    'source read' -- the bounded50MiB read and the hostile-archive
+    validation are exactly the server-side work the peek exists to skip.
+    Quota consumption itself stays post-validation; the sibling test above
+    (invalid uploads do not consume quota) pins that half.
+    """
+    tiny_limiter = RateLimiter(limit=1, window_seconds=100, clock=lambda: 0.0)
+    app.dependency_overrides[get_rate_limiter] = lambda: tiny_limiter
+    try:
+        client = TestClient(app)
+        resp = client.post(
+            "/v1/audits",
+            files={"archive": ("app.zip", make_valid_zip(), "application/zip")},
+        )
+        assert resp.status_code == 202  # the single unit is now consumed
+
+        caplog.set_level(logging.INFO, logger="app.main")
+        caplog.clear()
+        resp = client.post(
+            "/v1/audits",
+            files={"archive": ("app.zip", make_zip(), "application/zip")},
+        )
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["reason"] == "rate_limited"
+        assert int(resp.headers["retry-after"]) > 0
+        # the request died at the gate: no source read, no validation pass
+        assert "source read" not in caplog.text
+        assert "archive validated" not in caplog.text
     finally:
         app.dependency_overrides.pop(get_rate_limiter, None)
 

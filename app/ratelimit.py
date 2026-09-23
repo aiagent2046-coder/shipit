@@ -38,6 +38,19 @@ class RateLimitExceeded(Exception):
         super().__init__(f"rate limit exceeded, retry after {retry_after}s")
 
 
+class RateLimitStoreError(RuntimeError):
+    """The rate-limit STORE itself failed (e.g. Redis unreachable), which is
+    not the same fact as a client being over budget.
+
+    Raised fail-closed: the request is DENIED and surfaced as an explicit
+    "store unavailable" response by app.main's exception handler — never an
+    allow, and never the generic unhandled-500 bug path (an infra blip is
+    control flow; the catch-all alert is reserved for genuine bugs).
+    The wrapped message keeps only the exception type name: the key and the
+    connection URL must not travel with it.
+    """
+
+
 @dataclass
 class _Window:
     start: float
@@ -83,6 +96,25 @@ class RateLimiter:
                 raise RateLimitExceeded(retry_after)
             window.count += 1
 
+    def peek(self, key: str, limit: int | None = None) -> None:
+        """Raise RateLimitExceeded if `key` is ALREADY at budget; consume nothing.
+
+        The read-only half of the intake's split rate gate (app.main): an
+        over-budget caller is rejected before the upload bytes are read, while
+        the quota charge itself stays post-validation so a garbage upload still
+        does not burn the client's daily budget. An absent window simply
+        passes -- creating one would itself be a mutation.
+        """
+        effective = self.limit if limit is None else limit
+        now = self._clock()
+        with self._lock:
+            window = self._windows.get(key)
+            if window is None or now - window.start >= self.window_seconds:
+                return
+            if window.count >= effective:
+                retry_after = int(self.window_seconds - (now - window.start)) + 1
+                raise RateLimitExceeded(retry_after)
+
     def _evict_expired(self, now: float) -> None:
         """Drop windows whose window has fully elapsed. Without this a key
         seen once and never again sits in `_windows` forever -- an unbounded
@@ -105,6 +137,16 @@ if current == 1 then
   redis.call('PEXPIRE', KEYS[1], ARGV[1])
 end
 return {current, redis.call('PTTL', KEYS[1])}
+"""
+
+# Read-only twin of _WINDOW_LUA: reports the current count and remaining TTL
+# WITHOUT INCR-ing, so the pre-read gate can reject an over-budget caller
+# without charging anybody. ARGV[1] is accepted and ignored so every caller
+# can keep the same four-positional-argument eval() shape the injected
+# client contract and the test fixtures were built around.
+_PEEK_LUA = """
+local value = redis.call('GET', KEYS[1])
+return {tonumber(value) or 0, redis.call('PTTL', KEYS[1])}
 """
 
 
@@ -138,15 +180,46 @@ class RedisRateLimiter:
         """
         effective = self.limit if limit is None else limit
         window_ms = self.window_seconds * 1000
-        count, pttl = self._client.eval(
-            _WINDOW_LUA, 1, f"{self._key_prefix}{key}", window_ms
-        )
+        try:
+            count, pttl = self._client.eval(
+                _WINDOW_LUA, 1, f"{self._key_prefix}{key}", window_ms
+            )
+        except Exception as exc:
+            # Deliberately broad: any failure of the injected client
+            # (connection, timeout, script error) means "cannot enforce the
+            # limit" — fail-closed deny as RateLimitStoreError, never an
+            # allow and never an unhandled crash. RateLimitExceeded below is
+            # raised after this block, so budget verdicts stay unaffected.
+            raise RateLimitStoreError(
+                f"rate limit store unavailable: {type(exc).__name__}"
+            ) from exc
         if count > effective:
             # PTTL is ms remaining; -1/-2 mean "no expiry"/"missing", which
             # shouldn't happen right after INCR but is handled defensively.
             remaining_ms = pttl if pttl and pttl > 0 else window_ms
             retry_after = int(remaining_ms / 1000) + 1
             raise RateLimitExceeded(retry_after)
+
+    def peek(self, key: str, limit: int | None = None) -> None:
+        """Raise RateLimitExceeded if `key` is ALREADY at budget; no INCR.
+
+        Read-only counterpart of check() for the pre-read half of the split
+        intake gate; see RateLimiter.peek for why the gate is split. Store
+        failure is fail-closed here for the same reason as in check().
+        """
+        effective = self.limit if limit is None else limit
+        window_ms = self.window_seconds * 1000
+        try:
+            count, pttl = self._client.eval(
+                _PEEK_LUA, 1, f"{self._key_prefix}{key}", window_ms
+            )
+        except Exception as exc:
+            raise RateLimitStoreError(
+                f"rate limit store unavailable: {type(exc).__name__}"
+            ) from exc
+        if count >= effective:
+            remaining_ms = pttl if pttl and pttl > 0 else window_ms
+            raise RateLimitExceeded(int(remaining_ms / 1000) + 1)
 
 
 def limiter_from_env() -> RateLimiter | RedisRateLimiter:

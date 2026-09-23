@@ -102,7 +102,7 @@ from app.monitor import (
     repo_url_from_full_name,
 )
 from app.monitor.diff import new_high_severity_findings
-from app.ratelimit import RateLimitExceeded, RateLimiter
+from app.ratelimit import RateLimitExceeded, RateLimitStoreError, RateLimiter
 from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
                               LLM_FAILURE_BILLING, basis_for_account,
                               content_digest, llm_failure_kind, run_scan)
@@ -717,6 +717,39 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         status_code=500,
         content={"detail": {"reason": "internal_error", "request_id": request_id}},
         headers={REQUEST_ID_HEADER: request_id} if request_id else None,
+    )
+
+
+@app.exception_handler(RateLimitStoreError)
+async def rate_limit_store_handler(
+    request: Request, exc: RateLimitStoreError
+) -> JSONResponse:
+    """Rate-limit store (Redis) outage — deliberate fail-closed control flow.
+
+    The request is DENIED with an explicit 503 whose reason mirrors the
+    queue_unavailable convention, so a Redis blip reads as "try again later",
+    not as an application bug. Registered for RateLimitStoreError specifically:
+    that routes it through the in-stack exception middleware (the request-id
+    header is added on the way out) and keeps it away from
+    unhandled_exception_handler's operator alert — otherwise an outage would
+    page the operator on every request for as long as it lasts.
+    """
+    logger.warning(
+        "rate limit store unavailable [request_id=%s] %s %s: %s",
+        getattr(request.state, "request_id", None),
+        request.method,
+        request.url.path,
+        exc,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": {
+                "reason": "rate_limit_unavailable",
+                "detail": "rate limit store unreachable; request denied "
+                          "(fail-closed), retry shortly",
+            }
+        },
     )
 
 
@@ -1884,6 +1917,35 @@ async def process_pending_monitoring(
 
 
 
+def _rate_gate(
+    limiter: RateLimiter, quota_key: str, limit: int, *, consume: bool
+) -> None:
+    """Enforce one half of /v1/audits' split rate gate.
+
+    consume=False is the pre-read peek: it only REJECTS a caller already at
+    budget, before the source is read or fetched, and mutates nothing.
+    consume=True is the historical quota charge, run after validation so a
+    rejected upload never burns the client's daily budget. Both answer the
+    same 429 rate_limited + Retry-After. A rate-limit STORE failure is
+    deliberately NOT caught here: it propagates to the app-wide
+    RateLimitStoreError handler and answers fail-closed 503 instead.
+    """
+    try:
+        if consume:
+            limiter.check(quota_key, limit=limit)
+        else:
+            limiter.peek(quota_key, limit=limit)
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "rate_limited",
+                "detail": f"max {limiter.limit} audits per day",
+            },
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+
 @app.post("/v1/audits", status_code=202)
 async def create_audit(
     request: Request,
@@ -1910,7 +1972,9 @@ async def create_audit(
     durably queued. Everything that can be decided from the submission alone
     still happens here, before the enqueue, and still answers with the same
     status codes it always did -- intake shape, the emergency stop, the repo
-    fetch, zip validation, stack detection, the daily quota. Rejecting those at
+    fetch, zip validation, stack detection, and the split quota gate (a
+    consumption-free peek before the source is read, the quota charge itself
+    after validation). Rejecting those at
     intake keeps the queue free of jobs that are already known to be dead, and
     keeps a client's error for a bad upload immediate instead of arriving two
     polls later.
@@ -1951,6 +2015,26 @@ async def create_audit(
     _bind_account(account)
     tier = account["tier"] if account else TIER_FREE
     entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
+
+    # Quota key + the server-side half of the split rate gate: reject an
+    # ALREADY over-budget caller before the source is read or fetched --
+    # this is what status-active.md means by "enforced before any archive
+    # bytes are read". peek() consumes nothing, so it cannot charge anyone;
+    # the quota charge itself runs after validation (see the consume gate
+    # below), where a garbage upload still does not burn the daily budget.
+    #
+    # Tier-aware: an anonymous/free caller is keyed and limited exactly as
+    # before (by client IP, at the limiter's configured limit -- passing that
+    # same limit explicitly is a no-op). A pro account is keyed by its own id
+    # (so its budget follows the account, not whatever IP it calls from) and
+    # gets the higher pro limit.
+    if account is not None:
+        quota_key = f"account:{account['id']}"
+    else:
+        quota_key = _client_key(request)
+    _rate_gate(
+        limiter, quota_key, limit=entitlements.daily_audit_limit, consume=False
+    )
 
     # The source URL to remember on the audit, so a later Fix Pack purchase
     # can re-fetch the same repo without asking for it again. Only set on
@@ -2034,28 +2118,12 @@ async def create_audit(
     # Consume quota only after the upload proves to be real work: validation
     # and stack detection are free, so a garbage/hostile zip (or probing for
     # validation bypasses) can't burn a client's daily budget for a request
-    # that never produced an audit.
-    #
-    # Tier-aware: an anonymous/free caller is keyed and limited exactly as
-    # before (by client IP, at the limiter's configured limit — passing that
-    # same limit explicitly is a no-op). A pro account is keyed by its own id
-    # (so its budget follows the account, not whatever IP it calls from) and
-    # gets the higher pro limit.
-    if account is not None:
-        quota_key = f"account:{account['id']}"
-    else:
-        quota_key = _client_key(request)
-    try:
-        limiter.check(quota_key, limit=entitlements.daily_audit_limit)
-    except RateLimitExceeded as exc:
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "reason": "rate_limited",
-                "detail": f"max {limiter.limit} audits per day",
-            },
-            headers={"Retry-After": str(exc.retry_after)},
-        ) from exc
+    # that never produced an audit. The read-only peek above already gated
+    # the expensive read/fetch for callers already over budget, so this
+    # charge stays exactly where the client-fairness contract wants it.
+    _rate_gate(
+        limiter, quota_key, limit=entitlements.daily_audit_limit, consume=True
+    )
 
     # Reproducibility: byte-identical content that was already audited reuses
     # the stored result rather than re-running the scan. The LLM stage is
