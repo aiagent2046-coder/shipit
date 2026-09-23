@@ -74,7 +74,12 @@ interface KeyCtx {
   account: Account | null;
   loading: boolean;
   error: string | null;
-  setKey: (key: string) => Promise<void>;
+  // Resolves true ONLY when the login actually established a session.
+  // Callers that display a success state gate on it: a void return let
+  // the save button flip to "Saved to this browser" on a FAILED login
+  // (LLM-audit finding, triaged 2026-09-24 — the error went to context
+  // but the promise resolved anyway).
+  setKey: (key: string) => Promise<boolean>;
   clearKey: () => void;
 }
 const KeyContext = createContext<KeyCtx | null>(null);
@@ -115,9 +120,11 @@ function KeyProvider({ children }: { children: React.ReactNode }) {
       setError(null);
       try {
         setAccount(await login(key));
+        return true;
       } catch (e) {
         setAccount(null);
         setError(e instanceof Error ? e.message : "Failed to resolve account");
+        return false;
       } finally {
         setLoading(false);
       }

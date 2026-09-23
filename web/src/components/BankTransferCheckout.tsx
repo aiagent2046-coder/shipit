@@ -505,7 +505,7 @@ export function ProCompleted({
   copy: (text: string, label: string) => void;
   copied: string | null;
 }) {
-  const { setKey } = useApiKey();
+  const { setKey, loading } = useApiKey();
   const [saved, setSaved] = useState(false);
   return (
     <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
@@ -529,10 +529,13 @@ export function ProCompleted({
             <button
               type="button"
               onClick={async () => {
-                await setKey(completed.api_key!);
-                setSaved(true);
+                // Gated on the RESULT: setKey resolves even when the login
+                // failed (the error goes to context), so saving state
+                // unconditionally made this label lie.
+                if (await setKey(completed.api_key!)) setSaved(true);
               }}
-              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg"
+              disabled={loading || saved}
+              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-50"
             >
               {saved ? "Saved to this browser" : "Use this key now"}
             </button>
