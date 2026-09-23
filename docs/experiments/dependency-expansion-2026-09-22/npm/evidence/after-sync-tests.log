@@ -1,0 +1,12 @@
+TAP version 13
+# sync
+ok 1 file created
+ok 2 (unnamed assert)
+ok 3 should be equal
+ok 4 target not a directory
+
+1..4
+# tests 4
+# pass  4
+
+# ok

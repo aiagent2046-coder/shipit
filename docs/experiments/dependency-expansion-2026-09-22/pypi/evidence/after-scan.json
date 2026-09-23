@@ -1,0 +1,269 @@
+{
+  "findings": [],
+  "coverage": {
+    "status": "partial",
+    "status_counts": {
+      "affected": 0,
+      "unaffected": 8,
+      "unknown": 1,
+      "not_in_catalog": 0
+    },
+    "dependencies_found": 2,
+    "dependencies_checked": 2,
+    "packages_in_catalog": 2,
+    "advisory_evaluations": 10,
+    "unresolved_ranges": 2,
+    "manifests": [
+      "requirements.txt"
+    ],
+    "incomplete_manifests": {},
+    "inventory_truncated": 0,
+    "findings_truncated": 0,
+    "evaluations_truncated": 0,
+    "unknown_reason_counts": {
+      "incomplete_advisory_sources": 1
+    },
+    "details_truncated": 0,
+    "manifest_gap_reason_counts": {},
+    "manifest_gap_details": [],
+    "manifest_gap_details_truncated": 0,
+    "excluded_manifests": {},
+    "excluded_manifests_truncated": 0,
+    "source": {
+      "repository": "https://github.com/CVEProject/cvelistV5",
+      "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+      "generated_at": "2026-09-21T10:42:57Z"
+    },
+    "sources": {
+      "cvelist": {
+        "repository": "https://github.com/CVEProject/cvelistV5",
+        "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+        "generated_at": "2026-09-21T10:42:57Z"
+      },
+      "github-reviewed": {
+        "repository": "https://github.com/github/advisory-database",
+        "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+        "generated_at": "2026-09-21T09:36:26Z"
+      }
+    },
+    "details": [
+      {
+        "package": "PyPI:pytest",
+        "version": "7.4.0",
+        "manifest": "requirements.txt",
+        "occurrences": [
+          {
+            "manifest": "requirements.txt",
+            "line": 1,
+            "direct": false,
+            "dependency_scope": "unknown",
+            "dependency_groups": []
+          }
+        ],
+        "occurrences_recorded": true,
+        "advisory": "CVE-2025-71176",
+        "reason": "incomplete_advisory_sources",
+        "assessments": [
+          {
+            "source": "cvelist",
+            "advisory": "CVE-2025-71176",
+            "status": "unknown",
+            "reason": "unsupported_version_type"
+          },
+          {
+            "source": "github-reviewed",
+            "advisory": "GHSA-6w46-j5rx-g56g",
+            "status": "affected",
+            "reason": null
+          }
+        ],
+        "assessments_truncated": 0
+      }
+    ],
+    "catalog_stats": {
+      "affected_seen": 607550,
+      "ghsa_affected_seen": 64805,
+      "ghsa_indexed_entries": 14816,
+      "ghsa_indexed_packages": 5070,
+      "ghsa_indexed_records": 13103,
+      "ghsa_invalid_affected": 3,
+      "ghsa_invalid_records": 0,
+      "ghsa_reviewed": 35729,
+      "ghsa_seen": 35729,
+      "ghsa_unreviewed": 0,
+      "ghsa_unsupported_aliases": 0,
+      "ghsa_unsupported_ecosystems": 44059,
+      "ghsa_unsupported_ranges": 0,
+      "ghsa_unsupported_schema": 0,
+      "ghsa_withdrawn": 1086,
+      "indexed_entries": 1780,
+      "indexed_entries_total": 16596,
+      "indexed_packages": 307,
+      "indexed_packages_total": 5185,
+      "indexed_records": 1578,
+      "invalid_affected": 60,
+      "invalid_records": 1,
+      "published": 377336,
+      "rejected": 18363,
+      "seen": 395699,
+      "unsupported_applicability": 1133,
+      "unsupported_packages": 605710,
+      "unsupported_schema": 0
+    },
+    "limitations": [
+      "Only exact registry package versions in supported lockfiles are compared with this snapshot.",
+      "Locked platform, optional and development variants are included; runtime selection is not evaluated.",
+      "A package/version match does not establish reachable or exploitable application code.",
+      "Absence from the snapshot, unsupported ranges, and no matches do not establish a clean or safe project.",
+      "PyPI comparisons support numeric releases and canonical a/b/rc prereleases; epochs, post/dev/local versions and other spellings remain unsupported. npm comparisons require SemVer; CVE range lower bound '0' means the earliest version."
+    ]
+  },
+  "inventory": [
+    {
+      "ecosystem": "PyPI",
+      "package": "pytest",
+      "version": "7.4.0",
+      "complete": true,
+      "assessments": [
+        {
+          "advisory_ids": [
+            "CVE-2025-71176",
+            "GHSA-6w46-j5rx-g56g"
+          ],
+          "status": "unknown",
+          "reported": false
+        }
+      ]
+    },
+    {
+      "ecosystem": "PyPI",
+      "package": "requests",
+      "version": "2.33.0",
+      "complete": true,
+      "assessments": [
+        {
+          "advisory_ids": [
+            "CVE-2014-1830",
+            "GHSA-652x-xj99-gmcc"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2024-47081",
+            "GHSA-9hjg-9r4m-mvj7"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2024-35195",
+            "GHSA-9wx4-h78v-vm56"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2014-1829",
+            "GHSA-cfj3-7x9c-4p3h"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2026-25645",
+            "GHSA-gc5v-m9x4-r6x2"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2023-32681",
+            "GHSA-j8r2-6x86-q33q"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2015-2296",
+            "GHSA-pg2w-x9wp-vw92"
+          ],
+          "status": "unaffected",
+          "reported": false
+        },
+        {
+          "advisory_ids": [
+            "CVE-2018-18074",
+            "GHSA-x84v-xcm2-53pg"
+          ],
+          "status": "unaffected",
+          "reported": false
+        }
+      ]
+    }
+  ],
+  "target_entry_assessments": [
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    },
+    {
+      "status": "unaffected",
+      "reason": null,
+      "unresolved_ranges": 0,
+      "matched_ranges": [],
+      "matched_versions": []
+    }
+  ]
+}
