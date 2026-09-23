@@ -24,6 +24,7 @@ from bisect import bisect_right
 from dataclasses import dataclass, replace
 from typing import BinaryIO, Iterator
 
+from app.scan.check_loading import is_native_import_error
 from app.scan.credential_context import (MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context)
 from app.scan.file_scope import GENERATED_DIRECTORIES, is_dependency_path as is_dependency_path
 
@@ -1275,7 +1276,7 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
             # that wrapper must not turn the same SQL predicate into a secret
             # assignment when the repository itself is scanned.
             is_sql = name.lower().removesuffix(".fixture").endswith(".sql")
-            assignment_values = _adjacent_assignment_literals(name, text)
+            assignment_values = _adjacent_assignment_literals(name, text, coverage=coverage)
             shell_substitutions = None
             next_line_offset = 0
             for lineno, raw_line in enumerate(text.splitlines(keepends=True), start=1):
@@ -1359,7 +1360,9 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
 _ASSIGN_RHS_IDENT = re.compile(r"(?<![=!<>])=\s*([A-Za-z_$][\w$]*)\s*;?\s*$")
 
 
-def _adjacent_assignment_literals(name: str, text: str) -> dict[int, tuple[str, str]]:
+def _adjacent_assignment_literals(
+    name: str, text: str, *, coverage: dict | None = None,
+) -> dict[int, tuple[str, str]]:
     """Resolve only adjacent simple assignments in the same statement block.
 
     A file-wide name map cannot prove scope or reaching definitions. Limiting
@@ -1399,8 +1402,20 @@ def _adjacent_assignment_literals(name: str, text: str) -> dict[int, tuple[str, 
         return result
     if not suffix.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
         return result
-    import tree_sitter_typescript
-    from tree_sitter import Language, Parser
+    try:
+        import tree_sitter_typescript
+        from tree_sitter import Language, Parser
+    except ImportError as exc:
+        if not is_native_import_error(exc):
+            raise
+        # Native parsers are absent in the browser runtime. Literal scanning
+        # still works; only this optional alias-reading extension is unavailable.
+        if coverage is not None:
+            limitations = coverage.setdefault("limitations", [])
+            limitation = "javascript_alias_resolution_unavailable"
+            if limitation not in limitations:
+                limitations.append(limitation)
+        return result
 
     raw = text.encode("utf-8")
     grammar = (tree_sitter_typescript.language_tsx if suffix.endswith((".jsx", ".tsx"))

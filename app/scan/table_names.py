@@ -34,11 +34,10 @@ from __future__ import annotations
 import re
 import zipfile
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import BinaryIO
 
-import tree_sitter_typescript
-from tree_sitter import Language, Parser
-
+from app.scan.check_loading import is_native_import_error
 from app.scan.secrets import _iter_text_files, is_non_production_path
 
 # `.from('table')` / `.from("table")`, the one call every supabase-js read goes
@@ -105,10 +104,16 @@ class NamedTables:
 
 
 _FROM_IDENT = re.compile(r"\.from\(\s*([A-Za-z_$][\w$]*)\s*\)")
-_PARSERS = {
-    False: Parser(Language(tree_sitter_typescript.language_typescript())),
-    True: Parser(Language(tree_sitter_typescript.language_tsx())),
-}
+@lru_cache(maxsize=2)
+def _parser(tsx: bool):
+    # Literal table names remain readable in the native-free browser profile.
+    # Only the optional alias resolver needs the native grammar.
+    import tree_sitter_typescript
+    from tree_sitter import Language, Parser
+
+    grammar = (tree_sitter_typescript.language_tsx if tsx
+               else tree_sitter_typescript.language_typescript)
+    return Parser(Language(grammar()))
 
 
 def _resolve_from_idents(text: str, *, tsx: bool = False) -> str:
@@ -122,7 +127,13 @@ def _resolve_from_idents(text: str, *, tsx: bool = False) -> str:
     if not _FROM_IDENT.search(text):
         return text
     source = text.encode("utf-8")
-    root = _PARSERS[tsx].parse(source).root_node
+    try:
+        parser = _parser(tsx)
+    except ImportError as exc:
+        if not is_native_import_error(exc):
+            raise
+        return text  # Preserve the existing dynamic-from disclosure.
+    root = parser.parse(source).root_node
     if root.has_error:
         return text
     nodes = []

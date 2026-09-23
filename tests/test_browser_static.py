@@ -23,7 +23,7 @@ def archive():
     return output.getvalue()
 
 
-def isolated_scan():
+def isolated_scan(*, javascript=False):
     # A fresh interpreter is essential: deleting selected cached modules can
     # accidentally leave native-backed functions usable and fake portability.
     code = textwrap.dedent('''
@@ -43,18 +43,38 @@ def isolated_scan():
         with zipfile.ZipFile(data, "w") as zf:
             zf.writestr("config.py", 'api_key = ' + repr('sk_' + 'live_' + 'a' * 24) + '\\n')
             zf.writestr("supabase/migrations/001.sql", "CREATE TABLE public.orders (id uuid PRIMARY KEY);")
+            if JAVASCRIPT:
+                zf.writestr("src/client.js", 'const table = "payments";\\n'
+                            'supabase.from(table);\\n'
+                            'supabase.from("profiles");\\n')
         result = scan_archive(data.getvalue())
+        if JAVASCRIPT:
+            from app.scan.table_names import read_named_tables
+            tables = read_named_tables(io.BytesIO(data.getvalue()))
+            result["named_tables"] = sorted(tables.from_code)
+            result["has_dynamic_from"] = tables.has_dynamic_from
         try:
             scan_archive(b"not a zip")
         except ArchiveValidationError as exc:
             result["invalid_zip_reason"] = exc.reason
         print(json.dumps(result))
     ''')
+    code = code.replace("JAVASCRIPT", repr(javascript))
     completed = subprocess.run(
         [sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
         text=True, capture_output=True, check=True,
     )
     return json.loads(completed.stdout)
+
+
+def test_native_free_browser_preserves_literals_and_leaves_js_aliases_unknown():
+    result = isolated_scan(javascript=True)
+    report = result["report"]
+    assert "secrets" in report["checks_run"]
+    assert "schema_drift" in report["checks_run"]
+    assert "stripe-live-key" in {f["rule_id"] for f in report["findings"]}
+    assert result["named_tables"] == ["profiles"]
+    assert result["has_dynamic_from"] is True
 
 
 def test_browser_boots_without_native_dependencies_and_reports_real_findings():
