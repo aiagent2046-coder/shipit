@@ -97,15 +97,12 @@ _UNKNOWN = _Value()
 
 
 def _js_false(node) -> bool:
-    """A literal false -- or the number 0, which is one in JavaScript.
+    """Node disables certificate verification only for boolean false.
 
-    MEASURED: the metamorphic probe's numeric-bool rewrites (rejectUnauthorized:
-    0) escaped tls while the cookie rule had learned this shape in the hunt
-    (its _bool_value reads 0/1). One claim, two readers, half-delivered."""
-    return node is not None and (
-        node.type == "false"
-        or (node.type == "number" and _text(node).strip() in {"0", "0.0"})
-    )
+    TLS normalizes this option with ``!== false``; JavaScript falsiness is
+    not the option's contract (numeric zero still verifies certificates).
+    """
+    return node is not None and node.type == "false"
 
 
 def js_evidence(text, tsx=False, *, incomplete_reason: dict[str, str] | None = None):

@@ -229,60 +229,56 @@ def py_block_nest(text: str) -> str | None:
 
 
 def py_rename_locals(text: str) -> str | None:
-    """Rename parameters and assigned locals to neutral names.
+    """Rename assigned function locals, preserving parameters and external API.
 
     Name spans come from the AST, so strings and attribute names are never
     touched. A name used as an attribute is left alone entirely. MODULE-level
     bindings are excluded: a module constant (a Django setting, a router) is
     API vocabulary other readers consume, and renaming it changes what the
-    code IS. The claim is only about function-local names and parameters.
+    code IS. Parameters also define a keyword-call and framework API.
     """
     tree = _py_parse(text)
     if tree is None:
         return None
     starts = _line_starts(text)
-    attributes = {
-        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
-    }
-    in_function: set[int] = set()
-    for owner in ast.walk(tree):
-        if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            for node in ast.walk(owner):
-                in_function.add(id(node))
-    candidates: list[str] = []
-    for node in ast.walk(tree):
-        name = None
-        if isinstance(node, ast.arg):
-            name = node.arg
-        elif (
-            isinstance(node, ast.Name)
-            and isinstance(node.ctx, (ast.Store, ast.Del))
-            and id(node) in in_function
-        ):
-            name = node.id
-        if name and name not in attributes and name not in candidates:
-            candidates.append(name)
-    renames = {old: f"holder_{i + 1}" for i, old in enumerate(candidates[:6])}
-    if not renames:
-        return None
+    # Parameters are callable API (keyword arguments, dependency injection,
+    # route parameters). Rename only actual locals in an isolated function.
+    occupied = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    occupied.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
     edits: list[tuple[int, int, str]] = []
-    for node in ast.walk(tree):
-        span: tuple[int, int] | None = None
-        if isinstance(node, ast.Name) and node.id in renames:
-            span = _span(starts, node)
-        elif isinstance(node, ast.arg) and node.arg in renames:
-            # An annotated arg's node span covers `path: str`, not `path` --
-            # the name alone is the edit. (The first draft compared the whole
-            # span to the rename map, skipped every annotated parameter and
-            # produced variants calling undefined names.)
-            start, _ = _span(starts, node)
-            span = (start, start + len(node.arg))
-        if span is None:
+    next_name = 1
+    for owner in ast.walk(tree):
+        if not isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        s, e = span
-        old = text[s:e]
-        if old in renames:
-            edits.append((s, e, renames[old]))
+        nodes = [node for stmt in owner.body for node in ast.walk(stmt)]
+        if any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                                 ast.ClassDef, ast.Global, ast.Nonlocal)) for node in nodes):
+            continue
+        excluded = {arg.arg for arg in ast.walk(owner.args) if isinstance(arg, ast.arg)}
+        excluded.update(node.attr for node in nodes if isinstance(node, ast.Attribute))
+        for node in nodes:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                excluded.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.comprehension):
+                excluded.update(n.id for n in ast.walk(node.target) if isinstance(n, ast.Name))
+        candidates = dict.fromkeys(
+            node.id for node in nodes
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+            and node.id not in excluded
+        )
+        renames = {}
+        for name in list(candidates)[:6]:
+            while f"holder_{next_name}" in occupied:
+                next_name += 1
+            replacement = f"holder_{next_name}"
+            next_name += 1
+            occupied.add(replacement)
+            renames[name] = replacement
+        for node in nodes:
+            if isinstance(node, ast.Name) and node.id in renames:
+                start, end = _span(starts, node)
+                if text[start:end] == node.id:
+                    edits.append((start, end, renames[node.id]))
     return _apply_edits(text, edits) if edits else None
 
 
@@ -523,27 +519,59 @@ def js_rename_locals(text: str) -> str | None:
                 name = part.strip()
                 if re.fullmatch(r"[A-Za-z_$][\w$]*", name) and name not in candidates:
                     candidates.append(name)
+    # Shorthand properties expose their identifier as an object key; exported
+    # bindings expose it to other modules. Neither is a private local name.
+    root = None
+    for parser in _JS_PARSERS:
+        candidate_root = parser.parse(text.encode()).root_node
+        if not candidate_root.has_error:
+            root = candidate_root
+            break
+    if root is None:
+        return None
+    protected = set()
+    identifiers = []
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        pending.extend(node.named_children)
+        if node.type in {"shorthand_property_identifier", "shorthand_property_identifier_pattern",
+                         "property_identifier"}:
+            protected.add(node.text.decode())
+        if node.type == "identifier":
+            identifiers.append(node)
+        if node.type == "export_statement":
+            nested = list(node.named_children)
+            while nested:
+                child = nested.pop()
+                if child.type == "identifier":
+                    protected.add(child.text.decode())
+                nested.extend(child.named_children)
+    occupied = {node.text.decode() for node in identifiers} | protected
     renames = {}
+    next_name = 1
     for name in candidates:
-        if re.search(rf"\.{name}\b", masked) or re.search(
+        if name in protected or re.search(rf"\.{name}\b", masked) or re.search(
             rf"(?<![\w$]){name}\s*:", masked
         ):
             continue
-        renames[name] = f"holder_{len(renames) + 1}"
+        while f"holder_{next_name}" in occupied:
+            next_name += 1
+        renames[name] = f"holder_{next_name}"
+        occupied.add(renames[name])
+        next_name += 1
         if len(renames) >= 6:
             break
     if not renames:
         return None
-    out = text
-    ordered = sorted(renames, key=len, reverse=True)
-    names_pattern = re.compile(
-        r"(?<![\w$.])(" + "|".join(map(re.escape, ordered)) + r")(?![\w$])"
-    )
+    # Parser nodes keep regexp bodies and template text out of the edits.
+    raw = text.encode()
     edits = [
-        (m.start(), m.end(), renames[m.group(1)])
-        for m in names_pattern.finditer(masked)
+        (len(raw[:node.start_byte].decode()), len(raw[:node.end_byte].decode()),
+         renames[node.text.decode()])
+        for node in identifiers if node.text.decode() in renames
     ]
-    return _apply_edits(out, edits) if edits else None
+    return _apply_edits(text, edits) if edits else None
 
 
 def js_block_nest(text: str) -> str | None:

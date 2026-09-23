@@ -17,13 +17,16 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from decimal import Decimal
 
 from fastapi import (
     Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile,
 )
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app import accounts, alerts, monitor
@@ -1946,22 +1949,81 @@ def _rate_gate(
         ) from exc
 
 
-@app.post("/v1/audits", status_code=202)
-async def create_audit(
-    request: Request,
-    archive: UploadFile | None = None,
-    repo_url: str | None = Form(
+class _AuditForm(BaseModel):
+    archive: UploadFile | None = None
+    repo_url: str | None = Field(
         None,
         description="Alternative to `archive`: a public github.com repo URL "
                     "(https://github.com/<owner>/<repo>). Provide exactly one "
                     "of `archive` or `repo_url`. Public GitHub repos only — no "
                     "private repos, no other hosts.",
-    ),
+    )
+
+
+@dataclass(frozen=True)
+class _AuditIntake:
+    form: _AuditForm
+    account: dict | None
+    quota_key: str
+    daily_limit: int
+    started: float
+
+
+async def _audit_intake(
+    request: Request,
+    limiter: RateLimiter = Depends(get_rate_limiter),
+    account_repo: AccountRepository = Depends(get_account_repo),
+    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
+):
+    """Gate the HTTP body itself, before multipart parsing can spool any file.
+
+    Form/File route parameters make FastAPI parse the entire request before
+    resolving dependencies. This body-free dependency instead resolves the
+    same injected services and caller first, then explicitly opens the form.
+    The context manager closes uploaded files even when validation fails.
+    Quota is still charged by create_audit only after archive validation.
+    """
+    started = time.monotonic()
+    paused, note = await _emergency_stop_active(service_flags_repo)
+    if paused:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "service_paused", "detail": note},
+        )
+    account = await accounts.resolve_account(request, account_repo)
+    _bind_account(account)
+    tier = account["tier"] if account else TIER_FREE
+    daily_limit = entitlements_for_tier(
+        tier, free_daily_limit=limiter.limit
+    ).daily_audit_limit
+    quota_key = f"account:{account['id']}" if account else _client_key(request)
+    _rate_gate(limiter, quota_key, limit=daily_limit, consume=False)
+
+    async with request.form() as form:
+        # Preserve optional Form field semantics: an empty string is absent.
+        values = {key: value for key, value in form.items()
+                  if key in _AuditForm.model_fields and value != ""}
+        try:
+            body = _AuditForm.model_validate(values)
+        except ValidationError as exc:
+            errors = [dict(error, loc=("body", *error["loc"]))
+                      for error in exc.errors()]
+            raise RequestValidationError(errors) from exc
+        yield _AuditIntake(body, account, quota_key, daily_limit, started)
+
+
+@app.post(
+    "/v1/audits", status_code=202,
+    openapi_extra={"requestBody": {"content": {
+        "multipart/form-data": {"schema": _AuditForm.model_json_schema()},
+    }}},
+)
+async def create_audit(
+    request: Request,
+    intake: _AuditIntake = Depends(_audit_intake),
     limiter: RateLimiter = Depends(get_rate_limiter),
     audit_repo: AuditRepository = Depends(get_audit_repo),
-    account_repo: AccountRepository = Depends(get_account_repo),
     repo_fetcher=Depends(get_repo_fetcher),
-    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
     audit_job_repo: AuditJobRepository = Depends(get_audit_job_repo),
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> dict:
@@ -1986,6 +2048,11 @@ async def create_audit(
 
     Response on a miss is 202 {job_id, access_token, state}. See
     GET /v1/audit-jobs/{job_id}."""
+    archive, repo_url = intake.form.archive, intake.form.repo_url
+    account = intake.account
+    quota_key = intake.quota_key
+    intake_started = intake.started
+
     # Exactly one intake method: not both, not neither. Both-None and
     # both-present are the two cases where the equality holds.
     if (archive is None) == (repo_url is None):
@@ -1995,46 +2062,6 @@ async def create_audit(
                     "detail": "provide exactly one of 'archive' (file upload) "
                               "or 'repo_url' (public GitHub repo URL)"},
         )
-
-    # Emergency stop: a direct API caller gets a clear 503 (with the operator's
-    # note) before any repo fetch or scan work is done. Checked here, at the
-    # very start, so a paused service spends nothing. The mandatory operator
-    # alert fires inside _emergency_stop_active.
-    intake_started = time.monotonic()
-    paused, note = await _emergency_stop_active(service_flags_repo)
-    if paused:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "service_paused", "detail": note},
-        )
-
-    # Resolve the caller's tier from an optional API key. No key -> None ->
-    # free, with no DB call, so anonymous traffic is byte-for-byte unchanged.
-    # The only entitlement enforced here is daily_audit_limit (below).
-    account = await accounts.resolve_account(request, account_repo)
-    _bind_account(account)
-    tier = account["tier"] if account else TIER_FREE
-    entitlements = entitlements_for_tier(tier, free_daily_limit=limiter.limit)
-
-    # Quota key + the server-side half of the split rate gate: reject an
-    # ALREADY over-budget caller before the source is read or fetched --
-    # this is what status-active.md means by "enforced before any archive
-    # bytes are read". peek() consumes nothing, so it cannot charge anyone;
-    # the quota charge itself runs after validation (see the consume gate
-    # below), where a garbage upload still does not burn the daily budget.
-    #
-    # Tier-aware: an anonymous/free caller is keyed and limited exactly as
-    # before (by client IP, at the limiter's configured limit -- passing that
-    # same limit explicitly is a no-op). A pro account is keyed by its own id
-    # (so its budget follows the account, not whatever IP it calls from) and
-    # gets the higher pro limit.
-    if account is not None:
-        quota_key = f"account:{account['id']}"
-    else:
-        quota_key = _client_key(request)
-    _rate_gate(
-        limiter, quota_key, limit=entitlements.daily_audit_limit, consume=False
-    )
 
     # The source URL to remember on the audit, so a later Fix Pack purchase
     # can re-fetch the same repo without asking for it again. Only set on
@@ -2122,7 +2149,7 @@ async def create_audit(
     # the expensive read/fetch for callers already over budget, so this
     # charge stays exactly where the client-fairness contract wants it.
     _rate_gate(
-        limiter, quota_key, limit=entitlements.daily_audit_limit, consume=True
+        limiter, quota_key, limit=intake.daily_limit, consume=True
     )
 
     # Reproducibility: byte-identical content that was already audited reuses

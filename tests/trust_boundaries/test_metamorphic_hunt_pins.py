@@ -96,30 +96,11 @@ def _transform_for(transform_id: str, entries: dict[str, str]) -> Transform:
     return matches[0]
 
 
-MEASURED_RESIDUALS: dict[tuple[str, str, str], str] = {
-    ("insecure-session-cookie-attributes",
-     "js-cookie-name-from-a-local-binding", "local_const"):
-        "two-hop binding chain (name = holder_a = literal); the JS binding "
-        "reader follows one hop. Measured residual, decision pending.",
-    ("insecure-session-cookie-attributes",
-     "python-samesite-none-on-the-session-cookie", "local_const"):
-        "cookie name from a function-local constant; the Python name reader "
-        "does not follow local bindings (JS does). Measured residual.",
-    ("insecure-session-cookie-attributes",
-     "python-samesite-none-on-the-session-cookie", "concat_split"):
-        "cookie name via concatenation; the JS side folds concatenations "
-        "(leading-string evidence), the Python side does not. Measured "
-        "residual -- one claim, two languages, half-delivered.",
-}
-
-
 @pytest.mark.parametrize(
     "rule_id,case_name,transform_id", PINNED,
     ids=[f"{case}:{t}" for _, case, t in PINNED],
 )
 def test_hunt_escape_class_stays_closed(rule_id, case_name, transform_id):
-    if (rule_id, case_name, transform_id) in MEASURED_RESIDUALS:
-        pytest.xfail(MEASURED_RESIDUALS[(rule_id, case_name, transform_id)])
     case_dir = _case_dir(rule_id, case_name)
     expected = load_expected(case_dir)
     polarity = case_dir.parent.name

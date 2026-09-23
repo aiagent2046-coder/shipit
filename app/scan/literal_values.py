@@ -34,7 +34,10 @@ _MAX_HOPS = 4
 
 UNRESOLVED = object()
 
-_SCOPE_NODES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+_SCOPE_NODES = (
+    ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+    ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,15 @@ class LiteralContext:
         arguments = {
             node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)
         }
+        # These writes have no ast.Name(Store), but can replace a constant.
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    arguments.add(alias.asname or alias.name.split(".")[0])
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                arguments.add(node.name)
+            elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
+                arguments.add(node.name)
         # Comprehension targets are loop variables: never evidence.
         for node in ast.walk(tree):
             if isinstance(node, ast.comprehension):
@@ -103,9 +115,16 @@ class LiteralContext:
         if binding.lineno >= getattr(use, "lineno", 0):
             return False  # written after the use: `call-before-binding`
         current: ast.AST | None = use
+        crossed_scope = False
         while current is not None:
             if id(current) == binding.scope:
+                # A class namespace is available while executing its body,
+                # but is not a closure for methods or nested classes.
+                if isinstance(current, ast.ClassDef) and crossed_scope:
+                    return False
                 return True
+            if isinstance(current, _SCOPE_NODES):
+                crossed_scope = True
             current = self._parents.get(id(current))
         return False  # sibling scope: `binding-in-other-scope`
 

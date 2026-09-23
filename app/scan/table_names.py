@@ -36,6 +36,9 @@ import zipfile
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
+import tree_sitter_typescript
+from tree_sitter import Language, Parser
+
 from app.scan.secrets import _iter_text_files, is_non_production_path
 
 # `.from('table')` / `.from("table")`, the one call every supabase-js read goes
@@ -102,36 +105,90 @@ class NamedTables:
 
 
 _FROM_IDENT = re.compile(r"\.from\(\s*([A-Za-z_$][\w$]*)\s*\)")
-_STRING_BINDING = re.compile(
-    r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*"
-    r"(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)"
-)
+_PARSERS = {
+    False: Parser(Language(tree_sitter_typescript.language_typescript())),
+    True: Parser(Language(tree_sitter_typescript.language_tsx())),
+}
 
 
-def _resolve_from_idents(text: str) -> str:
-    """`.from(tableName)` where the name is an unambiguous local string binding.
+def _resolve_from_idents(text: str, *, tsx: bool = False) -> str:
+    """Resolve plain string declarations with proven scope and no other uses.
 
-    The client matcher takes only literal strings (see above): a `.from(name)`
-    names no table to a regex. But a name whose ONLY assignment is a string
-    literal one line up is knowable from the file alone -- reading it is
-    reading, not guessing. MEASURED: hoisting the literal into a local
-    silenced the schema-drift variant of the metamorphic probe. Names with
-    zero or several assignments, and template literals with substitutions,
-    are left exactly as they were (the dynamic-from floor stays)."""
-    counts = {}
+    Only a declaration and direct `.from(name)` reads may mention the name.
+    Assignments, parameters, aliases and other uses leave it unknown. This
+    deliberately narrow rule also rejects duplicate or shadowing declarations;
+    it must not invent a table name that a live probe would then query.
+    """
+    if not _FROM_IDENT.search(text):
+        return text
+    source = text.encode("utf-8")
+    root = _PARSERS[tsx].parse(source).root_node
+    if root.has_error:
+        return text
+    nodes = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        if len(nodes) > 60_000:
+            return text
+        stack.extend(node.named_children)
+
     bindings = {}
-    for match in _STRING_BINDING.finditer(text):
-        name, token = match.group(1), match.group(2)
-        counts[name] = counts.get(name, 0) + 1
-        if "\\" not in token and "${" not in token:
-            bindings[name] = token
+    invalid = set()
+    reads = {}
+    identifiers = {}
+    for node in nodes:
+        if node.type in {"identifier", "shorthand_property_identifier_pattern",
+                         "shorthand_property_identifier", "type_identifier"}:
+            identifiers.setdefault(node.text, []).append(node)
+        if node.type == "variable_declarator":
+            name = node.child_by_field_name("name")
+            value = node.child_by_field_name("value")
+            if name is None or name.type != "identifier":
+                continue
+            if name.text in bindings:
+                invalid.add(name.text)
+            # Reject expression prefixes, escapes and substituted templates.
+            if (value is None or value.type not in {"string", "template_string"}
+                    or b"\\" in value.text or b"${" in value.text):
+                invalid.add(name.text)
+                continue
+            declaration = node.parent
+            scope = declaration.parent if declaration is not None else None
+            if scope is None or scope.type not in {"program", "statement_block"}:
+                invalid.add(name.text)
+                continue
+            bindings[name.text] = (name, node, value, scope)
+        elif node.type == "call_expression":
+            function = node.child_by_field_name("function")
+            args = node.child_by_field_name("arguments")
+            if function is None or function.type != "member_expression" or args is None:
+                continue
+            prop = function.child_by_field_name("property")
+            if (prop is not None and prop.text == b"from"
+                    and len(args.named_children) == 1
+                    and args.named_children[0].type == "identifier"):
+                arg = args.named_children[0]
+                reads.setdefault(arg.text, []).append(arg)
 
-    def substitute(match):
-        name = match.group(1)
-        if counts.get(name) != 1 or name not in bindings:
-            return match.group(0)
-        return f".from({bindings[name]})"
-    return _FROM_IDENT.sub(substitute, text)
+    replacements = []
+    for key, (name, declaration, value, scope) in bindings.items():
+        uses = reads.get(key, [])
+        allowed = {name.id, *(use.id for use in uses)}
+        if key in invalid or any(node.id not in allowed for node in identifiers.get(key, [])):
+            continue
+        for use in uses:
+            if declaration.end_byte > use.start_byte:
+                continue
+            parent = use.parent
+            while parent is not None and parent != scope:
+                parent = parent.parent
+            if parent == scope:
+                replacements.append((use.start_byte, use.end_byte, value.text))
+    for start, end, value in sorted(replacements, reverse=True):
+        source = source[:start] + value + source[end:]
+    return source.decode("utf-8")
 
 
 def read_named_tables(fileobj: BinaryIO) -> NamedTables:
@@ -147,7 +204,8 @@ def read_named_tables(fileobj: BinaryIO) -> NamedTables:
             if (not name.lower().endswith(_SOURCE_EXTS)
                     or is_non_production_path(name)):
                 continue
-            text = _resolve_from_idents(text)
+            if name.lower().endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")):
+                text = _resolve_from_idents(text, tsx=name.lower().endswith((".tsx", ".jsx")))
             for match in _FROM_CALL.finditer(text):
                 found.from_code.add(match.group(1).lower())
             if _TYPES_MARKER in text:

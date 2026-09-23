@@ -89,6 +89,19 @@ def test_javascript_literals_and_their_negatives():
     assert scan("web/src/lib/e.ts", 'const DOC = "rejectUnauthorized: false";') == []
 
 
+@pytest.mark.parametrize("value", ["0", "0.0", "null", "undefined", '""'])
+@pytest.mark.parametrize("setting", [
+    "new https.Agent({ rejectUnauthorized: VALUE });",
+    "https.globalAgent.options.rejectUnauthorized = VALUE;",
+])
+def test_node_tls_requires_boolean_false_not_a_falsy_value(value, setting):
+    prefix = 'import https from "node:https"; '
+    assert scan_tls_verification(archive(
+        prefix + setting.replace("VALUE", value), "src/client.ts")) == []
+    assert scan_tls_verification(archive(
+        prefix + setting.replace("VALUE", "false"), "src/client.ts"))
+
+
 # case name -> (file, the one change that removes the property the case pins)
 CORPUS_NEGATIVES = REPO_ROOT / "tests" / "detectors" / RULE_ID / "negative"
 MUTATIONS: dict[str, tuple[str, str, str]] = {

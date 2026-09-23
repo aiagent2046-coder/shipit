@@ -10,7 +10,42 @@ from __future__ import annotations
 import io
 import zipfile
 
+import pytest
+
 from app.scan.schema_drift import RULE_ID, scan_schema_drift
+from app.scan.table_names import read_named_tables
+
+
+@pytest.mark.parametrize("source", [
+    'let table = "profiles"; table = "payments"; supabase.from(table);',
+    'const table = "user" + "_profiles"; supabase.from(table);',
+    'function other() { const table = "profiles"; } '
+    'function query(table) { return supabase.from(table); }',
+    'function other() { const table = "profiles"; } supabase.from(table);',
+    'supabase.from(table); const table = "profiles";',
+    'const table = "profiles"; function query({table}) { return supabase.from(table); }',
+    'const table = "profiles"; const other = table; supabase.from(table);',
+    '// const table = "profiles";\nsupabase.from(table);',
+])
+def test_unproven_table_binding_stays_dynamic_and_out_of_probe_candidates(source):
+    from app.proof.supabase_tables import find_probe_tables
+    bundle = make_zip({"src/client.ts": source})
+    named = read_named_tables(bundle)
+    assert named.from_code == set()
+    assert named.has_dynamic_from
+    assert find_probe_tables(bundle) == []
+
+
+@pytest.mark.parametrize("path,source", [
+    ("src/client.ts", 'const table = "profiles"; supabase.from(table);'),
+    ("src/client.ts", 'function query() { const table = "profiles"; return supabase.from(table); }'),
+    ("src/client.ts", 'const table = "profiles"; function query() { return supabase.from(table); }'),
+    ("src/client.tsx", 'const heading = <h1>Таблицы</h1>; const table = "profiles"; supabase.from(table);'),
+])
+def test_stable_table_binding_is_resolved_in_its_lexical_scope(path, source):
+    named = read_named_tables(make_zip({path: source}))
+    assert named.from_code == {"profiles"}
+    assert not named.has_dynamic_from
 
 
 def make_zip(entries: dict[str, str]) -> io.BytesIO:

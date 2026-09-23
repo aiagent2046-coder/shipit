@@ -236,3 +236,109 @@ def test_client_key_a_rotating_forged_prefix_maps_to_one_key():
 def test_client_key_falls_back_to_the_peer_without_the_header():
     from app.main import _client_key
     assert _client_key(_FakeRequest(peer="10.0.0.7")) == "10.0.0.7"
+
+
+def test_over_budget_rejects_before_http_body_or_multipart_spooling(monkeypatch):
+    """A late gate after FastAPI's multipart parser would write 2 MiB here."""
+    from starlette.datastructures import UploadFile
+    from starlette.requests import Request
+
+    limiter = RateLimiter(limit=1)
+    limiter.check("testclient")
+    monkeypatch.setitem(app.dependency_overrides, get_rate_limiter, lambda: limiter)
+    reads = []
+    writes = []
+    original_stream = Request.stream
+    original_write = UploadFile.write
+
+    async def stream(request):
+        reads.append(request.url.path)
+        async for chunk in original_stream(request):
+            yield chunk
+
+    async def write(upload, data):
+        writes.append(len(data))
+        return await original_write(upload, data)
+
+    monkeypatch.setattr(Request, "stream", stream)
+    monkeypatch.setattr(UploadFile, "write", write)
+    response = TestClient(app).post(
+        "/v1/audits",
+        files={"archive": ("large.zip", b"x" * (2 * 1024 * 1024), "application/zip")},
+    )
+    assert response.status_code == 429
+    assert response.json()["detail"]["reason"] == "rate_limited"
+    assert int(response.headers["retry-after"]) > 0
+    assert response.headers["x-request-id"]
+    assert reads == []
+    assert writes == []
+    assert limiter._windows["testclient"].count == 1
+
+
+def test_preflight_failures_keep_cors_and_never_read_body(monkeypatch):
+    from fastapi import FastAPI
+    from starlette.requests import Request
+
+    import app.main as main
+    from app.ratelimit import RateLimitStoreError
+
+    limiter = RateLimiter(limit=1)
+    limiter.check("testclient")
+    monkeypatch.setitem(app.dependency_overrides, get_rate_limiter, lambda: limiter)
+
+    async def unread(request):
+        raise AssertionError("preflight rejection must not read request body")
+        yield b""  # make this an async iterator like Request.stream
+
+    monkeypatch.setattr(Request, "stream", unread)
+    # Use the production CORS configurator around the real routes/handlers.
+    # A separate app avoids changing the global app's built middleware stack.
+    outer = FastAPI()
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://client.example")
+    main.configure_cors(outer)
+    outer.mount("/", app)
+    client = TestClient(outer)
+    kwargs = {"files": {"archive": ("app.zip", b"x" * 2048)},
+              "headers": {"Origin": "https://client.example"}}
+    response = client.post("/v1/audits", **kwargs)
+    assert response.status_code == 429
+    assert response.headers["access-control-allow-origin"] == "https://client.example"
+    assert response.headers["x-request-id"]
+
+    def unavailable(*args, **kwargs):
+        raise RateLimitStoreError("store unavailable")
+
+    monkeypatch.setattr(limiter, "peek", unavailable)
+    response = client.post("/v1/audits", **kwargs)
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "rate_limit_unavailable"
+    assert response.headers["access-control-allow-origin"] == "https://client.example"
+    assert response.headers["x-request-id"]
+
+    async def paused(repo):
+        return True, "operator pause"
+
+    monkeypatch.setattr(main, "_emergency_stop_active", paused)
+    response = client.post("/v1/audits", **kwargs)
+    assert response.status_code == 503
+    assert response.json()["detail"] == {"reason": "service_paused", "detail": "operator pause"}
+
+
+def test_intake_form_types_remain_422_and_do_not_consume_quota(monkeypatch):
+    limiter = RateLimiter(limit=1)
+    monkeypatch.setitem(app.dependency_overrides, get_rate_limiter, lambda: limiter)
+    client = TestClient(app)
+    response = client.post("/v1/audits", data={"archive": "not an upload"})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "archive"]
+    response = client.post("/v1/audits", files={"repo_url": ("url.txt", b"not a string")})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "repo_url"]
+    assert limiter._windows == {}
+
+
+def test_intake_openapi_keeps_file_and_url_fields():
+    schema = app.openapi()["paths"]["/v1/audits"]["post"]["requestBody"]
+    fields = schema["content"]["multipart/form-data"]["schema"]["properties"]
+    assert {"type": "string", "contentMediaType": "application/octet-stream"} in fields["archive"]["anyOf"]
+    assert {"type": "string"} in fields["repo_url"]["anyOf"]

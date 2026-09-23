@@ -24,6 +24,27 @@ from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+
+@pytest.mark.parametrize("source", [
+    'let holder = "session"; holder = "theme"; const name = holder; res.cookie(name, token);',
+    'function other() { const holder = "session"; } '
+    'function login(holder) { const name = holder; res.cookie(name, token); }',
+    'const name = holder; const holder = "session"; res.cookie(name, token);',
+])
+def test_cookie_aliases_require_a_stable_visible_source(source):
+    assert scan_cookie_flags(archive(source, "src/login.ts")) == []
+
+
+def test_cookie_alias_chain_keeps_proven_authentication_name():
+    source = 'const holder = "session"; const alias = holder; const name = alias; res.cookie(name, token);'
+    assert len(scan_cookie_flags(archive(source, "src/login.ts"))) == 1
+
+
+def test_class_flag_does_not_replace_imported_global_cookie_flag():
+    source = ('from config import FLAG\nclass Settings:\n    FLAG = False\n'
+              'def login(response):\n    response.set_cookie("session", "token", httponly=FLAG)\n')
+    assert scan_cookie_flags(archive(source)) == []
+
 PYTHON_POSITIVE = """from fastapi import APIRouter, Response
 
 router = APIRouter()

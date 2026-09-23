@@ -262,13 +262,15 @@ def _local_string_bindings(root, budget: list[int]) -> dict[str, str]:
     spelled the way people actually write it. The same map resolves the value
     handed to `document.cookie`.
     """
+    declarations = _stable_declarations(root)
     bindings: dict[str, str] = {}
     for node in _walk(root, budget):
         if node.type != "variable_declarator":
             continue
         name = node.child_by_field_name("name")
         value = node.child_by_field_name("value")
-        if name is None or value is None or name.type != "identifier":
+        if (name is None or value is None or name.type != "identifier"
+                or declarations.get(_text(name)) != node):
             continue
         literal = _string_value(value) or (_leading_string(value) if value.type != "string" else "")
         if literal:
@@ -287,7 +289,9 @@ def _local_string_bindings(root, budget: list[int]) -> dict[str, str]:
                     or value.type != "identifier"):
                 continue
             key, target = _text(name), _text(value)
-            if key not in bindings and target in bindings:
+            if (key not in bindings and target in bindings
+                    and declarations.get(key) == node
+                    and _visible_binding(target, value, declarations)):
                 bindings[key] = bindings[target]
                 changed = True
         if not changed:

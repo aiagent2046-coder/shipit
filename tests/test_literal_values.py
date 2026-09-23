@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import ast
 
+import pytest
+
 from app.scan.literal_values import UNRESOLVED, literal_context
 
 
@@ -60,3 +62,21 @@ def test_a_chain_that_never_ends_resolves_to_unresolved():
 
 def test_none_value_is_a_value_not_an_absence():
     assert resolve("mode = None\nuse(mode)", "mode") is None
+
+
+@pytest.mark.parametrize("source", [
+    'class Settings:\n    flag = False\nuse(flag)\n',
+    'class Settings:\n    flag = False\n    def login(self):\n        use(flag)\n',
+    'class Settings:\n    flag = False\n    class Nested:\n        use(flag)\n',
+    'class Settings:\n    flag = False\n    values = [use(flag) for i in range(1)]\n',
+    'flag = False\nfrom config import flag\nuse(flag)\n',
+    'flag = False\ndef flag():\n    pass\nuse(flag)\n',
+])
+def test_class_namespaces_and_non_assignment_writes_are_not_constants(source):
+    assert resolve(source, "flag") is UNRESOLVED
+
+
+def test_class_body_and_enclosing_function_constants_remain_visible():
+    assert resolve('class Settings:\n    flag = False\n    use(flag)\n', "flag") is False
+    assert resolve('def outer():\n    flag = False\n    class Settings:\n'
+                   '        def login(self):\n            use(flag)\n', "flag") is False

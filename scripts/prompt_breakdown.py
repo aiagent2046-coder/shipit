@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.scan.llm_scan import (  # noqa: E402
     ALL_RUBRICS, RUBRICS, SYSTEM_PROMPT, _iter_code_files, build_prompt,

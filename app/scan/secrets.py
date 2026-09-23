@@ -11,6 +11,7 @@ Design rules:
 
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import hmac
@@ -1274,7 +1275,7 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
             # that wrapper must not turn the same SQL predicate into a secret
             # assignment when the repository itself is scanned.
             is_sql = name.lower().removesuffix(".fixture").endswith(".sql")
-            string_bindings = _literal_string_bindings(text)
+            assignment_values = _adjacent_assignment_literals(name, text)
             shell_substitutions = None
             next_line_offset = 0
             for lineno, raw_line in enumerate(text.splitlines(keepends=True), start=1):
@@ -1290,7 +1291,7 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                     # one secret (MEASURED: expected counts broke by 2>1).
                     if rule.id in {"generic-assignment", "sql-secret-assignment"}:
                         if resolved_line is None:
-                            resolved_line = _resolve_assignment_rhs(line, string_bindings)
+                            resolved_line = _resolve_assignment_rhs(line, assignment_values.get(lineno))
                         matched_line = resolved_line
                     else:
                         matched_line = line
@@ -1355,40 +1356,102 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                     yield finding, m.group(0)
 
 
-_QUOTED_LITERAL = r"(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')"
-_SIMPLE_STRING_BINDING = re.compile(
-    r"^\s*(?:const\s+|let\s+|var\s+)?([A-Za-z_$][\w$]*)\s*=\s*" + _QUOTED_LITERAL + r"\s*;?\s*$",
-    re.M,
-)
-_ASSIGN_RHS_IDENT = re.compile(r"(?<![=!<>])=\s*([A-Za-z_$][\w$]*)\s*$")
+_ASSIGN_RHS_IDENT = re.compile(r"(?<![=!<>])=\s*([A-Za-z_$][\w$]*)\s*;?\s*$")
 
 
-def _literal_string_bindings(text: str) -> dict[str, str]:
-    """Name -> the quoted literal token it is assigned exactly once."""
-    counts: dict[str, int] = {}
-    bindings: dict[str, str] = {}
-    for match in _SIMPLE_STRING_BINDING.finditer(text):
-        name = match.group(1)
-        counts[name] = counts.get(name, 0) + 1
-        bindings[name] = match.group(2)
-    return {name: token for name, token in bindings.items() if counts.get(name) == 1}
+def _adjacent_assignment_literals(name: str, text: str) -> dict[int, tuple[str, str]]:
+    """Resolve only adjacent simple assignments in the same statement block.
+
+    A file-wide name map cannot prove scope or reaching definitions. Limiting
+    this reader to consecutive statements avoids crossing calls, branches,
+    rebinding and sibling scopes. Comments and strings are parsed as data.
+    More complex flows deliberately remain unresolved.
+    """
+    suffix = name.lower().removesuffix(".fixture")
+    result: dict[int, tuple[str, str]] = {}
+    if suffix.endswith(".py"):
+        if len(text.encode("utf-8")) > MAX_PYTHON_BYTES:
+            return result
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError, RecursionError):
+            return result
+        for owner in ast.walk(tree):
+            for _, body in ast.iter_fields(owner):
+                if not isinstance(body, list):
+                    continue
+                for binding, use in zip(body, body[1:]):
+                    if not (isinstance(binding, ast.Assign) and isinstance(use, ast.Assign)
+                            and len(binding.targets) == len(use.targets) == 1
+                            and isinstance(binding.targets[0], ast.Name)
+                            and isinstance(use.targets[0], ast.Name)
+                            and isinstance(binding.value, ast.Constant)
+                            and isinstance(binding.value.value, str)
+                            and isinstance(use.value, ast.Name)
+                            and use.value.id == binding.targets[0].id
+                            and binding.lineno == binding.end_lineno
+                            and use.lineno == use.end_lineno
+                            and binding.end_lineno < use.lineno):
+                        continue
+                    token = ast.get_source_segment(text, binding.value)
+                    if token and token[0] in "\"'":
+                        result[use.lineno] = (use.value.id, token)
+        return result
+    if not suffix.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
+        return result
+    import tree_sitter_typescript
+    from tree_sitter import Language, Parser
+
+    raw = text.encode("utf-8")
+    grammar = (tree_sitter_typescript.language_tsx if suffix.endswith((".jsx", ".tsx"))
+               else tree_sitter_typescript.language_typescript)
+    root = Parser(Language(grammar())).parse(raw).root_node
+    if root.has_error:
+        return result
+
+    def declaration(node):
+        if node.type not in {"lexical_declaration", "variable_declaration"}:
+            return None
+        children = node.named_children
+        if len(children) != 1 or children[0].type != "variable_declarator":
+            return None
+        target = children[0].child_by_field_name("name")
+        value = children[0].child_by_field_name("value")
+        if target is None or target.type != "identifier" or value is None:
+            return None
+        return target, value
+
+    pending = [root]
+    while pending:
+        owner = pending.pop()
+        pending.extend(owner.named_children)
+        if owner.type not in {"program", "statement_block"}:
+            continue
+        for binding, use in zip(owner.named_children, owner.named_children[1:]):
+            first, second = declaration(binding), declaration(use)
+            if first is None or second is None:
+                continue
+            target, value = first
+            _, reference = second
+            if (value.type == "string" and reference.type == "identifier"
+                    and target.text == reference.text
+                    and binding.start_point.row == binding.end_point.row
+                    and use.start_point.row == use.end_point.row
+                    and binding.end_point.row < use.start_point.row):
+                result[use.start_point.row + 1] = (
+                    reference.text.decode("utf-8"), value.text.decode("utf-8"),
+                )
+    return result
 
 
-def _resolve_assignment_rhs(line: str, bindings: dict[str, str]) -> str:
-    """`const api_key = holder` where holder is an unambiguous local literal.
-
-    The assignment rule matches a QUOTED value on the name's own line, so a
-    chain (`const holder = "sk-..."; const api_key = holder`) hid the leak.
-    The value is knowable from the file alone -- reading it is reading. The
-    rewrite happens ON the evidence line, so every finding keeps its line.
-    MEASURED: the generic-assignment variant of the metamorphic probe."""
+def _resolve_assignment_rhs(line: str, binding: tuple[str, str] | None) -> str:
+    """Replace only the use whose adjacent literal was proven by the parser."""
+    if binding is None:
+        return line
     match = _ASSIGN_RHS_IDENT.search(line)
-    if match is None:
+    if match is None or match.group(1) != binding[0]:
         return line
-    token = bindings.get(match.group(1))
-    if token is None:
-        return line
-    return line[:match.start(1)] + token + line[match.end(1):]
+    return line[:match.start(1)] + binding[1] + line[match.end(1):]
 
 
 def scan_secrets(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[SecretFinding]:
