@@ -158,6 +158,18 @@ execution scenario. These smaller fixtures do not repeat the earlier full
 Svelte build or Django HTTP/ORM experiment. See the
 [fixture provenance and exact scope](../tests/fixtures/dependency-remediation/README.md).
 
+### Additional pinned project experiments
+
+The [2026-09-22 experiment report](experiments/dependency-expansion-2026-09-22/README.md)
+records successful before / corrected / restored cycles for minimist in mkdirp
+and Requests in the VTEX Python client. Both include bounded project checks and
+an independent dependency-level security regression. A separate http-server
+attempt retains an affected bundled copy after a root override; its installation
+was blocked and its runtime result is explicitly unavailable. These manual
+experiments do not promote ordinary cards to application runtime verification
+or add automatic repair. Pinned sources, reproduction scripts, raw evidence and
+limits accompany the report.
+
 Automatic source-code recipe extraction from CWE classifications, patch
 references, or before/after code is **not implemented**. The existing Python
 SQL/Psycopg pilot remains in its separate pattern catalog and evidence workflow;

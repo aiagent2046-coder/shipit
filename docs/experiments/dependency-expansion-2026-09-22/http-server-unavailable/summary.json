@@ -1,0 +1,1232 @@
+{
+  "status": "unavailable",
+  "reason": "npm_registry_403_camelcase",
+  "runtime_verified": false,
+  "compatibility_verified": false,
+  "scanner_commit": "0b5c981412ad0a9ab62ad4a7a6da1b90a0acd67b",
+  "catalog_sha256": "e8cc8c6a60e29331c42f0c50bbdb57484766b947d377afc966c723ec7b3347af",
+  "source_commit": "967e915f4dc4fd2798e62a370d4e1ac25cc7811d",
+  "source_url": "https://github.com/http-party/http-server",
+  "cards": [
+    {
+      "schema_version": 1,
+      "catalog_version": "2026-09-21.1",
+      "recipe": {
+        "id": "npm-dependency-upgrade",
+        "revision": 1,
+        "steps": [
+          "Review the advisory and release notes for a listed candidate and check application compatibility.",
+          "Update the dependency declaration or the parent dependency that brings in a transitive package.",
+          "Regenerate the lockfile with the project's existing package-manager workflow; do not hand-edit it."
+        ],
+        "verification": [
+          "Regenerate the resolved dependency file and confirm every affected installation was updated.",
+          "Repeat the advisory scan; preserve unknown or incomplete results as unresolved.",
+          "Run the application's build and regression tests, including the affected feature when available."
+        ]
+      },
+      "binding": {
+        "ecosystem": "npm",
+        "package": "minimist",
+        "installed_version": "1.2.5",
+        "sources": {
+          "cvelist": {
+            "repository": "https://github.com/CVEProject/cvelistV5",
+            "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+            "generated_at": "2026-09-21T10:42:57Z"
+          },
+          "github-reviewed": {
+            "repository": "https://github.com/github/advisory-database",
+            "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+            "generated_at": "2026-09-21T09:36:26Z"
+          }
+        },
+        "sources_sha256": "8ef299c67c6e05094352e6628eba94073e0800c564e3751cfe42c7f9a0b41f39",
+        "records_sha256": "cf8f4bb409c60342e1bb3d2ceb8b87917ba5c2ab29e879dce2ef510ac2e0be18"
+      },
+      "status": "candidates_available",
+      "candidate_versions": [
+        "1.2.6"
+      ],
+      "reason_codes": [],
+      "automatic_apply": false,
+      "runtime_verified": false,
+      "compatibility": "not_assessed",
+      "advisory_count": 2,
+      "evaluations": 2
+    }
+  ],
+  "stages": [
+    {
+      "name": "before",
+      "manifest_sha256": {
+        "package.json": "faa217917c8b6cb5ce5b383fc8ce255e034d371569a503e5baed80912211cb55",
+        "package-lock.json": "3d90ec8a060e2726df1b44d81f70fe2c891ef757b2cd92f13af752414fc0900e"
+      },
+      "target_installations": [
+        {
+          "path": "node_modules/minimist",
+          "version": "1.2.5",
+          "integrity": "sha512-FM9nNUYrRBAELZQT3xeZQ7fmMOBg6nWNmJKTcgsJeaLstP/UODVpGsr5OhXhhXg6f+qtJ8uiZ+PUxkDWcgIXLw==",
+          "advisories": [
+            {
+              "id": "GHSA-vh95-rmgr-6w4m",
+              "status": "unaffected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [],
+              "matched_versions": []
+            },
+            {
+              "id": "GHSA-xvch-5gv4-984h",
+              "status": "affected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [
+                {
+                  "events": [
+                    {
+                      "introduced": "1.0.0"
+                    },
+                    {
+                      "fixed": "1.2.6"
+                    }
+                  ],
+                  "type": "ECOSYSTEM"
+                }
+              ],
+              "matched_versions": []
+            }
+          ]
+        },
+        {
+          "path": "node_modules/tap/node_modules/minimist",
+          "version": "1.2.5",
+          "dev": true,
+          "inBundle": true,
+          "license": "MIT",
+          "advisories": [
+            {
+              "id": "GHSA-vh95-rmgr-6w4m",
+              "status": "unaffected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [],
+              "matched_versions": []
+            },
+            {
+              "id": "GHSA-xvch-5gv4-984h",
+              "status": "affected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [
+                {
+                  "events": [
+                    {
+                      "introduced": "1.0.0"
+                    },
+                    {
+                      "fixed": "1.2.6"
+                    }
+                  ],
+                  "type": "ECOSYSTEM"
+                }
+              ],
+              "matched_versions": []
+            }
+          ]
+        }
+      ],
+      "tests": "not_run_install_blocked",
+      "target_findings": [
+        {
+          "rule_id": "dependency-cve-match",
+          "title": "minimist 1.2.5 matches GHSA-xvch-5gv4-984h",
+          "severity": "high",
+          "confidence": 0.9,
+          "category": "Security",
+          "file": "package-lock.json",
+          "line": 0,
+          "explanation": "The resolved npm package version is listed as affected by GHSA-xvch-5gv4-984h in the bundled advisory snapshot. Application reachability and exploitability have not been verified. Recorded manifest locations: package-lock.json (runtime; direct; groups: devDependencies).",
+          "fix_hint": "Advisory-fixed upgrade candidates: 1.2.6. These versions were checked against all recorded advisories for this package in this snapshot. Review compatibility, update the dependency and resolved lockfile, then repeat the scan and application tests. No update has been applied or runtime-verified.",
+          "source": "dependency",
+          "verification_status": "unverified",
+          "verification_method": "package_version_match",
+          "claim_evidence": {
+            "version": 1,
+            "package": "minimist",
+            "ecosystem": "npm",
+            "installed_version": "1.2.5",
+            "manifest": "package-lock.json",
+            "dependency_scope": "runtime",
+            "direct": true,
+            "dependency_groups": [
+              "devDependencies"
+            ],
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": true,
+                "dependency_scope": "runtime",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory_id": "GHSA-xvch-5gv4-984h",
+            "advisory_ids": [
+              "CVE-2021-44906",
+              "GHSA-xvch-5gv4-984h"
+            ],
+            "url": "https://github.com/advisories/GHSA-xvch-5gv4-984h",
+            "snapshot": {
+              "repository": "https://github.com/CVEProject/cvelistV5",
+              "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+              "generated_at": "2026-09-21T10:42:57Z"
+            },
+            "snapshot_sources": [
+              {
+                "name": "github-reviewed",
+                "repository": "https://github.com/github/advisory-database",
+                "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+                "generated_at": "2026-09-21T09:36:26Z"
+              }
+            ],
+            "matched_ranges": [
+              {
+                "events": [
+                  {
+                    "introduced": "1.0.0"
+                  },
+                  {
+                    "fixed": "1.2.6"
+                  }
+                ],
+                "type": "ECOSYSTEM"
+              }
+            ],
+            "matched_versions": [],
+            "default_status_used": false,
+            "reachability": "not_assessed",
+            "ghsa_id": "GHSA-xvch-5gv4-984h",
+            "remediation": {
+              "schema_version": 1,
+              "catalog_version": "2026-09-21.1",
+              "recipe": {
+                "id": "npm-dependency-upgrade",
+                "revision": 1,
+                "steps": [
+                  "Review the advisory and release notes for a listed candidate and check application compatibility.",
+                  "Update the dependency declaration or the parent dependency that brings in a transitive package.",
+                  "Regenerate the lockfile with the project's existing package-manager workflow; do not hand-edit it."
+                ],
+                "verification": [
+                  "Regenerate the resolved dependency file and confirm every affected installation was updated.",
+                  "Repeat the advisory scan; preserve unknown or incomplete results as unresolved.",
+                  "Run the application's build and regression tests, including the affected feature when available."
+                ]
+              },
+              "binding": {
+                "ecosystem": "npm",
+                "package": "minimist",
+                "installed_version": "1.2.5",
+                "sources": {
+                  "cvelist": {
+                    "repository": "https://github.com/CVEProject/cvelistV5",
+                    "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+                    "generated_at": "2026-09-21T10:42:57Z"
+                  },
+                  "github-reviewed": {
+                    "repository": "https://github.com/github/advisory-database",
+                    "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+                    "generated_at": "2026-09-21T09:36:26Z"
+                  }
+                },
+                "sources_sha256": "8ef299c67c6e05094352e6628eba94073e0800c564e3751cfe42c7f9a0b41f39",
+                "records_sha256": "cf8f4bb409c60342e1bb3d2ceb8b87917ba5c2ab29e879dce2ef510ac2e0be18"
+              },
+              "status": "candidates_available",
+              "candidate_versions": [
+                "1.2.6"
+              ],
+              "reason_codes": [],
+              "automatic_apply": false,
+              "runtime_verified": false,
+              "compatibility": "not_assessed",
+              "advisory_count": 2,
+              "evaluations": 2
+            }
+          }
+        }
+      ],
+      "coverage": {
+        "status": "partial",
+        "status_counts": {
+          "affected": 81,
+          "unaffected": 111,
+          "unknown": 3,
+          "not_in_catalog": 457
+        },
+        "dependencies_found": 547,
+        "dependencies_checked": 547,
+        "packages_in_catalog": 90,
+        "advisory_evaluations": 204,
+        "unresolved_ranges": 3,
+        "manifests": [
+          "package-lock.json"
+        ],
+        "incomplete_manifests": {},
+        "inventory_truncated": 0,
+        "findings_truncated": 0,
+        "evaluations_truncated": 0,
+        "unknown_reason_counts": {
+          "conflicting_advisory_sources": 2,
+          "unsupported_applicability": 1
+        },
+        "details_truncated": 0,
+        "manifest_gap_reason_counts": {},
+        "manifest_gap_details": [],
+        "manifest_gap_details_truncated": 0,
+        "excluded_manifests": {},
+        "excluded_manifests_truncated": 0,
+        "source": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+          "generated_at": "2026-09-21T10:42:57Z"
+        },
+        "sources": {
+          "cvelist": {
+            "repository": "https://github.com/CVEProject/cvelistV5",
+            "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+            "generated_at": "2026-09-21T10:42:57Z"
+          },
+          "github-reviewed": {
+            "repository": "https://github.com/github/advisory-database",
+            "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+            "generated_at": "2026-09-21T09:36:26Z"
+          }
+        },
+        "details": [
+          {
+            "package": "npm:lodash",
+            "version": "4.17.21",
+            "manifest": "package-lock.json",
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "runtime",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory": "CVE-2026-2950",
+            "reason": "conflicting_advisory_sources",
+            "assessments": [
+              {
+                "source": "cvelist",
+                "advisory": "CVE-2026-2950",
+                "status": "unaffected",
+                "reason": null
+              },
+              {
+                "source": "github-reviewed",
+                "advisory": "GHSA-f23m-r3pf-42rh",
+                "status": "affected",
+                "reason": null
+              }
+            ],
+            "assessments_truncated": 0
+          },
+          {
+            "package": "npm:lodash",
+            "version": "4.17.19",
+            "manifest": "package-lock.json",
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "development",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory": "CVE-2026-2950",
+            "reason": "conflicting_advisory_sources",
+            "assessments": [
+              {
+                "source": "cvelist",
+                "advisory": "CVE-2026-2950",
+                "status": "unaffected",
+                "reason": null
+              },
+              {
+                "source": "github-reviewed",
+                "advisory": "GHSA-f23m-r3pf-42rh",
+                "status": "affected",
+                "reason": null
+              }
+            ],
+            "assessments_truncated": 0
+          },
+          {
+            "package": "npm:uri-js",
+            "version": "4.4.1",
+            "manifest": "package-lock.json",
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "development",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory": "CVE-2026-93751",
+            "reason": "unsupported_applicability",
+            "assessments": [
+              {
+                "source": "cvelist",
+                "advisory": "CVE-2026-93751",
+                "status": "unknown",
+                "reason": "unsupported_applicability"
+              }
+            ],
+            "assessments_truncated": 0
+          }
+        ],
+        "catalog_stats": {
+          "affected_seen": 607550,
+          "ghsa_affected_seen": 64805,
+          "ghsa_indexed_entries": 14816,
+          "ghsa_indexed_packages": 5070,
+          "ghsa_indexed_records": 13103,
+          "ghsa_invalid_affected": 3,
+          "ghsa_invalid_records": 0,
+          "ghsa_reviewed": 35729,
+          "ghsa_seen": 35729,
+          "ghsa_unreviewed": 0,
+          "ghsa_unsupported_aliases": 0,
+          "ghsa_unsupported_ecosystems": 44059,
+          "ghsa_unsupported_ranges": 0,
+          "ghsa_unsupported_schema": 0,
+          "ghsa_withdrawn": 1086,
+          "indexed_entries": 1780,
+          "indexed_entries_total": 16596,
+          "indexed_packages": 307,
+          "indexed_packages_total": 5185,
+          "indexed_records": 1578,
+          "invalid_affected": 60,
+          "invalid_records": 1,
+          "published": 377336,
+          "rejected": 18363,
+          "seen": 395699,
+          "unsupported_applicability": 1133,
+          "unsupported_packages": 605710,
+          "unsupported_schema": 0
+        },
+        "limitations": [
+          "Only exact registry package versions in supported lockfiles are compared with this snapshot.",
+          "Locked platform, optional and development variants are included; runtime selection is not evaluated.",
+          "A package/version match does not establish reachable or exploitable application code.",
+          "Absence from the snapshot, unsupported ranges, and no matches do not establish a clean or safe project.",
+          "PyPI comparisons support numeric releases and canonical a/b/rc prereleases; epochs, post/dev/local versions and other spellings remain unsupported. npm comparisons require SemVer; CVE range lower bound '0' means the earliest version."
+        ]
+      }
+    },
+    {
+      "name": "after_lock_only",
+      "manifest_sha256": {
+        "package.json": "82a166d6de313668d193970fea3b5ff4b683c758b4227c8fc1f9620c1337ade1",
+        "package-lock.json": "c7b7cd557b68bc0b2e0016d0b964df619117585671379cfd65c31c1453e6617c"
+      },
+      "target_installations": [
+        {
+          "path": "node_modules/minimist",
+          "version": "1.2.6",
+          "resolved": "https://registry.npmjs.org/minimist/-/minimist-1.2.6.tgz",
+          "integrity": "sha512-Jsjnk4bw3YJqYzbdyBiNsPWHPfO++UGG749Cxs6peCu5Xg4nrena6OVxOYxrQTqww0Jmwt+Ref8rggumkTLz9Q==",
+          "license": "MIT",
+          "advisories": [
+            {
+              "id": "GHSA-vh95-rmgr-6w4m",
+              "status": "unaffected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [],
+              "matched_versions": []
+            },
+            {
+              "id": "GHSA-xvch-5gv4-984h",
+              "status": "unaffected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [],
+              "matched_versions": []
+            }
+          ]
+        },
+        {
+          "path": "node_modules/tap/node_modules/minimist",
+          "version": "1.2.5",
+          "dev": true,
+          "inBundle": true,
+          "license": "MIT",
+          "advisories": [
+            {
+              "id": "GHSA-vh95-rmgr-6w4m",
+              "status": "unaffected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [],
+              "matched_versions": []
+            },
+            {
+              "id": "GHSA-xvch-5gv4-984h",
+              "status": "affected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [
+                {
+                  "events": [
+                    {
+                      "introduced": "1.0.0"
+                    },
+                    {
+                      "fixed": "1.2.6"
+                    }
+                  ],
+                  "type": "ECOSYSTEM"
+                }
+              ],
+              "matched_versions": []
+            }
+          ]
+        }
+      ],
+      "tests": "not_run_install_blocked",
+      "target_findings": [
+        {
+          "rule_id": "dependency-cve-match",
+          "title": "minimist 1.2.5 matches GHSA-xvch-5gv4-984h",
+          "severity": "high",
+          "confidence": 0.9,
+          "category": "Security",
+          "file": "package-lock.json",
+          "line": 0,
+          "explanation": "The resolved npm package version is listed as affected by GHSA-xvch-5gv4-984h in the bundled advisory snapshot. Application reachability and exploitability have not been verified. Recorded manifest locations: package-lock.json (development; not marked direct; groups: devDependencies).",
+          "fix_hint": "Advisory-fixed upgrade candidates: 1.2.6. These versions were checked against all recorded advisories for this package in this snapshot. Review compatibility, update the dependency and resolved lockfile, then repeat the scan and application tests. No update has been applied or runtime-verified.",
+          "source": "dependency",
+          "verification_status": "unverified",
+          "verification_method": "package_version_match",
+          "claim_evidence": {
+            "version": 1,
+            "package": "minimist",
+            "ecosystem": "npm",
+            "installed_version": "1.2.5",
+            "manifest": "package-lock.json",
+            "dependency_scope": "development",
+            "direct": false,
+            "dependency_groups": [
+              "devDependencies"
+            ],
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "development",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory_id": "GHSA-xvch-5gv4-984h",
+            "advisory_ids": [
+              "CVE-2021-44906",
+              "GHSA-xvch-5gv4-984h"
+            ],
+            "url": "https://github.com/advisories/GHSA-xvch-5gv4-984h",
+            "snapshot": {
+              "repository": "https://github.com/CVEProject/cvelistV5",
+              "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+              "generated_at": "2026-09-21T10:42:57Z"
+            },
+            "snapshot_sources": [
+              {
+                "name": "github-reviewed",
+                "repository": "https://github.com/github/advisory-database",
+                "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+                "generated_at": "2026-09-21T09:36:26Z"
+              }
+            ],
+            "matched_ranges": [
+              {
+                "events": [
+                  {
+                    "introduced": "1.0.0"
+                  },
+                  {
+                    "fixed": "1.2.6"
+                  }
+                ],
+                "type": "ECOSYSTEM"
+              }
+            ],
+            "matched_versions": [],
+            "default_status_used": false,
+            "reachability": "not_assessed",
+            "ghsa_id": "GHSA-xvch-5gv4-984h",
+            "remediation": {
+              "schema_version": 1,
+              "catalog_version": "2026-09-21.1",
+              "recipe": {
+                "id": "npm-dependency-upgrade",
+                "revision": 1,
+                "steps": [
+                  "Review the advisory and release notes for a listed candidate and check application compatibility.",
+                  "Update the dependency declaration or the parent dependency that brings in a transitive package.",
+                  "Regenerate the lockfile with the project's existing package-manager workflow; do not hand-edit it."
+                ],
+                "verification": [
+                  "Regenerate the resolved dependency file and confirm every affected installation was updated.",
+                  "Repeat the advisory scan; preserve unknown or incomplete results as unresolved.",
+                  "Run the application's build and regression tests, including the affected feature when available."
+                ]
+              },
+              "binding": {
+                "ecosystem": "npm",
+                "package": "minimist",
+                "installed_version": "1.2.5",
+                "sources": {
+                  "cvelist": {
+                    "repository": "https://github.com/CVEProject/cvelistV5",
+                    "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+                    "generated_at": "2026-09-21T10:42:57Z"
+                  },
+                  "github-reviewed": {
+                    "repository": "https://github.com/github/advisory-database",
+                    "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+                    "generated_at": "2026-09-21T09:36:26Z"
+                  }
+                },
+                "sources_sha256": "8ef299c67c6e05094352e6628eba94073e0800c564e3751cfe42c7f9a0b41f39",
+                "records_sha256": "cf8f4bb409c60342e1bb3d2ceb8b87917ba5c2ab29e879dce2ef510ac2e0be18"
+              },
+              "status": "candidates_available",
+              "candidate_versions": [
+                "1.2.6"
+              ],
+              "reason_codes": [],
+              "automatic_apply": false,
+              "runtime_verified": false,
+              "compatibility": "not_assessed",
+              "advisory_count": 2,
+              "evaluations": 2
+            }
+          }
+        }
+      ],
+      "coverage": {
+        "status": "partial",
+        "status_counts": {
+          "affected": 81,
+          "unaffected": 114,
+          "unknown": 3,
+          "not_in_catalog": 457
+        },
+        "dependencies_found": 549,
+        "dependencies_checked": 549,
+        "packages_in_catalog": 92,
+        "advisory_evaluations": 207,
+        "unresolved_ranges": 3,
+        "manifests": [
+          "package-lock.json"
+        ],
+        "incomplete_manifests": {},
+        "inventory_truncated": 0,
+        "findings_truncated": 0,
+        "evaluations_truncated": 0,
+        "unknown_reason_counts": {
+          "conflicting_advisory_sources": 2,
+          "unsupported_applicability": 1
+        },
+        "details_truncated": 0,
+        "manifest_gap_reason_counts": {},
+        "manifest_gap_details": [],
+        "manifest_gap_details_truncated": 0,
+        "excluded_manifests": {},
+        "excluded_manifests_truncated": 0,
+        "source": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+          "generated_at": "2026-09-21T10:42:57Z"
+        },
+        "sources": {
+          "cvelist": {
+            "repository": "https://github.com/CVEProject/cvelistV5",
+            "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+            "generated_at": "2026-09-21T10:42:57Z"
+          },
+          "github-reviewed": {
+            "repository": "https://github.com/github/advisory-database",
+            "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+            "generated_at": "2026-09-21T09:36:26Z"
+          }
+        },
+        "details": [
+          {
+            "package": "npm:lodash",
+            "version": "4.17.21",
+            "manifest": "package-lock.json",
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "runtime",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory": "CVE-2026-2950",
+            "reason": "conflicting_advisory_sources",
+            "assessments": [
+              {
+                "source": "cvelist",
+                "advisory": "CVE-2026-2950",
+                "status": "unaffected",
+                "reason": null
+              },
+              {
+                "source": "github-reviewed",
+                "advisory": "GHSA-f23m-r3pf-42rh",
+                "status": "affected",
+                "reason": null
+              }
+            ],
+            "assessments_truncated": 0
+          },
+          {
+            "package": "npm:lodash",
+            "version": "4.17.19",
+            "manifest": "package-lock.json",
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "development",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory": "CVE-2026-2950",
+            "reason": "conflicting_advisory_sources",
+            "assessments": [
+              {
+                "source": "cvelist",
+                "advisory": "CVE-2026-2950",
+                "status": "unaffected",
+                "reason": null
+              },
+              {
+                "source": "github-reviewed",
+                "advisory": "GHSA-f23m-r3pf-42rh",
+                "status": "affected",
+                "reason": null
+              }
+            ],
+            "assessments_truncated": 0
+          },
+          {
+            "package": "npm:uri-js",
+            "version": "4.4.1",
+            "manifest": "package-lock.json",
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "development",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory": "CVE-2026-93751",
+            "reason": "unsupported_applicability",
+            "assessments": [
+              {
+                "source": "cvelist",
+                "advisory": "CVE-2026-93751",
+                "status": "unknown",
+                "reason": "unsupported_applicability"
+              }
+            ],
+            "assessments_truncated": 0
+          }
+        ],
+        "catalog_stats": {
+          "affected_seen": 607550,
+          "ghsa_affected_seen": 64805,
+          "ghsa_indexed_entries": 14816,
+          "ghsa_indexed_packages": 5070,
+          "ghsa_indexed_records": 13103,
+          "ghsa_invalid_affected": 3,
+          "ghsa_invalid_records": 0,
+          "ghsa_reviewed": 35729,
+          "ghsa_seen": 35729,
+          "ghsa_unreviewed": 0,
+          "ghsa_unsupported_aliases": 0,
+          "ghsa_unsupported_ecosystems": 44059,
+          "ghsa_unsupported_ranges": 0,
+          "ghsa_unsupported_schema": 0,
+          "ghsa_withdrawn": 1086,
+          "indexed_entries": 1780,
+          "indexed_entries_total": 16596,
+          "indexed_packages": 307,
+          "indexed_packages_total": 5185,
+          "indexed_records": 1578,
+          "invalid_affected": 60,
+          "invalid_records": 1,
+          "published": 377336,
+          "rejected": 18363,
+          "seen": 395699,
+          "unsupported_applicability": 1133,
+          "unsupported_packages": 605710,
+          "unsupported_schema": 0
+        },
+        "limitations": [
+          "Only exact registry package versions in supported lockfiles are compared with this snapshot.",
+          "Locked platform, optional and development variants are included; runtime selection is not evaluated.",
+          "A package/version match does not establish reachable or exploitable application code.",
+          "Absence from the snapshot, unsupported ranges, and no matches do not establish a clean or safe project.",
+          "PyPI comparisons support numeric releases and canonical a/b/rc prereleases; epochs, post/dev/local versions and other spellings remain unsupported. npm comparisons require SemVer; CVE range lower bound '0' means the earliest version."
+        ]
+      }
+    },
+    {
+      "name": "restored",
+      "manifest_sha256": {
+        "package.json": "faa217917c8b6cb5ce5b383fc8ce255e034d371569a503e5baed80912211cb55",
+        "package-lock.json": "3d90ec8a060e2726df1b44d81f70fe2c891ef757b2cd92f13af752414fc0900e"
+      },
+      "target_installations": [
+        {
+          "path": "node_modules/minimist",
+          "version": "1.2.5",
+          "integrity": "sha512-FM9nNUYrRBAELZQT3xeZQ7fmMOBg6nWNmJKTcgsJeaLstP/UODVpGsr5OhXhhXg6f+qtJ8uiZ+PUxkDWcgIXLw==",
+          "advisories": [
+            {
+              "id": "GHSA-vh95-rmgr-6w4m",
+              "status": "unaffected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [],
+              "matched_versions": []
+            },
+            {
+              "id": "GHSA-xvch-5gv4-984h",
+              "status": "affected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [
+                {
+                  "events": [
+                    {
+                      "introduced": "1.0.0"
+                    },
+                    {
+                      "fixed": "1.2.6"
+                    }
+                  ],
+                  "type": "ECOSYSTEM"
+                }
+              ],
+              "matched_versions": []
+            }
+          ]
+        },
+        {
+          "path": "node_modules/tap/node_modules/minimist",
+          "version": "1.2.5",
+          "dev": true,
+          "inBundle": true,
+          "license": "MIT",
+          "advisories": [
+            {
+              "id": "GHSA-vh95-rmgr-6w4m",
+              "status": "unaffected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [],
+              "matched_versions": []
+            },
+            {
+              "id": "GHSA-xvch-5gv4-984h",
+              "status": "affected",
+              "reason": null,
+              "unresolved_ranges": 0,
+              "matched_ranges": [
+                {
+                  "events": [
+                    {
+                      "introduced": "1.0.0"
+                    },
+                    {
+                      "fixed": "1.2.6"
+                    }
+                  ],
+                  "type": "ECOSYSTEM"
+                }
+              ],
+              "matched_versions": []
+            }
+          ]
+        }
+      ],
+      "tests": "not_run_install_blocked",
+      "target_findings": [
+        {
+          "rule_id": "dependency-cve-match",
+          "title": "minimist 1.2.5 matches GHSA-xvch-5gv4-984h",
+          "severity": "high",
+          "confidence": 0.9,
+          "category": "Security",
+          "file": "package-lock.json",
+          "line": 0,
+          "explanation": "The resolved npm package version is listed as affected by GHSA-xvch-5gv4-984h in the bundled advisory snapshot. Application reachability and exploitability have not been verified. Recorded manifest locations: package-lock.json (runtime; direct; groups: devDependencies).",
+          "fix_hint": "Advisory-fixed upgrade candidates: 1.2.6. These versions were checked against all recorded advisories for this package in this snapshot. Review compatibility, update the dependency and resolved lockfile, then repeat the scan and application tests. No update has been applied or runtime-verified.",
+          "source": "dependency",
+          "verification_status": "unverified",
+          "verification_method": "package_version_match",
+          "claim_evidence": {
+            "version": 1,
+            "package": "minimist",
+            "ecosystem": "npm",
+            "installed_version": "1.2.5",
+            "manifest": "package-lock.json",
+            "dependency_scope": "runtime",
+            "direct": true,
+            "dependency_groups": [
+              "devDependencies"
+            ],
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": true,
+                "dependency_scope": "runtime",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory_id": "GHSA-xvch-5gv4-984h",
+            "advisory_ids": [
+              "CVE-2021-44906",
+              "GHSA-xvch-5gv4-984h"
+            ],
+            "url": "https://github.com/advisories/GHSA-xvch-5gv4-984h",
+            "snapshot": {
+              "repository": "https://github.com/CVEProject/cvelistV5",
+              "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+              "generated_at": "2026-09-21T10:42:57Z"
+            },
+            "snapshot_sources": [
+              {
+                "name": "github-reviewed",
+                "repository": "https://github.com/github/advisory-database",
+                "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+                "generated_at": "2026-09-21T09:36:26Z"
+              }
+            ],
+            "matched_ranges": [
+              {
+                "events": [
+                  {
+                    "introduced": "1.0.0"
+                  },
+                  {
+                    "fixed": "1.2.6"
+                  }
+                ],
+                "type": "ECOSYSTEM"
+              }
+            ],
+            "matched_versions": [],
+            "default_status_used": false,
+            "reachability": "not_assessed",
+            "ghsa_id": "GHSA-xvch-5gv4-984h",
+            "remediation": {
+              "schema_version": 1,
+              "catalog_version": "2026-09-21.1",
+              "recipe": {
+                "id": "npm-dependency-upgrade",
+                "revision": 1,
+                "steps": [
+                  "Review the advisory and release notes for a listed candidate and check application compatibility.",
+                  "Update the dependency declaration or the parent dependency that brings in a transitive package.",
+                  "Regenerate the lockfile with the project's existing package-manager workflow; do not hand-edit it."
+                ],
+                "verification": [
+                  "Regenerate the resolved dependency file and confirm every affected installation was updated.",
+                  "Repeat the advisory scan; preserve unknown or incomplete results as unresolved.",
+                  "Run the application's build and regression tests, including the affected feature when available."
+                ]
+              },
+              "binding": {
+                "ecosystem": "npm",
+                "package": "minimist",
+                "installed_version": "1.2.5",
+                "sources": {
+                  "cvelist": {
+                    "repository": "https://github.com/CVEProject/cvelistV5",
+                    "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+                    "generated_at": "2026-09-21T10:42:57Z"
+                  },
+                  "github-reviewed": {
+                    "repository": "https://github.com/github/advisory-database",
+                    "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+                    "generated_at": "2026-09-21T09:36:26Z"
+                  }
+                },
+                "sources_sha256": "8ef299c67c6e05094352e6628eba94073e0800c564e3751cfe42c7f9a0b41f39",
+                "records_sha256": "cf8f4bb409c60342e1bb3d2ceb8b87917ba5c2ab29e879dce2ef510ac2e0be18"
+              },
+              "status": "candidates_available",
+              "candidate_versions": [
+                "1.2.6"
+              ],
+              "reason_codes": [],
+              "automatic_apply": false,
+              "runtime_verified": false,
+              "compatibility": "not_assessed",
+              "advisory_count": 2,
+              "evaluations": 2
+            }
+          }
+        }
+      ],
+      "coverage": {
+        "status": "partial",
+        "status_counts": {
+          "affected": 81,
+          "unaffected": 111,
+          "unknown": 3,
+          "not_in_catalog": 457
+        },
+        "dependencies_found": 547,
+        "dependencies_checked": 547,
+        "packages_in_catalog": 90,
+        "advisory_evaluations": 204,
+        "unresolved_ranges": 3,
+        "manifests": [
+          "package-lock.json"
+        ],
+        "incomplete_manifests": {},
+        "inventory_truncated": 0,
+        "findings_truncated": 0,
+        "evaluations_truncated": 0,
+        "unknown_reason_counts": {
+          "conflicting_advisory_sources": 2,
+          "unsupported_applicability": 1
+        },
+        "details_truncated": 0,
+        "manifest_gap_reason_counts": {},
+        "manifest_gap_details": [],
+        "manifest_gap_details_truncated": 0,
+        "excluded_manifests": {},
+        "excluded_manifests_truncated": 0,
+        "source": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+          "generated_at": "2026-09-21T10:42:57Z"
+        },
+        "sources": {
+          "cvelist": {
+            "repository": "https://github.com/CVEProject/cvelistV5",
+            "commit": "4242683c78e7fbf26a866b87eb2d47c5ac35afba",
+            "generated_at": "2026-09-21T10:42:57Z"
+          },
+          "github-reviewed": {
+            "repository": "https://github.com/github/advisory-database",
+            "commit": "16adc3ca94f84ac38aa0b847f71eae1cf6d187b9",
+            "generated_at": "2026-09-21T09:36:26Z"
+          }
+        },
+        "details": [
+          {
+            "package": "npm:lodash",
+            "version": "4.17.21",
+            "manifest": "package-lock.json",
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "runtime",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory": "CVE-2026-2950",
+            "reason": "conflicting_advisory_sources",
+            "assessments": [
+              {
+                "source": "cvelist",
+                "advisory": "CVE-2026-2950",
+                "status": "unaffected",
+                "reason": null
+              },
+              {
+                "source": "github-reviewed",
+                "advisory": "GHSA-f23m-r3pf-42rh",
+                "status": "affected",
+                "reason": null
+              }
+            ],
+            "assessments_truncated": 0
+          },
+          {
+            "package": "npm:lodash",
+            "version": "4.17.19",
+            "manifest": "package-lock.json",
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "development",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory": "CVE-2026-2950",
+            "reason": "conflicting_advisory_sources",
+            "assessments": [
+              {
+                "source": "cvelist",
+                "advisory": "CVE-2026-2950",
+                "status": "unaffected",
+                "reason": null
+              },
+              {
+                "source": "github-reviewed",
+                "advisory": "GHSA-f23m-r3pf-42rh",
+                "status": "affected",
+                "reason": null
+              }
+            ],
+            "assessments_truncated": 0
+          },
+          {
+            "package": "npm:uri-js",
+            "version": "4.4.1",
+            "manifest": "package-lock.json",
+            "occurrences": [
+              {
+                "manifest": "package-lock.json",
+                "line": 0,
+                "direct": false,
+                "dependency_scope": "development",
+                "dependency_groups": [
+                  "devDependencies"
+                ]
+              }
+            ],
+            "occurrences_recorded": true,
+            "advisory": "CVE-2026-93751",
+            "reason": "unsupported_applicability",
+            "assessments": [
+              {
+                "source": "cvelist",
+                "advisory": "CVE-2026-93751",
+                "status": "unknown",
+                "reason": "unsupported_applicability"
+              }
+            ],
+            "assessments_truncated": 0
+          }
+        ],
+        "catalog_stats": {
+          "affected_seen": 607550,
+          "ghsa_affected_seen": 64805,
+          "ghsa_indexed_entries": 14816,
+          "ghsa_indexed_packages": 5070,
+          "ghsa_indexed_records": 13103,
+          "ghsa_invalid_affected": 3,
+          "ghsa_invalid_records": 0,
+          "ghsa_reviewed": 35729,
+          "ghsa_seen": 35729,
+          "ghsa_unreviewed": 0,
+          "ghsa_unsupported_aliases": 0,
+          "ghsa_unsupported_ecosystems": 44059,
+          "ghsa_unsupported_ranges": 0,
+          "ghsa_unsupported_schema": 0,
+          "ghsa_withdrawn": 1086,
+          "indexed_entries": 1780,
+          "indexed_entries_total": 16596,
+          "indexed_packages": 307,
+          "indexed_packages_total": 5185,
+          "indexed_records": 1578,
+          "invalid_affected": 60,
+          "invalid_records": 1,
+          "published": 377336,
+          "rejected": 18363,
+          "seen": 395699,
+          "unsupported_applicability": 1133,
+          "unsupported_packages": 605710,
+          "unsupported_schema": 0
+        },
+        "limitations": [
+          "Only exact registry package versions in supported lockfiles are compared with this snapshot.",
+          "Locked platform, optional and development variants are included; runtime selection is not evaluated.",
+          "A package/version match does not establish reachable or exploitable application code.",
+          "Absence from the snapshot, unsupported ranges, and no matches do not establish a clean or safe project.",
+          "PyPI comparisons support numeric releases and canonical a/b/rc prereleases; epochs, post/dev/local versions and other spellings remain unsupported. npm comparisons require SemVer; CVE range lower bound '0' means the earliest version."
+        ]
+      }
+    }
+  ],
+  "raw_files_sha256": {
+    "before-scan.json": "936857a79070bf0b1acdc2151c787aa959b13681b99b972b1de1af97e214342f",
+    "after_lock_only-package.json": "82a166d6de313668d193970fea3b5ff4b683c758b4227c8fc1f9620c1337ade1",
+    "result.json": "f5fe7fbc5b36efc2396623ba204ce626d0974aa7b1f0518fc41c0896c006f68c",
+    "after_lock_only-package-lock.json": "c7b7cd557b68bc0b2e0016d0b964df619117585671379cfd65c31c1453e6617c",
+    "restored-package.json": "faa217917c8b6cb5ce5b383fc8ce255e034d371569a503e5baed80912211cb55",
+    "restored-package-lock.json": "3d90ec8a060e2726df1b44d81f70fe2c891ef757b2cd92f13af752414fc0900e",
+    "after_lock_only-scan.json": "822a6f28001ff720e633d9546d70216f932f0977e9673a10b8923302d0425479",
+    "restored-scan.json": "5c53f1b52fc4ab5b762934da24a0712016ef7852f3ab2b61bb3681415e449c17",
+    "npm11-original-ci.log": "f35a5f8d9fc34e1dc01f67f6d4f511de043d0eab920e742b1790a52a71f2c949",
+    "npm11-lock-regeneration.log": "a3b63bd64317a694100e2da092a9dcbafb0338bc96dfd5b3a66de6109d09d1c0",
+    "npm8-original-ci.log": "a5ee297a80176c34cc9caf95aa23ee96152d63cce22425822cd58224adbd3a39",
+    "before-package-lock.json": "3d90ec8a060e2726df1b44d81f70fe2c891ef757b2cd92f13af752414fc0900e",
+    "before-package.json": "faa217917c8b6cb5ce5b383fc8ce255e034d371569a503e5baed80912211cb55"
+  },
+  "raw_archive_sha256": "56c0b203e49a92f8bfd523b737c22d1fb15f53b67fdb47ac68b0cd027a2a35bf",
+  "raw_archive": "raw-evidence.tar.xz"
+}
