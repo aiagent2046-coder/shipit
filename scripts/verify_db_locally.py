@@ -51,6 +51,31 @@ async def main() -> int:
     created_job_id: str | None = None
 
     try:
+        print("=== Connection role (the RLS-posture question) ===")
+        pool = await get_pool()
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles "
+                "WHERE rolname = current_user"
+            )
+            role_row = await cur.fetchone()
+        if not role_row:
+            print("FAIL: could not read the connecting role from pg_roles",
+                  file=sys.stderr)
+            return 1
+        print(f"role={role_row['current_user']} "
+              f"rolsuper={role_row['rolsuper']} "
+              f"rolbypassrls={role_row['rolbypassrls']}")
+        if role_row["rolsuper"] or role_row["rolbypassrls"]:
+            print("-> privileged role: the app BYPASSES RLS on every query;")
+            print("   row protection then rests on app-layer controls (the")
+            print("   per-row access_token with 404-on-mismatch, owner")
+            print("   filters), not on the policies themselves.")
+        else:
+            print("-> unprivileged role: RLS policies bind the app itself;")
+            print("   each table's USING/CHECK must match its access pattern.")
+        print()
+
         print("=== Connecting and inserting a real audit row ===")
         audit = await audit_repo.create(
             stack="fastapi", file_count=3, score_total=8.5,
