@@ -23,6 +23,11 @@ psycopg (not asyncpg) specifically because of a Supavisor + asyncpg
 incompatibility discovered while building this.
 
 Cleans up every row it creates, even on failure.
+
+Its "Connection role" section answers the RLS-posture question for the
+machine you run it on (privileged role -> the app bypasses RLS; the
+measured production verdict and what rests on app layer instead live in
+docs/database-connection-posture.md).
 """
 
 from __future__ import annotations
