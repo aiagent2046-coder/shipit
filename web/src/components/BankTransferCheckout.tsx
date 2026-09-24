@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BankTransferInvoice, BankTransferStatus } from "@/lib/types";
+import type { Account, BankTransferInvoice, BankTransferStatus } from "@/lib/types";
 import type { PayerContact } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
 import {
@@ -505,8 +505,15 @@ export function ProCompleted({
   copy: (text: string, label: string) => void;
   copied: string | null;
 }) {
-  const { setKey } = useApiKey();
-  const [saved, setSaved] = useState(false);
+  const { account, setKey, loading } = useApiKey();
+  const [savedSession, setSavedSession] = useState<{
+    account: Account;
+    key: string;
+  } | null>(null);
+  // A later login/logout replaces account; a new displayed key also needs saving.
+  const saved = savedSession !== null
+    && savedSession.account === account
+    && savedSession.key === completed.api_key;
   return (
     <div className="mt-4 rounded-md border border-accent/40 bg-accent/10 p-4">
       <p className="font-semibold text-accent">
@@ -529,10 +536,12 @@ export function ProCompleted({
             <button
               type="button"
               onClick={async () => {
-                await setKey(completed.api_key!);
-                setSaved(true);
+                const key = completed.api_key!;
+                const nextAccount = await setKey(key);
+                setSavedSession(nextAccount ? { account: nextAccount, key } : null);
               }}
-              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg"
+              disabled={loading || saved}
+              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-50"
             >
               {saved ? "Saved to this browser" : "Use this key now"}
             </button>

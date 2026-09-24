@@ -74,7 +74,10 @@ interface KeyCtx {
   account: Account | null;
   loading: boolean;
   error: string | null;
-  setKey: (key: string) => Promise<void>;
+  // Returns the exact account object installed in context, or null on failure.
+  // Success UI can compare its result with account to stop claiming a key is
+  // active after logout or a later login. No API key is retained in context.
+  setKey: (key: string) => Promise<Account | null>;
   clearKey: () => void;
 }
 const KeyContext = createContext<KeyCtx | null>(null);
@@ -114,10 +117,13 @@ function KeyProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       setError(null);
       try {
-        setAccount(await login(key));
+        const nextAccount = await login(key);
+        setAccount(nextAccount);
+        return nextAccount;
       } catch (e) {
         setAccount(null);
         setError(e instanceof Error ? e.message : "Failed to resolve account");
+        return null;
       } finally {
         setLoading(false);
       }
