@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+import math
 import os
 import time
 from dataclasses import dataclass, replace
@@ -180,7 +181,12 @@ def supports_sampling_params(model: str) -> bool:
 # ("The read operation timed out", calls=0, measured 2026-09-24). Such runs
 # set LLM_READ_TIMEOUT (seconds) together with RUBRIC_MAX_TOKENS. A bad
 # value fails at import, like PAID_AUDIT_PASSES.
-LLM_READ_TIMEOUT = float(os.environ.get("LLM_READ_TIMEOUT", "120"))
+try:
+    LLM_READ_TIMEOUT = float(os.environ.get("LLM_READ_TIMEOUT", "120"))
+except ValueError:
+    raise ValueError("LLM_READ_TIMEOUT must be a finite positive number") from None
+if not math.isfinite(LLM_READ_TIMEOUT) or LLM_READ_TIMEOUT <= 0:
+    raise ValueError("LLM_READ_TIMEOUT must be a finite positive number")
 TIMEOUT = httpx.Timeout(LLM_READ_TIMEOUT, connect=10.0)
 TRANSIENT_RETRIES = 2      # extra attempts per provider on 5xx/transport errors
 RETRY_BACKOFF_S = 2.0      # linear: 2s, then 4s
