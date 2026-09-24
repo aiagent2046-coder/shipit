@@ -61,8 +61,25 @@ mapfile -t backup_names < <(
 ((${#backup_names[@]} > 0)) ||
     fail "no PostgreSQL dumps found in $BACKUP_DIR"
 
-latest_index=$((${#backup_names[@]} - 1))
-latest_dump="${BACKUP_DIR}/${backup_names[$latest_index]}"
+# Select the newest dump by mtime, not by sort order: a one-off
+# `shipit-pre-0039-*.dump` sorts AFTER every `shipit-<UTCSTAMP>.dump`
+# under LC_ALL=C ('p' > digits), so lexicographic "latest" pointed at the
+# September 10 pre-migration dump and the staleness gate failed daily
+# while fresh dumps sat next to it (MEASURED 2026-09-24: age grew by
+# exactly 86400s/day, matching that file's mtime to the second).
+latest_dump=""
+latest_mtime=0
+for name in "${backup_names[@]}"; do
+    candidate="${BACKUP_DIR}/${name}"
+    candidate_mtime="$(stat -c '%Y' "$candidate" 2>/dev/null || echo 0)"
+    if ((candidate_mtime > latest_mtime)); then
+        latest_mtime="$candidate_mtime"
+        latest_dump="$candidate"
+    fi
+done
+
+[[ -n "$latest_dump" ]] ||
+    fail "no readable dump found in $BACKUP_DIR"
 latest_checksum="${latest_dump}.sha256"
 
 [[ -r "$latest_dump" ]] ||
