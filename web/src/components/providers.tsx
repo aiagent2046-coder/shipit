@@ -74,12 +74,10 @@ interface KeyCtx {
   account: Account | null;
   loading: boolean;
   error: string | null;
-  // Resolves true ONLY when the login actually established a session.
-  // Callers that display a success state gate on it: a void return let
-  // the save button flip to "Saved to this browser" on a FAILED login
-  // (LLM-audit finding, triaged 2026-09-24 — the error went to context
-  // but the promise resolved anyway).
-  setKey: (key: string) => Promise<boolean>;
+  // Returns the exact account object installed in context, or null on failure.
+  // Success UI can compare its result with account to stop claiming a key is
+  // active after logout or a later login. No API key is retained in context.
+  setKey: (key: string) => Promise<Account | null>;
   clearKey: () => void;
 }
 const KeyContext = createContext<KeyCtx | null>(null);
@@ -119,12 +117,13 @@ function KeyProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       setError(null);
       try {
-        setAccount(await login(key));
-        return true;
+        const nextAccount = await login(key);
+        setAccount(nextAccount);
+        return nextAccount;
       } catch (e) {
         setAccount(null);
         setError(e instanceof Error ? e.message : "Failed to resolve account");
-        return false;
+        return null;
       } finally {
         setLoading(false);
       }
