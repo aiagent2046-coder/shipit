@@ -156,6 +156,18 @@ def parse_job_cost_cap(value: str) -> Decimal:
 
 
 JOB_COST_CAP_USD = parse_job_cost_cap(os.environ.get("JOB_COST_CAP_USD", "13.00"))
+# Output ceiling ONE rubric call may ask for. The default is the number the
+# cost cap's worst case prices (test_the_cost_cap_sits_above_...): at 16384
+# that formula gives $14.73 against the 13.00 cap, so a higher DEFAULT needs
+# the cap re-derived first, not the other way around. Raised per-run instead:
+# reasoning models burn the whole ceiling on thinking and answer empty --
+# glm-5.3-flash hit finish_reason='length' at 8192 twice measured 2026-09-24
+# (laya: rubric security; shipit: rubric auth, calls=0, static_only) -- so
+# reasoning-model runs set RUBRIC_MAX_TOKENS=32768. RESPONSE_RESERVE_TOKENS
+# deliberately stays 8192: on a provider where the response competes with the
+# input window an oversized ask is refused and the shrink path ends in an
+# honest failed rubric, never a silent cut.
+RUBRIC_MAX_TOKENS = int(os.environ.get("RUBRIC_MAX_TOKENS", "8192"))
 _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", ".venv/", "venv/")
 # .pipe is Tinybird's query definition format. It earned its place: on a real
 # paid audit the money rubric reported getWebhookEvents as an unbounded query
@@ -1391,7 +1403,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
               try:
                   stats.submitted_files = tuple(sorted(set(stats.submitted_files) | {n for n, _ in selected}))
                   raw, usage = client.complete(SYSTEM_PROMPT, prompt,
-                                               max_tokens=8192)
+                                               max_tokens=RUBRIC_MAX_TOKENS)
                   break
               except LLMError as exc:
                   # A provider refusing the request for its SIZE is a

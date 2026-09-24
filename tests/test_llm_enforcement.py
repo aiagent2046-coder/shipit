@@ -648,11 +648,13 @@ def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
     derive their token counts FROM the cap and so move with it.
 
     Priced from app/llm/pricing.py so a price rise fails here rather than in
-    production. Output is bounded by the 8192 max_tokens each call requests.
+    production. Output is bounded by the RUBRIC_MAX_TOKENS each call requests
+    (8192 by default -- the test prices the ceiling the code actually has, so
+    raising the default without re-deriving the cap fails here).
     """
     from app.llm.client import DEFAULT_MODEL
     from app.llm.pricing import cost_usd
-    from app.scan.llm_scan import MAX_TOTAL_CHARS, RUBRICS
+    from app.scan.llm_scan import MAX_TOTAL_CHARS, RUBRICS, RUBRIC_MAX_TOKENS
 
     # The intended depth times a deliberate 2x safety factor. Since
     # 2026-08-18 a paid audit really does run PAID_AUDIT_PASSES=2 (the
@@ -670,7 +672,7 @@ def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
     # the order of magnitude, not a token-exact figure.
     worst_case = cost_usd(DEFAULT_MODEL,
                           input_tokens=MAX_TOTAL_CHARS // 4 * calls,
-                          output_tokens=8192 * calls)
+                          output_tokens=RUBRIC_MAX_TOKENS * calls)
 
     assert JOB_COST_CAP_USD > worst_case, (
         f"JOB_COST_CAP_USD is {JOB_COST_CAP_USD}, but {passes} passes at "
