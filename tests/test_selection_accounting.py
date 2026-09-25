@@ -36,12 +36,19 @@ def check_partition(stats):
 def test_nonmatching_and_budget_exclusions_are_unique_across_passes(monkeypatch):
     monkeypatch.setattr(llm_scan, 'content_budget', lambda client: 100)
     client = Empty()
-    files = {'auth.py': 'token = 1', 'large.py': 'token = 1\n' * 100, 'plain.py': 'x = 1'}
+    # Two at-cap files, not one: select_files now caps a file to a quarter of
+    # the relevance reserve (reserve 70 -> 17 chars), so a single large file
+    # arrives as a head slice and FITS -- only the second one still overflows
+    # the reserve and is excluded by selection_budget. The accounting this
+    # test pins (each candidate excluded exactly once, across both passes)
+    # needs both exclusion kinds present to prove it.
+    files = {'auth.py': 'token = 1', 'large.py': 'token = 1\n' * 100,
+             'large2.py': 'token = 1\n' * 100, 'plain.py': 'x = 1'}
     buf = archive(files)
     _, stats = llm_scan.run_llm_scan(buf, client, rubrics=('auth',), passes=2)
     assert stats.calls == 2
     assert client.sent[0] == client.sent[1]
-    assert stats.submitted_files == ('auth.py',)
+    assert stats.submitted_files == ('auth.py', 'large.py')
     assert stats.selection_exclusions == dict(no_rubric_match=1, rubric_not_reached=0,
                                               selection_budget=1, request_window=0)
     check_partition(stats)

@@ -49,7 +49,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "1d274ded5ee4c986"
+PROMPT_FINGERPRINT = "5f607883688b5c98"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -462,6 +462,96 @@ def test_select_files_spends_the_budget_it_is_given():
     large = sum(len(t) for _, t in select_files(files, "auth", 500_000))
 
     assert small <= 50_000 and large > 50_000
+
+
+# --- the per-file cap: inert on every budget production can pass ---
+#
+# select_files now slices one file to at most a RELEVANCE_RESERVE_FILES'th of
+# the relevance reserve (it used to be a flat MAX_FILE_CHARS, which is larger
+# than the reserve itself on a narrow window -- so the at-cap files were
+# skipped whole and the prompt filled with the repository's smallest files).
+# The fingerprint test below will demand an AUDIT_ENGINE_VERSION bump for
+# any source change; this pair is the documented exception's evidence that no
+# SHIPPED rubric's prompt can differ, so bumping would only invalidate every
+# cached audit to regenerate byte-identical results.
+
+def _shipped_budgets() -> list[int]:
+    """Every budget run_llm_scan can reach in production.
+
+    budget = content_budget(client), whose floor is a 200K-window model
+    (DEFAULT_INPUT_TOKENS) -- 493,517 chars -- capped above by
+    MAX_TOTAL_CHARS. The 274,286 entry is the exact boundary where
+    reserve/4 reaches MAX_FILE_CHARS, included so the pin covers the edge
+    itself rather than only comfortable values.
+    """
+    import app.llm.client as client_mod
+    budgets = [
+        llm_scan.content_budget(
+            type("C", (), {"input_char_budget": lambda self, m=m:
+                 client_mod.input_char_budget(m)})())
+        for m in (*client_mod.MODEL_INPUT_TOKENS, "")
+    ]
+    return [*budgets, llm_scan.MAX_TOTAL_CHARS, 274_286]
+
+
+def test_select_files_caps_one_file_at_a_fourth_of_the_reserve():
+    """The honest-exception pin: at every budget production can pass, the
+    per-file cap IS MAX_FILE_CHARS -- the same constant select_files truncated
+    at before the cap existed. Same matched list, same sorts, byte-identical
+    selection; only budgets below 274,286 chars (reachable solely by a model
+    window under ~116K tokens, and adding one to MODEL_INPUT_TOKENS moves the
+    fingerprint guard) can behave differently."""
+    for budget in _shipped_budgets():
+        reserve = int(budget * llm_scan.RELEVANCE_BUDGET_SHARE)
+        cap = min(llm_scan.MAX_FILE_CHARS,
+                  reserve // llm_scan.RELEVANCE_RESERVE_FILES)
+        assert cap == llm_scan.MAX_FILE_CHARS, (
+            f"budget {budget} would truncate below MAX_FILE_CHARS -- the "
+            "exception no longer holds; bump AUDIT_ENGINE_VERSION instead"
+        )
+
+    # Behaviourally, not only arithmetically: an at-cap file at the cloud
+    # floor arrives cut exactly where the old code cut it.
+    big = ("apps/lib/payouts/send-payout.ts",
+           "stripe payout invoice refund idempotency\n" * 1_300)  # 52,000 chars
+    assert len(big[1]) > llm_scan.MAX_FILE_CHARS
+    names_at_cloud = dict(select_files([big], "money", 493_517))
+    assert names_at_cloud[big[0]] == llm_scan.truncate_at_line(
+        big[1], llm_scan.MAX_FILE_CHARS)
+
+
+def test_below_the_boundary_the_big_relevant_file_arrives_cut_instead_of_gone():
+    """The defect this cap exists for, as its regression test.
+
+    MEASURED on laya at a 32K window: reserve 40,082 < MAX_FILE_CHARS, so
+    relevance rank 2 for "auth" (laya/agent.py, sitting at the cap) was
+    skipped whole by the `continue`, and the breadth pass handed the model
+    dependabot.yml / metadata.json / tsconfig instead -- 0 core-package files
+    in all four rubrics, 4/4 empty responses. The model answered honestly to
+    a question about a repository it had not been shown.
+
+    One file over the cap, ranked first by relevance: it must be IN the
+    selection, cut at reserve/4 with the marker, never silently dropped."""
+    handler = ("apps/lib/payouts/send-payout.ts",
+               "stripe payout invoice refund idempotency\n" * 2_000)
+    filler = [(f"apps/lib/payouts/small-{i}.ts", "payout invoice")
+              for i in range(30)]
+    budget = 60_000                       # reserve 42,000 -> cap 10,500
+    reserve = int(budget * llm_scan.RELEVANCE_BUDGET_SHARE)
+
+    selected = select_files([handler, *filler], "money", budget)
+    names = [n for n, _ in selected]
+
+    assert handler[0] in names, (
+        "the most relevant file was dropped whole -- the narrow-window "
+        "starvation is back"
+    )
+    sent = dict(selected)[handler[0]]
+    assert len(sent) <= reserve // llm_scan.RELEVANCE_RESERVE_FILES + \
+        len(llm_scan.TRUNCATION_MARKER) + 16
+    assert llm_scan.TRUNCATION_MARKER.split("{n}")[0] in sent
+    assert len(sent) < len(handler[1])
+    assert sum(len(t) for _, t in selected) <= budget
 
 
 def test_the_smallest_window_in_the_chain_wins():
@@ -1065,6 +1155,11 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         str(llm_scan.MAX_FILE_CHARS),
         str(llm_scan.MAX_TOTAL_CHARS),
         str(llm_scan.RELEVANCE_BUDGET_SHARE),
+        # How fine the relevance reserve is sliced per file. getsource sees
+        # only the NAME inside select_files, so changing this number would
+        # otherwise move no guard at all while changing every narrow-window
+        # prompt -- the same gap that put MAX_FILE_CHARS here.
+        str(llm_scan.RELEVANCE_RESERVE_FILES),
         # The budget MAX_TOTAL_CHARS is now only the upper half of. What a
         # rubric may actually spend is the smaller of that and the model's
         # context window, so a table of windows in another module decides how
