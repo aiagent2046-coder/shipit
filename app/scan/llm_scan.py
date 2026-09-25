@@ -195,6 +195,29 @@ _CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".py", ".sql", ".toml",
 # forty large files and would lose the odd small one that turns out to matter.
 RELEVANCE_BUDGET_SHARE = 0.7
 
+# No single file may take more than 1/RELEVANCE_RESERVE_FILES of the
+# relevance reserve, so the reserve always holds this many top-relevant files.
+#
+# MEASURED on laya (187 files) at a 32K local window: content_budget 57,260
+# -> reserve 40,082, which is BELOW MAX_FILE_CHARS (48,000). The relevance
+# pass `continue`s past a file that does not fit the remaining reserve, so
+# every file sitting at the cap -- including laya/agent.py, relevance rank 2
+# for "auth" -- was skipped whole, and the breadth pass filled the prompt
+# with dependabot.yml / metadata.json / tsconfig. 0 core-package files in
+# all four rubrics; the model returned 4/4 empty responses because it was
+# sent the periphery. The same selection at the cloud floor (content_budget
+# 493,517, reserve 345,461) holds 11-16 core files per rubric -- the defect
+# only exists when reserve < MAX_FILE_CHARS.
+#
+# Cloud is provably untouched: min reserve 345,461 / 4 = 86,365 > 48,000,
+# so on every shipped model the cap collapses to MAX_FILE_CHARS and the
+# selection is byte-identical. Budgets at or above 274,286 chars behave
+# exactly as before; below that, the top-relevant files arrive head-truncated
+# instead of not at all. test_select_files_caps_one_file_at_a_fourth_of_the_
+# reserve pins that cloud equivalence (the honest-exception test for the
+# fingerprint: production can never show anything different).
+RELEVANCE_RESERVE_FILES = 4
+
 # Where behaviour lives, versus where it is merely displayed. Both match the
 # rubric keywords -- an invoice email template says "invoice" a dozen times --
 # and only one of them can charge a card twice or drop a table.
@@ -1090,8 +1113,17 @@ def select_files(files: list[tuple[str, str]], rubric: str,
     """
     kw = RUBRICS[rubric]["keywords"]
     lives_in = RUBRICS[rubric].get("lives_in", BEHAVIOUR)
+
+    reserve = int(budget * RELEVANCE_BUDGET_SHARE)
+    # One file may hold at most a RELEVANCE_RESERVE_FILES'th of the reserve:
+    # on a narrow window the cap would otherwise let a single at-cap file be
+    # skipped whole (it does not fit the reserve) while the reserve sits idle
+    # and the breadth pass fills the prompt with the repository's smallest
+    # files. On every shipped budget this collapses to MAX_FILE_CHARS and the
+    # matched list is identical to the old one -- see RELEVANCE_RESERVE_FILES.
+    file_cap = min(MAX_FILE_CHARS, reserve // RELEVANCE_RESERVE_FILES)
     matched = [
-        (n, truncate_at_line(t, MAX_FILE_CHARS)) for n, t in files
+        (n, truncate_at_line(t, file_cap)) for n, t in files
         if kw.search(n) or kw.search(t)
     ]
 
@@ -1099,7 +1131,6 @@ def select_files(files: list[tuple[str, str]], rubric: str,
     taken: set[str] = set()
     total = 0
 
-    reserve = int(budget * RELEVANCE_BUDGET_SHARE)
     by_relevance = sorted(
         matched,
         key=lambda x: (-relevance(x[0], x[1], kw, lives_in), len(x[1]), x[0]))
