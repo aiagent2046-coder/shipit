@@ -175,7 +175,7 @@ _SKIP_DIRS = ("node_modules/", ".git/", "dist/", ".next/", "build/", ".venv/", "
 # packages/tinybird/pipes/get_webhook_events.pipe, which this tuple made
 # unreadable. The finding was not the model guessing; the file that disproves
 # it could not reach the prompt.
-_CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".py", ".sql", ".toml",
+_CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".sql", ".toml",
                   ".yaml", ".yml", ".json", ".pipe")
 
 # Selection budget split. Everything below exists because `select_files` used
