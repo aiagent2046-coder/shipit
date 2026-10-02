@@ -27,6 +27,9 @@ from app.scan.query_read_identity import (
     MECHANISM as QUERY_READ, CLAIM_SCOPE as QUERY_READ_SCOPE,
     compatible_query_read_claims, valid_query_read_identity,
 )
+from app.scan.python_sql_identity import (
+    MECHANISM as PYTHON_SQL, compatible_sql_claims, valid_sql_identity,
+)
 
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -136,6 +139,9 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     if has_source and (not identity_a or identity_a != identity_b):
         exact = _exact_observation(anchor)
         return exact is not None and exact == _exact_observation(f)
+    sql = isinstance(identity_a, dict) and identity_a.get("mechanism") == PYTHON_SQL
+    if sql and not compatible_sql_claims(anchor, f, identity_a):
+        return False
     external = (isinstance(identity_a, dict) and isinstance(identity_a.get("mechanism"), str)
                 and identity_a["mechanism"] in EXTERNAL_OPERATIONS)
     if external and (not valid_external_identity(identity_a, anchor.file)
@@ -314,6 +320,18 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
             rep = replace(rep, claim_evidence={"version": 1, **(rep.claim_evidence or {}),
                                               "grouped_originals": [_original(item) for item in origins]})
             identity = (rep.claim_evidence or {}).get("source_issue_identity")
+            if valid_sql_identity(identity, rep.file):
+                rep = replace(rep, title="SQL table-name interpolation requires review", explanation=(
+                    "Multiple model responses flag the same table-name interpolation in one source call. "
+                    "This identifies a shared hypothesis, not an exploitable SQL injection. "
+                    "Each original input-control assumption and consequence remains unverified."), fix_hint=(
+                    "Check where the table name comes from in the current code. A literal-only list "
+                    "does not establish attacker control; hypothetical future changes are not a current exploit."),
+                    claim_evidence={**rep.claim_evidence, "grouped_claim_scope": {
+                        "mechanism": PYTHON_SQL,
+                        "scope": "Same source call and single table-identifier interpolation hypothesis only.",
+                        "consequences": "Original conditions and consequences remain separate and unverified.",
+                    }})
             if valid_query_read_identity(identity, rep.file):
                 rep = replace(rep, title="Query pagination bound requires review", explanation=(
                     "Multiple model responses flag a pagination bound for the same source SELECT operation. "

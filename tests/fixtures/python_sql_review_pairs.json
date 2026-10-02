@@ -1,0 +1,96 @@
+[
+  {
+    "report_id": 7,
+    "file": "migrate.py",
+    "line_start": 3,
+    "line_end": 6,
+    "title": "Unsanitised table name interpolated into SQL string",
+    "explanation": "If an attacker could influence the value of `table` (here drawn from a hardcoded list, but the pattern is dangerous), they could inject arbitrary SQL. More concretely, the same pattern is used in `database/sqlite.py` line 227 with a loop over a hardcoded list, but any future extension of that list with user-supplied input would immediately become SQL injection. The migration script itself uses a fixed list, so the immediate risk is low, but the pattern should be replaced with an allowlist check before string interpolation.",
+    "observation": "The variable `table` is iterated from a hardcoded Python list `['freelance_projects', 'projects']` and interpolated directly into an f-string SQL query with no parameterisation or allowlist validation.",
+    "required_conditions": [
+      "The `table` variable receives a value not in the hardcoded list, e.g. through future code changes or if the list is made configurable",
+      "The database connection has sufficient privileges to execute the injected statement"
+    ],
+    "fix_hint": "Verify that every table name used in f-string SQL is validated against an explicit allowlist before interpolation. Replace `f\"SELECT * FROM {table}\"` with a check such as `assert table in ALLOWED_TABLES` followed by the f-string, or use a mapping from safe identifiers to query strings.",
+    "severity": "high",
+    "confidence": 0.85
+  },
+  {
+    "report_id": 8,
+    "file": "sqlite.py",
+    "line_start": 3,
+    "line_end": 6,
+    "title": "Table name from a Python list interpolated directly into SQL",
+    "explanation": "The `get_stats` method iterates over a hardcoded list of table names and builds SQL queries by string interpolation. If the list were ever extended with an externally-supplied value, or if this pattern were copied elsewhere with a user-controlled input, it would allow SQL injection. Even with the current hardcoded list the pattern is unsafe by design.",
+    "observation": "The loop `for table in ['messages', 'sessions', 'freelance_projects', 'dialog_history']` feeds `table` directly into an f-string SQL query without parameterisation.",
+    "required_conditions": [
+      "The list of table names is extended with a value derived from user input, or the pattern is reused with an untrusted source"
+    ],
+    "fix_hint": "Validate each table name against an explicit allowlist before interpolation, or use a static mapping from safe identifiers to pre-written query strings. The same fix applies to `migrate_to_postgres.py` line 157.",
+    "severity": "high",
+    "confidence": 0.85
+  },
+  {
+    "report_id": 9,
+    "file": "postgres.py",
+    "line_start": 3,
+    "line_end": 6,
+    "title": "Table name interpolated into PostgreSQL query without validation",
+    "explanation": "The `get_stats` method in `PostgresManager` builds a `SELECT COUNT(*)` query by interpolating a table name from a Python list directly into an f-string. asyncpg does not parameterise identifiers, so if the list were ever extended with an externally-supplied value the query would be vulnerable to SQL injection. The pattern is identical to the SQLite case and should be fixed consistently.",
+    "observation": "The loop `for table in ['messages', 'sessions', 'freelance_projects', 'dialog_history', 'knowledge']` feeds `table` directly into an f-string passed to `conn.fetchval`.",
+    "required_conditions": [
+      "The table list is extended with a value derived from user input, or the pattern is reused with an untrusted source"
+    ],
+    "fix_hint": "Validate each table name against an explicit allowlist before interpolation, or use a static mapping from safe identifiers to pre-written query strings.",
+    "severity": "high",
+    "confidence": 0.85
+  },
+  {
+    "report_id": 19,
+    "file": "migrate.py",
+    "line_start": 3,
+    "line_end": 6,
+    "title": "Unsanitised table name interpolated into SQL string",
+    "explanation": "If an attacker could influence the value of `table` (here drawn from a hardcoded list, but the pattern is dangerous), they could inject arbitrary SQL. More concretely, the same pattern is used in `database/sqlite.py` line 227 with a loop over a hardcoded list, but the practice of f-string SQL construction with a variable table name is a footgun that could be exploited if the list ever becomes user-controlled.",
+    "observation": "The variable `table` from the list `['freelance_projects', 'projects']` is interpolated directly into an f-string SQL query without parameterisation.",
+    "required_conditions": [
+      "The `tables` list must contain a value supplied or influenced by an untrusted caller",
+      "The database connection must be open and accessible"
+    ],
+    "fix_hint": "Verify that `table` is always drawn from a hardcoded allowlist and never from user input. Replace f-string interpolation with a whitelist check followed by safe string substitution, e.g. `assert table in ALLOWED_TABLES` before use.",
+    "severity": "high",
+    "confidence": 0.85
+  },
+  {
+    "report_id": 20,
+    "file": "sqlite.py",
+    "line_start": 3,
+    "line_end": 6,
+    "title": "Table name interpolated into SQL via f-string in get_stats",
+    "explanation": "The `table` variable is iterated from a hardcoded list, but the f-string pattern means any future change that makes `table` user-controlled would immediately become a SQL injection sink. If this method is ever called with a caller-supplied table name, an attacker could read or manipulate the database.",
+    "observation": "In `get_stats`, each element of the hardcoded list `['messages', 'sessions', 'freelance_projects', 'dialog_history']` is interpolated directly into a SQL query string.",
+    "required_conditions": [
+      "The `tables` list must be extended with or replaced by user-controlled values",
+      "The SQLite connection must be open"
+    ],
+    "fix_hint": "Validate `table` against an explicit allowlist before interpolation. Consider using a mapping of safe names to avoid the pattern entirely.",
+    "severity": "high",
+    "confidence": 0.85
+  },
+  {
+    "report_id": 21,
+    "file": "postgres.py",
+    "line_start": 3,
+    "line_end": 6,
+    "title": "Table name interpolated into PostgreSQL query via f-string",
+    "explanation": "The same f-string SQL construction pattern appears in the PostgreSQL manager's `get_stats`. If the `tables` list is ever extended with user-supplied input, this becomes a direct SQL injection path against the PostgreSQL database.",
+    "observation": "In `get_stats`, each element of the hardcoded list is interpolated directly into a PostgreSQL query string using an f-string.",
+    "required_conditions": [
+      "The `tables` list must contain a value influenced by an untrusted caller",
+      "The asyncpg connection pool must be open"
+    ],
+    "fix_hint": "Validate each table name against an explicit allowlist before interpolation. Use `asyncpg`'s identifier quoting utilities if dynamic table names are genuinely needed.",
+    "severity": "high",
+    "confidence": 0.85
+  }
+]

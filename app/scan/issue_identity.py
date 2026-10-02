@@ -150,6 +150,7 @@ class SourceIssueResolver:
         self.checks = 0
         self.remaining_nodes = MAX_WORK_NODES
         self._cache = {}
+        self._python_sql = None
 
     def _document(self, path):
         if path in self._cache:
@@ -187,6 +188,14 @@ class SourceIssueResolver:
     def identity(self, finding):
         if self.checks >= MAX_CHECKS:
             return None
+        if isinstance(finding.get("file"), str) and finding["file"].endswith(".py"):
+            from app.scan.python_sql_identity import PythonSQLResolver, sql_table_claim
+            if not sql_table_claim(finding):
+                return None
+            if self._python_sql is None:
+                self._python_sql = PythonSQLResolver(self.archive)
+            self.checks += 1
+            return self._python_sql.identity(finding)
         from app.scan.react_network_identity import network_cleanup_identity
         network = network_cleanup_identity(finding, self.source_facts)
         if network is not None:
