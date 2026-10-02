@@ -1,4 +1,4 @@
-"""Project two source-contradicted premises into consistent public wording.
+"""Project bounded source evidence into consistent public wording.
 
 Call only after scanner admission, recommendation preparation and grouping.
 Fresh archive hashes are supplied by that caller, never read from model JSON.
@@ -15,7 +15,8 @@ from app.scan.claim_evidence import source_assessments
 from app.scan.external_operation_identity import valid_external_identity
 from app.scan.scoring import ScoredFinding
 
-_KINDS = {"fact_input_count_unbounded", "retry_callback_scope"}
+_OBSERVED_KINDS = {"sql_table_literal_source", "cors_nonempty_origin_guard"}
+_KINDS = {"fact_input_count_unbounded", "retry_callback_scope"} | _OBSERVED_KINDS
 _MAX = 2**53 - 1
 
 
@@ -137,6 +138,75 @@ def _retry(check, finding, hashes):
     }, {v["file"]: v["source_sha256"] for v in (b, wrapper)})
 
 
+def _source_review(check, finding, hashes):
+    b = check["source_binding"]
+    if not _bound(b, hashes) or b["file"] != finding.file:
+        return None
+    review = check.get("narrative_review")
+    kind = check["kind"]
+    premise = "sql_table_external_control" if kind == "sql_table_literal_source" else "cors_all_origins_allowed"
+    if (not isinstance(review, dict) or review.get("status") != "required" or review.get("premise") != premise
+            or not isinstance(review.get("reason"), str) or not review["reason"].strip()):
+        return None
+    quote = finding.claim_evidence["source_check"]
+    if kind == "sql_table_literal_source":
+        if (any(not _inside(b.get(key), b) for key in ("loop", "operation", "slot", "loop_target", "iterable"))
+                or not _inside(b["operation"], b["loop"]) or not _inside(b["slot"], b["operation"])
+                or not _inside(b["loop_target"], b["loop"])
+                or b.get("binding_mode") != "literal_loop_first_action"
+                or type(b.get("literal_count")) is not int or not 1 <= b["literal_count"] <= 64
+                or b.get("runtime_control") != "not_checked" or b.get("future_changes") != "not_checked"):
+            return None
+        assignment = b.get("assignment")
+        if assignment is None:
+            if not _inside(b["iterable"], b["loop"]):
+                return None
+        elif (not _inside(assignment, b) or not _inside(b["iterable"], assignment)
+              or assignment["span"][1] > b["loop"]["span"][0]):
+            return None
+        anchor = b["operation"]
+        observation = (f"The checked table-name interpolation takes its value from {b['literal_count']} "
+                       "literal table names in a loop. No external value source was found on this narrow path.")
+        wording = {
+            "title": "SQL table names come from a literal list; future changes need separate review",
+            "explanation": observation + " This does not establish an exploitable injection in the current code. "
+                           "Hypothetical future edits, other queries and runtime replacement remain unverified.",
+            "fix_hint": "Preserve the literal-only source of these identifiers. If table selection becomes "
+                        "external or configurable, review validation at that boundary. "
+                        "Review other SQL paths separately.",
+            "observation": observation,
+        }
+    else:
+        if (any(not _inside(b.get(key), b) for key in
+                ("registration", "callback", "guard", "configuration", "environment_default", "next_call"))
+                or not _inside(b["callback"], b["registration"]) or not _inside(b["guard"], b["callback"])
+                or not _inside(b["next_call"], b["callback"])
+                or b["configuration"]["span"][1] > b["registration"]["span"][0]
+                or b["guard"]["span"][1] > b["next_call"]["span"][0]
+                or b.get("absent_configuration_value") != "null" or b.get("nonempty_origin_predicate") is not True
+                or b.get("missing_origin_predicate") is not False or type(b.get("response_status")) is not int
+                or b["response_status"] != 403 or b.get("runtime_policy") != "not_checked"):
+            return None
+        anchor = b["registration"]
+        observation = ("With a falsy configuration, the compared origin is null. A stable nonempty Origin "
+                       "string makes the recorded mismatch predicate true and selects its 403 return. "
+                       "An absent Origin does not satisfy this predicate.")
+        wording = {
+            "title": "Nonempty Origin has a rejection guard; absent-Origin policy needs review",
+            "explanation": observation + " The claim that this guard allows every origin is inconsistent with "
+                           "its source predicate. Whether callers without Origin should be allowed is a separate "
+                           "policy question. Middleware execution, header implementation and runtime access "
+                           "have not been verified.",
+            "fix_hint": "Decide whether callers without Origin are permitted. If they are not, add explicit "
+                        "caller authentication or an appropriate missing-Origin rule and test legitimate clients. "
+                        "Do not treat an Origin check alone as authentication.",
+            "observation": observation,
+        }
+    if not quote["line_start"] <= anchor["line_end"] or not anchor["line_start"] <= quote["line_end"]:
+        return None
+    return wording, {b["file"]: b["source_sha256"]}
+
+
 def project_claim_narrative(
     finding: ScoredFinding, *, current_source_hashes: Mapping[str, str] | None = None,
 ) -> ScoredFinding:
@@ -160,7 +230,8 @@ def project_claim_narrative(
             or type(producer.get("response")) is not int or producer["response"] < 1):
         return finding
     candidates = [c for c in source_assessments(record) if c["kind"] in _KINDS
-                  and c["result"] == "contradicted" and c["whole_finding"] is False]
+                  and c["result"] == ("observed" if c["kind"] in _OBSERVED_KINDS else "contradicted")
+                  and c["whole_finding"] is False]
     if len(candidates) != 1:
         return finding
     check = candidates[0]
@@ -170,7 +241,8 @@ def project_claim_narrative(
             or check["line_start"] != b.get("line_start") or check["line_end"] != b.get("line_end")
             or ("span" in check and check["span"] != b.get("span"))):
         return finding
-    projected = (_fact if check["kind"] == "fact_input_count_unbounded" else _retry)(
+    projected = (_source_review if check["kind"] in _OBSERVED_KINDS
+                 else _fact if check["kind"] == "fact_input_count_unbounded" else _retry)(
         check, finding, current_source_hashes)
     if projected is None:
         return finding
