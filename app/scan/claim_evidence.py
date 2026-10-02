@@ -13,6 +13,8 @@ import re
 # Unlike a contradiction, an unresolved outcome does not assert the opposite
 # claim and never removes its score contribution.
 NARRATIVE_REVIEW_PREMISES = {
+    "sql_table_literal_source": "sql_table_external_control",
+    "cors_nonempty_origin_guard": "cors_all_origins_allowed",
     "navigation_pending_outcome_unverified": "navigation_pending_outcome_unverified",
     "verified_user_operation_scope": "verified_user_operation_scope",
     "matched_peer_operation_scope": "matched_peer_operation_scope",

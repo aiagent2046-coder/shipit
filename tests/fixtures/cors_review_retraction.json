@@ -1,0 +1,15 @@
+{
+  "file": "server.js",
+  "line_start": 5,
+  "line_end": 10,
+  "title": "CORS origin check allows all origins when SCOUT_EXTENSION_ID is not configured",
+  "explanation": "When `SCOUT_EXTENSION_ID` is not set, `origin` is `null` and the CORS middleware is configured with `origin: false`. However, the manual origin check on line 221 only blocks requests whose `Origin` header is present AND does not match `origin`. When `origin` is `null`, any request with an `Origin` header passes the check (`req.get('origin') !== null` is true, but `null !== null` is false, so the condition `req.get('origin') !== origin` evaluates to `true` only when origin is a string). Wait — re-reading: if `origin` is `null` and a request sends `Origin: http://evil.example`, then `req.get('origin')` is truthy and `req.get('origin') !== origin` is `'http://evil.example' !== null` which is `true`, so the request IS blocked. The actual gap is that when `extensionId` is set but the extension sends no `Origin` header (e.g. from a non-browser context), the check passes. The more concrete issue is that the server binds only to 127.0.0.1, which limits exposure, but the origin check logic is subtle and worth auditing.",
+  "observation": "The origin guard returns 403 only when `req.get('origin')` is truthy AND differs from the configured `origin`. Requests without an `Origin` header always pass regardless of the configured extension ID.",
+  "required_conditions": [
+    "A caller that can reach 127.0.0.1:3456 sends a POST without an Origin header",
+    "SCOUT_EXTENSION_ID is configured, meaning the server expects only the extension to call it"
+  ],
+  "fix_hint": "When `extensionId` is configured, require the `Origin` header to be present and equal to the expected chrome-extension URL. Add a check: `if (origin && !req.get('origin')) return res.status(403).json({error: 'origin_required'});`",
+  "severity": "medium",
+  "confidence": 0.8
+}
