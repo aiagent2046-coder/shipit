@@ -125,9 +125,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         "ci_deploy_source",
         "CI that builds one repository and deploys another",
         ("ci-deploys-a-different-repository",),
-        "Workflow files read as text: the repository a job checks out, against the deployment "
-        "target a URL or identifier names. The deployed target's contents, the credentials used and "
-        "the result of any run are not verified.",
+        "YAML workflow steps: GitHub URLs in SSH-action scripts or shell blocks placing code under "
+        "conventional /srv, /opt or /var/www application paths are compared with the archive identity. "
+        "Runner-only clones, unrelated steps and names alone do not establish deployment. "
+        "Variable resolution, build provenance, deployment execution and live contents are not verified.",
     ),
     Capability(
         "service_role",

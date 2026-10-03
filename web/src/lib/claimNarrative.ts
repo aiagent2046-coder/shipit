@@ -69,6 +69,33 @@ function wording(check: SourceAssessment, finding: Finding, hashes: RecordValue)
         + "Retain the existing collection cap; assess other prompt inputs and item lengths "
         + "before claiming a total prompt or cost bound.", observation,
     };
+  } else if (check.kind === "sql_table_literal_source") {
+    const review = check.narrative_review;
+    const loop = b.loop, operation = b.operation, slot = b.slot, target = b.loop_target, iterable = b.iterable;
+    const quote = finding.claim_evidence?.source_check;
+    if (!review || review.status !== "required" || review.premise !== "sql_table_external_control"
+      || typeof review.reason !== "string" || !review.reason.trim()
+      || !inside(loop, b) || !inside(operation, b) || !inside(slot, b) || !inside(target, b) || !inside(iterable, b)
+      || !inside(operation, loop) || !inside(slot, operation) || !inside(target, loop)
+      || b.binding_mode !== "literal_loop_first_action" || !integer(b.literal_count)
+      || b.literal_count < 1 || b.literal_count > 64 || b.runtime_control !== "not_checked"
+      || b.future_changes !== "not_checked" || !quote || quote.kind !== "quote_match" || !integer(quote.line_start) || !integer(quote.line_end)
+      || quote.line_start > operation.line_end || operation.line_start > quote.line_end) return null;
+    if (b.assignment === null || b.assignment === undefined) {
+      if (!inside(iterable, loop)) return null;
+    } else if (!inside(b.assignment, b) || !inside(iterable, b.assignment)
+      || b.assignment.span[1] > loop.span[0]) return null;
+    used = [b];
+    const observation = `The checked table-name interpolation takes its value from ${b.literal_count} `
+      + "literal table names in a loop. No external value source was found on this narrow path.";
+    active = {
+      title: "SQL table names come from a literal list; future changes need separate review",
+      explanation: observation + " This does not establish an exploitable injection in the current code. "
+        + "Hypothetical future edits, other queries and runtime replacement remain unverified.",
+      fix_hint: "Preserve the literal-only source of these identifiers. If table selection becomes "
+        + "external or configurable, review validation at that boundary. Review other SQL paths separately.",
+      observation,
+    };
   } else {
     const call = b.retry_call, callback = b.callback, wrapper = b.wrapper, identity = check.operation_identity;
     const checks = b.response_status_checks, parses = b.response_json_calls;
@@ -107,7 +134,7 @@ export function narrativeProjection(finding: Finding, assessments: SourceAssessm
   const evidence = finding.claim_evidence, p: unknown = evidence?.narrative_projection;
   if (finding.source !== "llm" || finding.verification_method !== "model_review" || evidence?.version !== 1
     || !record(p) || p.version !== 1 || p.method !== "source_bound_projection"
-    || !["fact_input_count_unbounded", "retry_callback_scope"].includes(String(p.kind)) || p.whole_finding !== false
+    || !["fact_input_count_unbounded", "retry_callback_scope", "sql_table_literal_source"].includes(String(p.kind)) || p.whole_finding !== false
     || !Array.isArray(p.applied_checks) || p.applied_checks.length !== 1 || p.applied_checks[0] !== p.kind
     || !record(p.source_hashes) || !record(p.original) || !record(p.active) || typeof p.previous_fix_hint !== "string"
     || !["title", "explanation", "fix_hint"].every(k => typeof (p.original as RecordValue)[k] === "string")
@@ -116,8 +143,8 @@ export function narrativeProjection(finding: Finding, assessments: SourceAssessm
     || evidence.source_check?.kind !== "quote_match" || !integer(evidence.source_check.line_start)
     || !integer(evidence.source_check.line_end) || !integer(finding.line) || evidence.source_check.line_start < 1
     || evidence.source_check.line_start > finding.line || finding.line > evidence.source_check.line_end) return null;
-  const candidates = assessments.filter(c => ["fact_input_count_unbounded", "retry_callback_scope"].includes(c.kind)
-    && c.result === "contradicted" && c.whole_finding === false);
+  const candidates = assessments.filter(c => ["fact_input_count_unbounded", "retry_callback_scope", "sql_table_literal_source", "cors_nonempty_origin_guard"].includes(c.kind)
+    && c.result === (["sql_table_literal_source", "cors_nonempty_origin_guard"].includes(c.kind) ? "observed" : "contradicted") && c.whole_finding === false);
   if (candidates.length !== 1 || candidates[0].kind !== p.kind) return null;
   const expected = wording(candidates[0], finding, p.source_hashes);
   if (!expected || !sameKeys(p.active, Object.keys(expected))) return null;

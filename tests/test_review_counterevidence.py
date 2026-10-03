@@ -197,3 +197,26 @@ def test_model_cannot_supply_the_new_proof(kind):
     findings, _ = run_llm_scan(archive(sources), Responses([[raw]]), rubrics=("security",))
     assert findings[0].title == raw["title"]
     assert "narrative_projection" not in findings[0].claim_evidence
+
+
+def test_sql_summary_separates_source_review_without_changing_saved_severity():
+    from app.report.evidence import source_review_count, source_severity_counts, observation_summary, finding_counts
+    finding, hashes = observation('sql')
+    projected = asdict(project_claim_narrative(replace(finding, severity='high'), current_source_hashes=hashes))
+    assert projected['severity'] == 'high'
+    assert source_review_count([projected]) == 1
+    assert source_severity_counts([projected])['high'] == 0
+    assert finding_counts([projected]) == (1, 0)
+    assert '1 source interpretations need review' in observation_summary([projected])
+    changed = deepcopy(projected)
+    changed['claim_evidence']['narrative_projection']['source_hashes'] = {}
+    assert source_review_count([changed]) == 0
+    assert source_severity_counts([changed])['high'] == 1
+    ordinary = asdict(replace(finding, severity='high'))
+    assert source_severity_counts([ordinary])['high'] == 1
+    assert source_review_count([{**projected, 'context': 'test_file'}]) == 0
+    from app.report.html import render_report
+    html = render_report({'score': compute_scores([finding]), 'findings': [projected]})
+    assert '1 source interpretations need review' in html
+    assert '1 high' not in html
+    assert 'No source observations recorded' not in html

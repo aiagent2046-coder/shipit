@@ -1,7 +1,7 @@
 import { AuditCoverage } from "@/components/AuditCoverage";
 import type { Finding, Score, Severity } from "@/lib/types";
 import { SEVERITY_META, sortFindings } from "@/lib/format";
-import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, narrativeProjection, partialContradicted, sourceSeverityCounts, syntaxContradicted, unsupportedTransport } from "@/lib/evidence";
+import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, narrativeProjection, partialContradicted, sourceSeverityCounts, sourceReviewCount, needsSourceReview, syntaxContradicted, unsupportedTransport } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 import { relatedFindingGroups } from "@/lib/findingGroups";
 import { projectOwnerReport, type OwnerReportCard, type OwnerReportContext, type OwnerReportProjection } from "@/lib/ownerReport";
@@ -70,13 +70,17 @@ function EnterpriseBadge() {
 
 export function SeveritySummary({ findings }: { findings: Finding[] }) {
   const counts = sourceSeverityCounts(findings);
+  const review = sourceReviewCount(findings);
   const order: Severity[] = ["critical", "high", "medium", "low"];
   const present = order.filter((s) => counts[s] > 0);
-  if (present.length === 0) {
+  if (present.length === 0 && review === 0) {
     return <span className="text-sm text-muted">No source observations recorded</span>;
   }
   return (
     <div className="flex flex-wrap gap-2">
+      {review > 0 && <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted">
+        {review} source interpretations need review
+      </span>}
       {present.map((s) => (
         <span
           key={s}
@@ -101,6 +105,7 @@ function FindingCard({ finding, historical = false, included = false, refreshed 
   const contradicted = syntaxContradicted(finding);
   const unsupported = unsupportedTransport(finding) && !contradicted && !historical;
   const partial = partialContradicted(finding) && !historical;
+  const review = needsSourceReview(finding) && !historical;
   const snapshotMatch = finding.rule_id === "dependency-cve-match" && finding.source === "dependency"
     && finding.verification_method === "package_version_match";
   const retainedMatch = finding.claim_evidence?.snapshot_check_status === "retained_not_reconfirmed";
@@ -129,6 +134,7 @@ function FindingCard({ finding, historical = false, included = false, refreshed 
           {isNonProductionFinding(finding) && " · Test/example context"}</span>
           : contradicted ? <span className="text-sm text-muted">Syntax premise contradicted</span>
           : unsupported ? <span className="text-sm text-muted">Needs exposure evidence</span>
+          : review ? <span className="text-sm text-muted">Outcome needs review</span>
           : partial ? <span className="text-sm text-muted">Assessment needs review</span>
           : isInformational(finding) ? <span className="text-sm text-muted">Informational</span>
           : <SeverityBadge severity={finding.severity} />}

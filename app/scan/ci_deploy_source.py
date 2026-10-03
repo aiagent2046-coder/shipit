@@ -1,45 +1,14 @@
-"""CI that builds one repository and deploys another.
+"""Bounded CI source mismatch observations, not deployment verification.
 
-FOUND ON A REAL AUDIT, 2026-08-20. `donjonson-hash/devtools-aggregator` scored
-9.9 — a full audit, LLM included, with two low-severity findings and every
-category reading "nothing serious found". The score was honest about the 25
-files it read: four source files, no API routes, no auth, no database, no
-committed secrets.
+A foreign repository URL is relevant only inside an SSH-action script or a
+shell block with a Git placement command naming a conventional application
+path. A runner-only clone can fetch data, tools or test fixtures. Neither a
+workflow name nor an unrelated deployment step establishes what is deployed.
 
-It was not honest about what runs on the server, because the repository's own
-deploy workflow ships something else:
-
-    - uses: actions/checkout@v4          # ← builds THIS repo
-      ...
-    - name: Deploy via SSH
-      script: |
-        REPO=https://github.com/aiagent2046-coder/devtools-aggregator.git
-        git clone $REPO $APP_DIR
-        git fetch origin main && git reset --hard origin/main
-
-CI type-checks and builds the audited repository, then logs into the VPS and
-resets the deployment to a DIFFERENT repository's main. That other repository
-scored 3.5 on its own audit, with five criticals on anonymous writes. The
-owner reading the 9.9 has every reason to believe they are fine.
-
-WHAT THIS CLAIMS, and the wording is bounded by it: the workflow's own
-checkout and its deploy step name different repositories. It does NOT claim
-the other repository is worse, unmaintained, or hostile — a monorepo split or
-a deliberate mirror deploy has this exact shape and is somebody's design. What
-is always true is that the checks which gate the merge ran on code that never
-reaches the server, and that an audit of this repository describes something
-other than production.
-
-WHY IT NEEDS THE ARCHIVE'S OWN NAME. "Is this URL a different repository"
-cannot be answered from the workflow alone: cloning your own repo by URL is
-legal and looks identical. GitHub's zipball wraps everything in
-`{owner}-{repo}-{sha}`, which is where the answer comes from — so this rule is
-silent on an uploaded zip that has no such root, rather than guessing. Silence
-on "cannot tell" is the same contract app/fixpack/generate.py's stamp keeps.
-
-NOT AUTO-FIXABLE. The fix is either "point the deploy at this repository" or
-"audit the other one" — a decision about how the owner's projects relate, not
-a rewrite. app/fixpack/generate.py declines it by name.
+The archive root supplies the repository identity; archives without that
+identity stay silent. Shell variable binding, build provenance, live execution
+and the foreign repository contents remain unverified. No automatic fix can
+choose the intended deployment source for the owner.
 """
 
 from __future__ import annotations
@@ -47,6 +16,8 @@ from __future__ import annotations
 import re
 import shlex
 import zipfile
+
+import yaml
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding, archive_root
@@ -202,6 +173,48 @@ def deployed_repositories(text: str) -> list[tuple[str, str]]:
     return seen
 
 
+def deployment_scripts(text: str) -> list[str]:
+    """Select bounded deployment-like steps, never sweep an entire workflow.
+
+    SSH script actions and shell commands placing code under conventional
+    application directories are syntax signals only, not proof of execution.
+    Names such as 'deploy' alone do not establish a deployment.
+    """
+    if len(text) > 400_000:
+        return []
+    try:
+        workflow = yaml.safe_load(text)
+    except (yaml.YAMLError, RecursionError):
+        return []
+    if not isinstance(workflow, dict) or not isinstance(workflow.get("jobs"), dict):
+        return []
+    scripts = []
+    for job in list(workflow["jobs"].values())[:100]:
+        if not isinstance(job, dict) or not isinstance(job.get("steps"), list):
+            continue
+        for step in job["steps"][:500]:
+            if not isinstance(step, dict):
+                continue
+            options = step.get("with")
+            script = options.get("script") if isinstance(options, dict) else None
+            action = step.get("uses", "")
+            if (isinstance(script, str) and isinstance(action, str)
+                    and action.lower().startswith("appleboy/ssh-action@")):
+                scripts.append(script)
+                continue
+            # A bare clone on a CI runner often fetches data or tools. Only a
+            # placement command that names an application path is a candidate.
+            for candidate in (script, step.get("run")):
+                if not isinstance(candidate, str):
+                    continue
+                commands = [c for line in _join_shell_continuations(candidate).splitlines()
+                            for c in _command_segments(line)]
+                if any(_PLACING_CODE.search(c) and re.search(r"(?:^|\s)/(?:srv|opt|var/www)/", c)
+                       for c in commands):
+                    scripts.append(candidate)
+    return scripts
+
+
 def scan_ci_deploy_source(fileobj: BinaryIO) -> list[CheckFinding]:
     """One finding per workflow that deploys a repository other than this one."""
     fileobj.seek(0)
@@ -225,7 +238,8 @@ def scan_ci_deploy_source(fileobj: BinaryIO) -> list[CheckFinding]:
                 continue
             others = [
                 f"{owner}/{repo}"
-                for owner, repo in deployed_repositories(text)
+                for script in deployment_scripts(text)
+                for owner, repo in deployed_repositories(script)
                 if f"{owner}-{repo}" != identity
             ]
             if others:
@@ -237,31 +251,26 @@ def _finding(path: str, others: list[str]) -> CheckFinding:
     named = ", ".join(f"`{o}`" for o in others)
     return CheckFinding(
         rule_id=RULE_ID,
-        title="Your CI builds this repository and deploys a different one",
+        title="Deployment-like script references a different repository",
         severity="high",
-        # The fact is certain; whether it is a mistake is not. A monorepo split
-        # or a deliberate mirror deploy has exactly this shape.
+        # A source mismatch is observed; deployment and runtime behavior are unverified.
         confidence=0.8,
         category="Deploy",
         file=path,
         explanation=(
-            f"`{path}` checks out this repository, runs your build and your "
-            f"checks over it — and then its deploy step puts {named} on the "
-            f"server instead.\n\n"
-            f"So the tests, the type check and the build that gate a merge "
-            f"here all ran against code that never reaches production. And an "
-            f"audit of this repository — including this one — describes "
-            f"something other than what your users are running.\n\n"
-            f"This may be deliberate: a monorepo split, or a mirror you deploy "
-            f"on purpose. Nothing here says the other repository is worse. It "
-            f"says the two are not the same, and that only one of them was "
-            f"checked."
+            f"`{path}` contains a deployment-like script referencing {named}, "
+            "which differs from the audited archive's repository identity. "
+            "The selected script contains a Git placement operation in an SSH action "
+            "or a conventional application directory. This does not verify which "
+            "repository was built, whether the step runs, or what is live in production. "
+            "This may be deliberate: a mirror or a multi-repository deployment. "
+            "Nothing here says the other repository is worse. Review the source and "
+            "deployment relationship before changing it."
         ),
         fix_hint=(
             "Decide which repository is the source of truth for this "
-            "deployment. If it is this one, point the deploy step at it and "
-            "your checks start protecting production. If it is the other one, "
-            "run the audit against that repository instead — the report you "
-            "are reading now is about code that is not deployed."
+            "deployment, and verify the referenced step actually deploys it. "
+            "If the source differs intentionally, audit that source and its build "
+            "checks too. Otherwise correct the target after confirming the intended repository."
         ),
     )
