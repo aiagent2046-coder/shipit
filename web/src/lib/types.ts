@@ -266,7 +266,7 @@ export interface Finding {
     required_conditions: string[] | null;
     conditions_status: "not_checked";
     consequence_status: "not_checked";
-    source_context?: { kind: string; uri_scheme: string; uri_kind: string } | null;
+    source_context?: { kind: string; uri_scheme?: string; uri_kind?: string } | null;
     grouped_originals?: Record<string, unknown>[];
     grouped_claim_scope?: {
       mechanism: "react_network_rejection_cleanup" | "query_read_volume";

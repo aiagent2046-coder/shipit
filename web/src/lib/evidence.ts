@@ -178,9 +178,12 @@ export function claimEvidenceRows(finding: Finding, historical = false): [string
       ci_service: "CI configuration with a local host", placeholder_uri: "Example URI",
       configuration_template: "Configuration text containing change_me",
       source_literal: "Source text; runtime use not established" };
-    rows.push(["Source context", labels[context.kind] ?? "Not recorded"]);
-    rows.push(["URI protocol", `${context.uri_scheme} — ${context.uri_kind}; ` +
-      "URI use, credential validity and deployment are not verified."]);
+    if (labels[context.kind]) rows.push(["Source context", labels[context.kind]]);
+    const scheme = context.uri_scheme;
+    if (typeof scheme === "string" && scheme && scheme !== "not_recorded") {
+      rows.push(["URI protocol", `${scheme} — ${context.uri_kind || "other_or_unknown"}; ` +
+        "URI use, credential validity and deployment are not verified."]);
+    }
   }
   const syntax = record?.syntax_check;
   if (syntax) {

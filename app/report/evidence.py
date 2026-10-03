@@ -422,10 +422,13 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
                   "ci_service": "CI configuration with a local host", "placeholder_uri": "Example URI",
                   "configuration_template": "Configuration text containing change_me",
                   "source_literal": "Source text; runtime use not established"}
-        rows.append(("Source context", labels.get(context.get("kind"), "Not recorded")))
-        rows.append(("URI protocol", str(context.get("uri_scheme", "Not recorded")) + " — "
-                     + str(context.get("uri_kind", "other_or_unknown"))
-                     + "; URI use, credential validity and deployment are not verified."))
+        if label := labels.get(context.get("kind")):
+            rows.append(("Source context", label))
+        scheme = context.get("uri_scheme")
+        if isinstance(scheme, str) and scheme and scheme != "not_recorded":
+            rows.append(("URI protocol", scheme + " — "
+                         + str(context.get("uri_kind") or "other_or_unknown")
+                         + "; URI use, credential validity and deployment are not verified."))
     syntax = record.get("syntax_check")
     if syntax:
         labels = {"contradicted": "Syntax premise contradicted", "observed": "Syntax pattern observed",
