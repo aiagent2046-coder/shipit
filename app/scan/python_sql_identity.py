@@ -21,28 +21,76 @@ MAX_NODES = 24_000
 MAX_DEPTH = 128
 MAX_WORK_NODES = 400_000
 
-# Full titles deliberately constrain the claim, rather than detecting SQL
-# anywhere in a compound title. Broader claims need their own assessment.
-_TITLE = re.compile(
-    r"(?:Unsanitised table name interpolated into SQL string|"
-    r"Table name from a Python list interpolated directly into SQL|"
-    r"Table name interpolated into (?:SQL|PostgreSQL query)"
-    r"(?: without validation| via f-string(?: in [a-zA-Z_]\w*)?))", re.I)
+# New responses select a source operation explicitly. Legacy prose is admitted
+# by a bounded vocabulary, not a list of full model-generated sentences.
+# Unknown or compound titles abstain; this is routing, never proof of safety.
+SELECTOR_KIND = "sql_table_interpolation"
+_LEGACY_WORDS = frozenset("""
+a an the into in from of to through via directly direct dynamic dynamically
+python sql postgresql sqlite query queries string strings statement statements
+table tables name names identifier identifiers list migration script method
+unsanitised unsanitized unvalidated unparameterized unparameterised
+interpolation interpolated interpolating substitution substituted embedded
+embedding inserted inserting concatenation concatenated concatenating
+f-string f-strings without validation sanitisation sanitization parameterisation
+parameterization allowlist whitelist check checks using uses used is are
+""".split())
+
+
+def sql_operation_selector(finding):
+    """Return only a well-formed untrusted selector, not an evidence result."""
+    selector = finding.get("operation_claim")
+    if (not isinstance(selector, dict)
+            or set(selector) != {"kind", "target", "line_start", "line_end"}
+            or selector.get("kind") != SELECTOR_KIND
+            or not isinstance(selector.get("target"), str)
+            or not re.fullmatch(r"[a-zA-Z_]\w{0,127}", selector["target"])):
+        return None
+    start, end = selector.get("line_start"), selector.get("line_end")
+    if type(start) is not int or type(end) is not int or not 1 <= start <= end <= MAX_BYTES:
+        return None
+    return dict(selector)
+
+
+def _legacy_table_title(title):
+    # Backtick/local function labels carry no claim meaning. Permit only a
+    # single trailing scope label; don't swallow a clause containing a risk.
+    title = re.sub(r"\s+in\s+`?[a-zA-Z_]\w*_[a-zA-Z_\d]*`?$", "", title.strip(), flags=re.I)
+    if not re.fullmatch(r"[a-zA-Z\s().`-]+", title):
+        return False
+    title = title.lower().replace("table-name", "table name")
+    words = re.findall(r"[a-zA-Z]+(?:-[a-zA-Z]+)*", title.lower())
+    return (bool(words) and set(words) <= _LEGACY_WORDS
+            and bool(set(words) & {"sql", "postgresql", "sqlite"})
+            and bool(set(words) & {"table", "tables"})
+            and bool(set(words) & {"name", "names", "identifier", "identifiers"})
+            and bool(set(words) & {"interpolation", "interpolated", "interpolating", "substitution",
+                                  "substituted", "embedded", "embedding", "inserted", "inserting",
+                                  "concatenation", "concatenated", "concatenating", "f-string", "f-strings"}))
+
+
 _OTHER = re.compile(
     r"\b(?:SSRF|XSS|CSRF|authentication|authorization|unauthenticated|passwords?|"
     r"credentials?|race|deadlock|concurren\w*|timeout|unbounded|pagination|"
-    r"encrypt\w*|command injection|shell injection)\b|rate[ -]limit", re.I)
+    r"encrypt\w*|ownership|tenant|isolation|missing WHERE|without WHERE|"
+    r"command injection|shell injection|denial.of.service)\b|rate[ -]limit", re.I)
 _METHODS = {"execute", "executemany", "executescript", "raw", "execute_sql", "fetch", "fetchrow", "fetchval"}
 
 
 def sql_table_claim(finding):
     title = finding.get("title")
-    if not isinstance(title, str) or len(title) > 2000 or not _TITLE.fullmatch(title.strip().rstrip(".")):
+    if not isinstance(title, str) or not title.strip() or len(title) > 2000:
+        return False
+    # An explicit invalid selector must not silently fall back to prose.
+    if finding.get("operation_claim") is not None:
+        if sql_operation_selector(finding) is None:
+            return False
+    elif not _legacy_table_title(title):
         return False
     conditions = finding.get("required_conditions") or []
     if not isinstance(conditions, list) or len(conditions) > 16 or finding.get("premises"):
         return False
-    texts = [finding.get(key, "") for key in ("observation", "explanation", "fix_hint")] + conditions
+    texts = [title] + [finding.get(key, "") for key in ("observation", "explanation", "fix_hint")] + conditions
     return all(isinstance(text, str) and len(text) <= 16000 and not _OTHER.search(text) for text in texts)
 
 
@@ -127,6 +175,12 @@ class PythonSQLResolver:
             if len(calls) != 1 or (slot := _table_slot(calls[0])) is None:
                 return None
             call = calls[0]
+            selector = sql_operation_selector(finding)
+            if selector is not None and (
+                    selector["target"] != slot.id
+                    or not start <= selector["line_start"] <= selector["line_end"] <= end
+                    or not call.lineno <= selector["line_start"] <= selector["line_end"] <= call.end_lineno):
+                return None
             def span(node):
                 return [offsets[node.lineno - 1] + node.col_offset,
                         offsets[node.end_lineno - 1] + node.end_col_offset]
@@ -187,7 +241,8 @@ def compatible_sql_claims(left, right, identity):
             return False
         if not sql_table_claim({"title": finding.title, "explanation": finding.explanation,
                                 "fix_hint": finding.fix_hint, "observation": record.get("observation", ""),
-                                "required_conditions": record.get("required_conditions")}):
+                                "required_conditions": record.get("required_conditions"),
+                                "operation_claim": record.get("operation_claim")}):
             return False
         if any(record.get(key) != "not_checked" for key in ("conditions_status", "consequence_status")):
             return False

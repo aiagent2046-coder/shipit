@@ -1,0 +1,98 @@
+[
+  {
+    "file": "sqlite.py",
+    "line_start": 4,
+    "line_end": 4,
+    "title": "Unsanitised table name interpolated into SQL query",
+    "severity": "high",
+    "confidence": 0.85,
+    "explanation": "If an attacker could influence the value of `table` (e.g. through a misconfigured caller that passes user-supplied input), they could inject arbitrary SQL. Even though the current caller in `get_stats` uses a hardcoded list, the pattern itself is unsafe and could be copied or called with untrusted input in the future.",
+    "observation": "The `get_stats` method iterates over a hardcoded list of table names and interpolates each directly into an f-string SQL query without parameterisation.",
+    "required_conditions": [
+      "A caller passes a user-controlled or externally-sourced string as the table name",
+      "The database connection has sufficient privileges for the injected statement to cause harm"
+    ],
+    "fix_hint": "Verify that every call site passes only values from a fixed allowlist. Replace the f-string with a whitelist check: `if table not in {'messages', 'sessions', 'freelance_projects', 'dialog_history'}: raise ValueError(...)` before constructing the query, or use a mapping from safe names to pre-built queries.",
+    "report_source": "donjonson-hash-kristina-revolutionary-92b2c9c/database/sqlite.py:226"
+  },
+  {
+    "file": "postgres.py",
+    "line_start": 5,
+    "line_end": 5,
+    "title": "Unsanitised table name interpolated into SQL query (PostgreSQL)",
+    "severity": "high",
+    "confidence": 0.85,
+    "explanation": "Same pattern as the SQLite manager: a table name is interpolated directly into a SQL string. If the list of table names ever comes from an external source, SQL injection becomes possible. The PostgreSQL driver does not parameterise identifiers.",
+    "observation": "The `get_stats` method iterates over a hardcoded list and interpolates each name into an f-string SQL query sent to PostgreSQL.",
+    "required_conditions": [
+      "A caller passes a user-controlled or externally-sourced string as the table name",
+      "The PostgreSQL role has sufficient privileges for the injected statement"
+    ],
+    "fix_hint": "Apply the same allowlist check as recommended for the SQLite manager. Confirm that no external caller can supply table names to this method.",
+    "report_source": "donjonson-hash-kristina-revolutionary-92b2c9c/database/postgres.py:328"
+  },
+  {
+    "file": "sqlite.py",
+    "line_start": 4,
+    "line_end": 4,
+    "title": "Unsanitised table name interpolated into SQL query",
+    "severity": "high",
+    "confidence": 0.85,
+    "explanation": "If an attacker could influence the value of `table` (e.g. through a misconfigured caller that passes user-supplied input), they could inject arbitrary SQL. Even though the current caller in `get_stats` uses a hardcoded list, the pattern itself is unsafe and could be copied or called with untrusted input in the future.",
+    "observation": "The `get_stats` method iterates over a hardcoded list of table names and interpolates each directly into an f-string SQL query without parameterisation.",
+    "required_conditions": [
+      "A caller passes a user-controlled or externally-sourced string as the table name",
+      "The database connection has sufficient privileges for the injected SQL to cause harm"
+    ],
+    "fix_hint": "Verify that every call site passes only values from a fixed allowlist. Replace the f-string with a whitelist check: `if table not in {'messages', 'sessions', 'freelance_projects', 'dialog_history'}: raise ValueError(...)` before constructing the query, or use a mapping of table names to pre-built queries.",
+    "report_source": "donjonson-hash-kristina-revolutionary-92b2c9c/database/sqlite.py:226"
+  },
+  {
+    "file": "postgres.py",
+    "line_start": 5,
+    "line_end": 5,
+    "title": "Unsanitised table name interpolated into PostgreSQL query",
+    "severity": "high",
+    "confidence": 0.85,
+    "explanation": "Same pattern as the SQLite manager: if the `tables` list were ever extended with an externally-sourced value, an attacker could inject arbitrary SQL into the PostgreSQL database. The asyncpg driver does not parameterise identifiers.",
+    "observation": "The `get_stats` method iterates over a hardcoded list and interpolates each table name directly into an f-string passed to `fetchval`.",
+    "required_conditions": [
+      "A caller passes a user-controlled or externally-sourced string as the table name",
+      "The PostgreSQL role has sufficient privileges for the injected SQL to cause harm"
+    ],
+    "fix_hint": "Apply the same allowlist check as recommended for the SQLite manager. Confirm that no external code path can supply values to the `tables` list before executing the query.",
+    "report_source": "donjonson-hash-kristina-revolutionary-92b2c9c/database/postgres.py:329"
+  },
+  {
+    "file": "migrate.py",
+    "line_start": 4,
+    "line_end": 4,
+    "title": "Table name from a list interpolated into SQL in migration script",
+    "severity": "medium",
+    "confidence": 0.85,
+    "explanation": "The migration script iterates over a list of candidate table names and interpolates each into a SQL query. If the list were ever populated from an external source (e.g. a config file or environment variable), SQL injection would be possible. Currently the list is hardcoded, but the pattern is unsafe.",
+    "observation": "Inside `migrate_freelance_db`, a list `['freelance_projects', 'projects']` is iterated and each name is interpolated into an f-string SQL query.",
+    "required_conditions": [
+      "The table name list is modified to include externally-sourced values",
+      "The SQLite file being migrated is attacker-controlled"
+    ],
+    "fix_hint": "Replace the f-string with a hardcoded allowlist check before executing the query, or use separate explicit queries for each known table name.",
+    "report_source": "donjonson-hash-kristina-revolutionary-92b2c9c/migrate_to_postgres.py:155"
+  },
+  {
+    "file": "migrate.py",
+    "line_start": 4,
+    "line_end": 4,
+    "title": "Unsanitised table name interpolated into SQL in migration script",
+    "severity": "medium",
+    "confidence": 0.85,
+    "explanation": "The migration script iterates over a list of candidate table names and interpolates each directly into a SQL query. If the list were ever populated from an external source, SQL injection would be possible.",
+    "observation": "Inside `migrate_freelance_db`, the variable `table` from the list `['freelance_projects', 'projects']` is interpolated into an f-string SQL query without parameterisation.",
+    "required_conditions": [
+      "The `tables` list is extended with an externally-sourced value",
+      "The SQLite file being migrated is accessible to an attacker who can influence the table list"
+    ],
+    "fix_hint": "Verify that the `tables` list is always a hardcoded constant. Add an explicit allowlist check before executing the query.",
+    "report_source": "donjonson-hash-kristina-revolutionary-92b2c9c/migrate_to_postgres.py:155"
+  }
+]
