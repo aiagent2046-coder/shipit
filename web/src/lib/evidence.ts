@@ -332,11 +332,23 @@ export function findingCounts(findings: Finding[]): { source: number; examples: 
   }, { source: 0, examples: 0 });
 }
 
+export function needsSourceReview(finding: Finding): boolean {
+  return Boolean(narrativeProjection(finding)) && sourceAssessments(finding).some(a =>
+    a.kind === "sql_table_literal_source" && a.result === "observed" && !a.whole_finding
+    && a.narrative_review?.status === "required" && a.narrative_review.premise === "sql_table_external_control"
+    && typeof a.narrative_review.reason === "string" && a.narrative_review.reason.trim().length > 0);
+}
+
+export function sourceReviewCount(findings: Finding[]): number {
+  return findings.filter(f => !isNonProductionFinding(f) && needsSourceReview(f))
+    .reduce((sum, f) => sum + (f.occurrence_titles?.length || 1), 0);
+}
+
 export function sourceSeverityCounts(findings: Finding[]): Record<Severity, number> {
   const counts: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
   for (const finding of findings) {
     if (isInformational(finding) || syntaxContradicted(finding) || unsupportedTransport(finding)) continue;
-    if (isNonProductionFinding(finding)) continue;
+    if (isNonProductionFinding(finding) || needsSourceReview(finding)) continue;
     const severities = finding.occurrence_severities?.length
       ? finding.occurrence_severities : [finding.severity];
     for (const severity of severities) if (Object.hasOwn(counts, severity)) counts[severity] += 1;
@@ -798,10 +810,12 @@ export function observationSummary(findings: Finding[]): string {
     else if (isInformational(f)) informational += count;
     else if (unsupportedTransport(f)) unsupported += count;
   }
+  const review = sourceReviewCount(findings);
   return `${source + examples + informational + contradicted + unsupported} observations: ${source} in source, `
     + `${examples} in tests/examples, ${informational} informational, `
     + `${contradicted} with contradicted syntax premises`
-    + (unsupported ? `, ${unsupported} transport-only hypotheses without established exposure.` : ".");
+    + (unsupported ? `, ${unsupported} transport-only hypotheses without established exposure.` : ".")
+    + (review ? ` ${review} source interpretations need review and are listed separately from impact counts.` : "");
 }
 
 export function reviewContributionRows(score: Score): [string, string, string][] {

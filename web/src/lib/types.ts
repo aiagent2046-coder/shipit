@@ -225,6 +225,7 @@ export interface RecommendationCheck {
 }
 
 export interface SourceAssessment {
+  narrative_review?: { status?: string; premise?: string; reason?: string };
   kind: string;
   result: "unsupported" | "contradicted" | "observed" | "not_checked";
   whole_finding: boolean;
@@ -242,7 +243,7 @@ export interface SourceAssessment {
 export interface NarrativeProjection {
   version: 1;
   method: "source_bound_projection";
-  kind: "fact_input_count_unbounded" | "retry_callback_scope";
+  kind: "fact_input_count_unbounded" | "retry_callback_scope" | "sql_table_literal_source";
   applied_checks: string[];
   source_hashes: Record<string, string>;
   whole_finding: false;

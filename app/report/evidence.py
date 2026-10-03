@@ -66,6 +66,9 @@ def observation_summary(findings: list[dict]) -> str:
     message = (f"{source + examples + informational + contradicted + unsupported} observations: "
             f"{source} in source, {examples} in tests/examples, {informational} informational, "
             f"{contradicted} with contradicted syntax premises.")
+    review = source_review_count(findings)
+    if review:
+        message += f" {review} source interpretations need review and are listed separately from impact counts."
     return (message + f" {unsupported} transport-only hypotheses need exposure evidence."
             if unsupported else message)
 
@@ -88,13 +91,25 @@ def review_contribution_rows(score: dict) -> list[tuple[str, str, str]]:
     return list(zip(("Files submitted to model", "Model responses", "Retained model hypotheses"), free, paid))
 
 
+def source_review_count(findings: list[dict]) -> int:
+    """Display separately only admitted, source-bound SQL wording corrections."""
+    return sum(len(f.get("occurrence_titles") or []) or 1 for f in findings
+               if needs_source_review(f) and not is_non_production(f))
+
+
+def needs_source_review(finding: dict) -> bool:
+    projection = narrative_projection(finding)
+    return bool(projection and any(check["kind"] == "sql_table_literal_source"
+                                  for check in narrative_review_checks(finding.get("claim_evidence"))))
+
+
 def source_severity_counts(findings: list[dict]) -> dict[str, int]:
     counts = dict.fromkeys(("critical", "high", "medium", "low"), 0)
     for finding in findings:
         if (is_informational(finding) or syntax_contradicted(finding.get("claim_evidence"))
                 or unsupported_transport(finding.get("claim_evidence"))):
             continue
-        if is_non_production(finding):
+        if is_non_production(finding) or needs_source_review(finding):
             continue
         for severity in finding.get("occurrence_severities") or [finding.get("severity")]:
             if severity in counts:

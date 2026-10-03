@@ -1,0 +1,148 @@
+{
+  "rule_id": "llm-security",
+  "title": "SQL table names come from a literal list; future changes need separate review",
+  "severity": "high",
+  "confidence": 0.85,
+  "category": "Security",
+  "file": "migrate.py",
+  "line": 4,
+  "masked": "",
+  "explanation": "The checked table-name interpolation takes its value from 2 literal table names in a loop. No external value source was found on this narrow path. This does not establish an exploitable injection in the current code. Hypothetical future edits, other queries and runtime replacement remain unverified.",
+  "fix_hint": "Preserve the literal-only source of these identifiers. If table selection becomes external or configurable, review validation at that boundary. Review other SQL paths separately.",
+  "context": null,
+  "origin_category": null,
+  "source": "llm",
+  "verification_status": "unverified",
+  "verification_method": "model_review",
+  "claim_evidence": {
+    "version": 1,
+    "source_check": {
+      "kind": "quote_match",
+      "line_start": 2,
+      "line_end": 6
+    },
+    "observation": "The checked table-name interpolation takes its value from 2 literal table names in a loop. No external value source was found on this narrow path.",
+    "required_conditions": [
+      "The `table` variable receives a value not in the hardcoded list, e.g. through future code changes or if the list is made configurable",
+      "The database connection has sufficient privileges to execute the injected statement"
+    ],
+    "conditions_status": "not_checked",
+    "consequence_status": "not_checked",
+    "source_assessments": [
+      {
+        "kind": "sql_table_literal_source",
+        "claim": "The cited table-name slot is fed by a literal-only loop iterable on the checked source path.",
+        "result": "observed",
+        "whole_finding": false,
+        "method": "source_ast",
+        "detail": "The cited table-name slot is fed by a literal-only loop iterable on the checked source path. Only the recorded source path is checked. Runtime replacement, other paths, future code changes, authorization policy and harmful outcomes remain unverified.",
+        "source_binding": {
+          "file": "migrate.py",
+          "source_sha256": "d2fa3e8bee1536c691bd2e688f6b04b288c9e0e9ca113ab010de7a4fc20570f0",
+          "line_start": 1,
+          "line_end": 6,
+          "span": [
+            0,
+            211
+          ],
+          "loop": {
+            "line_start": 3,
+            "line_end": 5,
+            "span": [
+              75,
+              194
+            ]
+          },
+          "operation": {
+            "line_start": 4,
+            "line_end": 4,
+            "span": [
+              119,
+              155
+            ]
+          },
+          "slot": {
+            "line_start": 4,
+            "line_end": 4,
+            "span": [
+              147,
+              152
+            ]
+          },
+          "loop_target": {
+            "line_start": 3,
+            "line_end": 3,
+            "span": [
+              79,
+              84
+            ]
+          },
+          "iterable": {
+            "line_start": 2,
+            "line_end": 2,
+            "span": [
+              36,
+              70
+            ]
+          },
+          "assignment": {
+            "line_start": 2,
+            "line_end": 2,
+            "span": [
+              27,
+              70
+            ]
+          },
+          "literal_count": 2,
+          "binding_mode": "literal_loop_first_action",
+          "runtime_control": "not_checked",
+          "future_changes": "not_checked"
+        },
+        "file": "migrate.py",
+        "source_sha256": "d2fa3e8bee1536c691bd2e688f6b04b288c9e0e9ca113ab010de7a4fc20570f0",
+        "line_start": 1,
+        "line_end": 6,
+        "narrative_review": {
+          "status": "required",
+          "premise": "sql_table_external_control",
+          "reason": "The cited table-name slot is fed by a literal-only loop iterable on the checked source path. Only the recorded source path is checked. Runtime replacement, other paths, future code changes, authorization policy and harmful outcomes remain unverified."
+        }
+      }
+    ],
+    "producer": {
+      "model": "fake",
+      "response": 1,
+      "rubric": "security"
+    },
+    "narrative_projection": {
+      "version": 1,
+      "method": "source_bound_projection",
+      "kind": "sql_table_literal_source",
+      "applied_checks": [
+        "sql_table_literal_source"
+      ],
+      "active": {
+        "title": "SQL table names come from a literal list; future changes need separate review",
+        "explanation": "The checked table-name interpolation takes its value from 2 literal table names in a loop. No external value source was found on this narrow path. This does not establish an exploitable injection in the current code. Hypothetical future edits, other queries and runtime replacement remain unverified.",
+        "fix_hint": "Preserve the literal-only source of these identifiers. If table selection becomes external or configurable, review validation at that boundary. Review other SQL paths separately.",
+        "observation": "The checked table-name interpolation takes its value from 2 literal table names in a loop. No external value source was found on this narrow path."
+      },
+      "source_hashes": {
+        "migrate.py": "d2fa3e8bee1536c691bd2e688f6b04b288c9e0e9ca113ab010de7a4fc20570f0"
+      },
+      "whole_finding": false,
+      "original": {
+        "title": "Unsanitised table name interpolated into SQL string",
+        "explanation": "If an attacker could influence the value of `table` (here drawn from a hardcoded list, but the pattern is dangerous), they could inject arbitrary SQL. More concretely, the same pattern is used in `database/sqlite.py` line 227 with a loop over a hardcoded list, but any future extension of that list with user-supplied input would immediately become SQL injection. The migration script itself uses a fixed list, so the immediate risk is low, but the pattern should be replaced with an allowlist check before string interpolation.",
+        "fix_hint": "Verify that every table name used in f-string SQL is validated against an explicit allowlist before interpolation. Replace `f\"SELECT * FROM {table}\"` with a check such as `assert table in ALLOWED_TABLES` followed by the f-string, or use a mapping from safe identifiers to query strings.",
+        "observation": "The variable `table` is iterated from a hardcoded Python list `['freelance_projects', 'projects']` and interpolated directly into an f-string SQL query with no parameterisation or allowlist validation.",
+        "producer": {
+          "model": "fake",
+          "response": 1,
+          "rubric": "security"
+        }
+      },
+      "previous_fix_hint": "Verify that every table name used in f-string SQL is validated against an explicit allowlist before interpolation. Replace `f\"SELECT * FROM {table}\"` with a check such as `assert table in ALLOWED_TABLES` followed by the f-string, or use a mapping from safe identifiers to query strings."
+    }
+  }
+}

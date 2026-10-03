@@ -15,7 +15,7 @@ from app.scan.claim_narrative import narrative_projection
 
 from app.report.evidence import (
     is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
-    model_status_notice, non_model_status_notices, source_severity_counts, claim_evidence_rows,
+    model_status_notice, non_model_status_notices, source_severity_counts, source_review_count, claim_evidence_rows,
     observation_summary, review_contribution_rows,
     model_acceptance_notice,
 )
@@ -521,7 +521,11 @@ def render_report(result: dict, project_name: str = "your app") -> str:
     summary = " · ".join(
         f"{counts[s]} {s}" for s in ("critical", "high", "medium", "low")
         if counts[s]
-    ) or "No source observations recorded"
+    )
+    review_count = source_review_count(raw_findings)
+    if review_count:
+        summary = (summary + " · " if summary else "") + f"{review_count} source interpretations need review"
+    summary = summary or "No source observations recorded"
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">

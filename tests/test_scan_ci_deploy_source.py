@@ -259,3 +259,27 @@ def test_the_fix_pack_declines_it_by_name() -> None:
     assert "advisory" not in reasons[0].lower()
     assert "redirect production" in reasons[0]
     assert plan.files == {}
+
+
+def test_advisory_update_fetches_data_not_deployed_code():
+    from pathlib import Path
+    body = Path('.github/workflows/update-cve-catalog.yml').read_text()
+    assert deployed_repositories(body)  # old whole-file sweep saw this URL
+    assert scan({'.github/workflows/update-cve-catalog.yml': body}) == []
+
+
+def test_unrelated_data_checkout_cannot_borrow_a_deploy_step():
+    body = OWN_DEPLOY['.github/workflows/deploy.yml'] + '''
+      - name: Deploy data catalog (name is not proof)
+        run: git clone https://github.com/github/advisory-database.git ghsa-source
+'''
+    assert scan({'.github/workflows/deploy.yml': body}) == []
+    changed = body.replace('donjonson-hash/devtools-aggregator', 'other/application')
+    finding, = scan({'.github/workflows/deploy.yml': changed})
+    assert 'other/application' in finding.explanation
+    assert 'github/advisory-database' not in finding.explanation
+
+
+@pytest.mark.parametrize('body', ['jobs: [', 'null', 'jobs: [test]', 'jobs: {test: {steps: null}}'])
+def test_unrecognized_workflow_is_not_deployment_proof(body):
+    assert scan({'.github/workflows/test.yml': body}) == []
