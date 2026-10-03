@@ -27,6 +27,7 @@ from typing import BinaryIO, Iterator
 from app.scan.check_loading import is_native_import_error
 from app.scan.credential_context import (MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context)
 from app.scan.file_scope import GENERATED_DIRECTORIES, is_dependency_path as is_dependency_path
+from app.scan.secret_text_context import repeated_test_text_spans
 
 MAX_SCANNED_FILE_BYTES = 1 * 1024 * 1024  # skip huge files: minified bundles etc.
 
@@ -129,6 +130,7 @@ _TEST_PATH_SEGMENTS = frozenset((
 ))
 _TEST_SETUP_FILENAMES = frozenset(("jest.setup.ts", "jest.setup.js"))
 _TEST_FILE_SUFFIXES = (
+    ".test.mjs", ".spec.mjs", ".test.cjs", ".spec.cjs",
     ".test.ts", ".test.tsx", ".test.js", ".test.jsx",
     ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx",
     # Cypress names its specs <thing>.cy.<ext> rather than .spec.<ext>.
@@ -1247,7 +1249,7 @@ def _label_text(value: str) -> bool:
 
 
 def _js_variable_declaration(name: str, line: str, match: re.Match) -> bool:
-    if not name.lower().removesuffix(".fixture").endswith((".js", ".jsx", ".ts", ".tsx")):
+    if not name.lower().removesuffix(".fixture").endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
         return False
     # A JS declaration is not SQL. Actual credential assignments still pass
     # through the generic/provider rules. SQL embedded in a string is retained.
@@ -1277,6 +1279,7 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
             # assignment when the repository itself is scanned.
             is_sql = name.lower().removesuffix(".fixture").endswith(".sql")
             assignment_values = _adjacent_assignment_literals(name, text, coverage=coverage)
+            text_fixture_spans = None
             shell_substitutions = None
             next_line_offset = 0
             for lineno, raw_line in enumerate(text.splitlines(keepends=True), start=1):
@@ -1347,6 +1350,26 @@ def iter_secret_matches(fileobj: BinaryIO, *, coverage: dict | None = None) -> I
                                         if role != "formatted_value"
                                         and (lo, col) <= start and end <= (hi, end_col)), None)
                     finding = _classify_match(name, lineno, rule, m.group(0), line, source_role)
+                    if (rule.id == "generic-assignment" and matched_line == line
+                            and _is_test_fixture_path(name) and not _is_migration_context(name)
+                            and name.lower().removesuffix(".fixture").endswith(
+                                (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"))):
+                        if text_fixture_spans is None:
+                            text_fixture_spans = repeated_test_text_spans(
+                                text, tsx=name.lower().removesuffix(".fixture").endswith((".jsx", ".tsx")),
+                                coverage=coverage,
+                            )
+                        span = (lineno, len(line[:m.start("value")].encode("utf-8")),
+                                len(line[:m.end("value")].encode("utf-8")))
+                        if span in text_fixture_spans and not any(
+                            other.pattern.search(m.group("value")) for other in RULES
+                            if other.id not in {"generic-assignment", "sql-secret-assignment"}
+                        ):
+                            finding = replace(
+                                finding, severity="low", confidence=0.1, context="test_fixture",
+                                title="Repeated text used in a document test (informational)",
+                                source_context={"kind": "repeated_test_text"},
+                            )
                     if (catalog and rule.id == "generic-assignment" and m.group("value") in catalog
                             and _label_text(m.group("value"))):
                         # Retain the candidate: a translation catalog can still

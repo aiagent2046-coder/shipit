@@ -37,12 +37,18 @@ def collapse_repeats(findings: list[dict]) -> list[dict]:
     # across files collapses into one row, while DISTINCT secrets sharing
     # a rule_id (e.g. a different hardcoded password per service) stay
     # separate -- each keeps its own evidence and its own score penalty.
-    groups: dict[tuple[str, str], list[dict]] = {}
+    groups: dict[tuple[str, str, bool], list[dict]] = {}
     passthrough: list[dict] = []
     for f in findings:
         rid = str(f.get("rule_id", ""))
         if rid in COLLAPSIBLE:
-            groups.setdefault((rid, str(f.get("masked", ""))), []).append(f)
+            evidence = f.get("claim_evidence") or {}
+            source_context = f.get("source_context") or evidence.get("source_context") or {}
+            # A mask is not a value identity. Keep the narrow text-fixture
+            # assessment separate from unrelated credentials with that mask.
+            text_fixture = (rid == "generic-assignment" and f.get("context") == "test_fixture"
+                            and source_context.get("kind") == "repeated_test_text")
+            groups.setdefault((rid, str(f.get("masked", "")), text_fixture), []).append(f)
         else:
             passthrough.append(f)
 

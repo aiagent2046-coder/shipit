@@ -408,6 +408,15 @@ def plain_fields(finding: dict) -> tuple[str, str, str]:
             what, risk, fix = PLAIN["generic-assignment"]
         evidence = finding.get("claim_evidence") or {}
         source_context = finding.get("source_context") or evidence.get("source_context") or {}
+        if (rid == "generic-assignment" and finding.get("context") == "test_fixture"
+                and source_context.get("kind") == "repeated_test_text"):
+            return ("Repeated text used in a document test",
+                    "A local variable is built by repeating a text literal. Its recorded uses are text fields "
+                    "and, when present, text assertions. The credential-shaped variable name triggered this "
+                    "informational observation; these uses do not establish a credential leak. "
+                    "Downstream behavior was not checked.",
+                    "No credential replacement is suggested by this observation. Review separately if this "
+                    "text is also used for authentication outside the checked local uses.")
         if rid == "generic-assignment" and source_context.get("kind") == "translation_label":
             return ("Credential-shaped name in a translation label",
                     "The value is label-like text in a parsed translation catalog. This is usually UI copy. "
