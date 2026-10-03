@@ -1,20 +1,25 @@
 """Bounded syntax checks for JS/TS DOM HTML injection; no source is executed.
 
-A literal string/template or an earlier, visible, unambiguous const literal is
-silent. Comments and strings are syntax nodes, not declarations or sinks.
+Fixed strings and bounded assemblies of verified fixed string bindings are
+silent. Dynamic inputs retain bounded observations, not sanitizer guarantees.
+Comments and strings are syntax nodes, not declarations or sinks.
 Sanitizers, input trust, custom DOM-like receivers and cross-file bindings are
 unresolved. Native parser absence fails the check rather than claiming coverage.
 """
 from __future__ import annotations
 
+import hashlib
 import zipfile
 
 from app.scan.rule_coverage import remaining_findings
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding
+from app.scan.claim_evidence import static_claim_evidence
 from app.scan.rule_coverage import RuleCoverage
 from app.scan.vue_template import VueParseError, extract_vue
+from app.scan.xss_context import describe_html_inputs
+from app.scan.xss_literal_loop import build_literal_loop_bindings, literal_loop_binding
 
 RULE_ID = "xss-unsafe-html-injection"
 _JS_FILE_SUFFIXES = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue")
@@ -61,7 +66,7 @@ def _literal(node):
 
 
 def _declarations(nodes):
-    """Only globally unique names are eligible for one-hop suppression.
+    """Only globally unique names are eligible for bounded const resolution.
 
     This is intentionally narrower than general symbol resolution: parameters,
     destructuring, imports and mutations invalidate the name. The remaining
@@ -101,26 +106,42 @@ def _declarations(nodes):
     return {name: node for name, node in declared.items() if name not in invalid}
 
 
-def _static_value(value, use, declarations):
+def _static_value(value, use, declarations, loop_bindings=(), depth=0):
+    if depth > 12:
+        return False
+    def fixed(node):
+        return _static_value(node, use, declarations, loop_bindings, depth + 1)
+
     if isinstance(value, list):
-        return all(_static_value(argument, use, declarations) for argument in value)
+        return all(fixed(argument) for argument in value)
     if _literal(value):
         return True
+    if value is not None and value.type == "binary_expression":
+        return (_text(value.child_by_field_name("operator")) == "+"
+                and fixed(value.child_by_field_name("left"))
+                and fixed(value.child_by_field_name("right")))
+    if value is not None and value.type in {"template_string", "template_substitution", "parenthesized_expression"}:
+        parts = [child for child in value.named_children
+                 if child.type not in {"string_fragment", "escape_sequence", "comment"}]
+        return bool(parts) and all(fixed(child) for child in parts)
     if value is None or value.type != "identifier":
         return False
+    if literal_loop_binding(value, use, loop_bindings):
+        return True
     declaration = declarations.get(_text(value))
     if declaration is None or declaration.end_byte > use.start_byte:
         return False
     if declaration.parent.type != "lexical_declaration" or not _text(declaration.parent).startswith("const "):
-        return False
-    if not _literal(declaration.child_by_field_name("value")):
         return False
     scope = declaration.parent.parent
     # Loop-local declarations must not leak out of their loop body.
     parent = use.parent
     while parent is not None:
         if parent == scope:
-            return True
+            # Resolve against the declaration itself: a later binding cannot
+            # retroactively turn an initializer into a fixed string.
+            return _static_value(declaration.child_by_field_name("value"), declaration,
+                                 declarations, loop_bindings, depth + 1)
         parent = parent.parent
     return False
 
@@ -169,17 +190,26 @@ def _sink(node):
     return None, None
 
 
-def _javascript_candidates(raw, parser):
+def _javascript_candidates(raw, parser, *, trace=True):
     root = parser.parse(raw).root_node
     if root.has_error:
         raise VueParseError("parse_error")
     nodes = _nodes(root)
     declarations = _declarations(nodes)
+    loop_bindings = build_literal_loop_bindings(nodes)
+    source_sha256 = hashlib.sha256(raw).hexdigest()
     candidates = []
     for node in nodes:
         sink, value = _sink(node)
-        if sink is not None and value is not None and not _static_value(value, node, declarations):
-            candidates.append((node.start_point[0] + 1, sink))
+        if sink is not None and value is not None and not _static_value(value, node, declarations, loop_bindings):
+            context = None
+            if trace and len(candidates) < _MAX_FINDINGS:
+                context = {**describe_html_inputs(value, node, nodes, declarations),
+                           "source_sha256": source_sha256, "sink": sink,
+                           "sink_span": {"start_byte": node.start_byte, "end_byte": node.end_byte,
+                                         "line_start": node.start_point.row + 1,
+                                         "line_end": node.end_point.row + 1}}
+            candidates.append((node.start_point[0] + 1, sink, context))
     return candidates, len(nodes)
 
 
@@ -207,17 +237,17 @@ def _vue_candidates(source, parsers):
                 raise VueParseError("parse_error")
             value = children[0]
         if not _literal(value):
-            candidates.append((expression.line, "vue-v-html"))
+            candidates.append((expression.line, "vue-v-html", None))
     for script in scripts:
         # Separate programs prevent a literal in one block from incorrectly
         # suppressing a sink in the other block's different compilation scope.
         raw = script.value.encode("utf-8")
-        script_candidates, count = _javascript_candidates(raw, parsers[script.tsx])
+        script_candidates, count = _javascript_candidates(raw, parsers[script.tsx], trace=False)
         node_count += count
         if node_count > _MAX_NODES:
             raise VueParseError("ast_limit")
-        candidates.extend((line + script.line - 1, sink) for line, sink in script_candidates)
-    return sorted(candidates)
+        candidates.extend((line + script.line - 1, sink, None) for line, sink, _ in script_candidates)
+    return sorted(candidates, key=lambda item: (item[0], item[1]))
 
 
 def scan_xss(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFinding]:
@@ -244,18 +274,34 @@ def scan_xss(fileobj: BinaryIO, *, coverage: dict | None = None) -> list[CheckFi
             except ValueError:
                 accounting.skip("ast_limit")
                 continue
-            for line, sink in candidates:
+            for line, sink, context in candidates:
                 if len(findings) >= remaining_findings(_MAX_FINDINGS):
                     accounting.skip("finding_limit")
                     accounting.finish()
                     return findings
-                findings.append(_finding(info.filename, line, sink))
+                findings.append(_finding(info.filename, line, sink, context))
             accounting.analyzed()
         accounting.finish()
     return findings
 
 
-def _finding(path: str, line: int, sink: str) -> CheckFinding:
+def _finding(path: str, line: int, sink: str, context: dict | None = None) -> CheckFinding:
+    details = ""
+    evidence = static_claim_evidence()
+    if context is not None:
+        evidence["html_input_context"] = {**context, "file": path}
+        parts = context["parts"]
+        if parts["literal"]:
+            details += " The checked expression includes fixed text parts."
+        if context["calls"]:
+            details += (" Observed function calls: " + ", ".join(context["calls"]) + ". "
+                        "A call name does not establish escaping, sanitization or a safe URL policy.")
+        if parts["unresolved"]:
+            details += " Some input values remain unresolved within the checked local scope."
+        if context["const_bindings_resolved"]:
+            details += " The review followed visible local const initializers."
+        if context["limits"]:
+            details += " The bounded input review reached a limit; additional inputs may be unexamined."
     return CheckFinding(
         rule_id=RULE_ID,
         title="HTML is injected into the DOM from a value that is not a fixed string",
@@ -271,17 +317,19 @@ def _finding(path: str, line: int, sink: str) -> CheckFinding:
             "corruption. Whether the value was sanitized, whether it is actually reachable, and "
             "whether the sink runs have NOT been verified; the rule reads only that a non-literal "
             "value reaches an HTML-injection sink."
-        ),
+        ) + details,
         fix_hint=(
             "Use Vue interpolation ({{ value }}) or v-text for plain text. If HTML is required, "
             "sanitize it with an explicit allowlist before v-html. A helper or sanitizer call "
             "alone does not establish that its policy is safe."
             if sink == "vue-v-html" else
+            "Trace the unresolved inputs and review any helper implementations before changing this code. "
             "Use textContent (or React's normal children / setText) for anything that is text, not "
             "markup. If you must insert HTML, sanitize the value first (DOMPurify with an allowlist, "
             "or an equivalent) and prefer a template or component that never builds HTML by string. "
             "For React, avoid dangerouslySetInnerHTML unless the content is already trusted."
         ),
+        claim_evidence=evidence,
     )
 
 

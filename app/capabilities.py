@@ -307,8 +307,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         "are also reported unless they are fixed literals; helpers and sanitizers are unresolved. "
         "Unsupported Vue template/script languages and malformed components are recorded as coverage gaps. "
         "A complete literal "
-        "or an earlier visible, globally unambiguous const literal stays silent; concatenation, "
-        "shadowed names and comments do not establish a static value. Sanitization, input trust, "
+        "or a bounded expression assembled entirely from fixed strings stays silent, including "
+        "eligible const bindings and Object.entries loops over unmodified, unaliased literal tables. "
+        "Other JS/TS expressions retain bounded input observations: fixed text, calls and unresolved values. "
+        "Helper names, shadowed names and comments do not establish safety. Sanitization, input trust, "
         "DOM receiver provenance, cross-file resolution and other framework template bindings are "
         "unresolved. Missing native grammars withhold the check; malformed or oversized source "
         "is reported in coverage rather than treated as analyzed.",

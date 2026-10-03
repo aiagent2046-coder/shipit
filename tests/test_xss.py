@@ -180,6 +180,42 @@ def test_document_write_checks_all_html_arguments_and_numeric_update_is_not_a_si
     assert scan_xss(archive('el.innerHTML -= count;')) == []
 
 
+@pytest.mark.parametrize("expression", [
+    '"<p>" + "fixed" + "</p>"',
+    '`<p>${"fixed"}</p>`',
+    '("<p>fixed</p>")',
+    'fixed',
+])
+def test_fixed_html_assembly_stays_silent_but_a_dynamic_part_is_reported(expression):
+    prefix = 'const fixed = "<p>" + "fixed" + "</p>";\n'
+    assert scan_xss(archive(prefix + 'el.innerHTML = ' + expression + ';')) == []
+    assert len(scan_xss(archive(prefix + 'el.innerHTML = ' + expression + ' + user.html;'))) == 1
+
+
+def test_initializer_cannot_borrow_a_later_literal_or_a_mutated_binding():
+    assert scan_xss(archive('const html = prefix + "x"; const prefix = "safe"; el.innerHTML = html;'))
+    assert scan_xss(archive('let prefix = "safe"; const html = prefix + "x"; el.innerHTML = html;'))
+
+
+def test_document_render_source_observations_survive_the_static_pipeline():
+    import hashlib
+
+    source = (REPO_ROOT / "tests/fixtures/xss-document-render.js.fixture").read_text()
+    findings = [f for f in run_static_scan(archive(source))["findings"] if f["rule_id"] == RULE_ID]
+    assert len(findings) == 3  # the literal table's label/class insertion is fixed
+    for finding in findings:
+        record = finding["claim_evidence"]["html_input_context"]
+        assert record["source_sha256"] == hashlib.sha256(source.encode()).hexdigest()
+        assert record["sink_span"]["line_start"] == finding["line"]
+        assert "escapeHtml" in record["calls"]
+        assert "call name does not establish" in finding["explanation"]
+        assert finding["severity"] == "high"  # helper names never settle safety
+    # Replacing one dictionary value with external text restores its finding.
+    changed = source.replace('"rising"],', 'window.location.hash],', 1)
+    assert changed != source
+    assert len(scan_xss(archive(changed))) == 4
+
+
 @pytest.mark.parametrize("loop", [
     'for (const html of inputs)',
     'for (const html in inputs)',

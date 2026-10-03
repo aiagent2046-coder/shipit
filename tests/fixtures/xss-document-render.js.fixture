@@ -1,0 +1,45 @@
+const TAGS = {
+  rising: ["🔺 Новое", "rising"],
+  growing: ["📈 Развивается", "growing"],
+  noise: ["🔕 Шум", "noise"],
+  action: ["💡 Действие", "action"],
+};
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, char =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+}
+
+async function renderDigest() {
+  const profile = await storage.getProfile();
+  if (!profile.onboarded) { renderChips(); go("step1"); return; }
+  const { digests, lastError, notificationError } = await chrome.storage.local.get(["digests", "lastError", "notificationError"]);
+  document.getElementById("digestStatus").textContent = lastError || notificationError || "";
+  const box = document.getElementById("digestContent");
+  go("digest");
+  if (!digests || !digests.length) {
+    box.innerHTML = '<p class="empty">Дайджестов пока нет — нажми «Проверить сейчас».</p>';
+    return;
+  }
+  const d = digests[0];
+  box.innerHTML = '<p class="meta">Последний: ' + new Date(d.createdAt).toLocaleString("ru-RU") +
+    ' · ниша: ' + escapeHtml(d.profile?.niche || "профиль старого дайджеста не сохранён") + '</p>';
+  for (const [key, [title, cls]] of Object.entries(TAGS)) {
+    const items = d.sections[key] || [];
+    const sec = document.createElement("div");
+    sec.className = "section";
+    sec.innerHTML = '<span class="tag ' + cls + '">' + title + '</span>';
+    if (key === "action") {
+      const text = typeof items === "string" ? items : (items[0] ? items[0].title : "—");
+      sec.innerHTML += '<div class="card"><p>' + escapeHtml(text) + '</p></div>';
+    } else {
+      for (const it of items) {
+        const href = safeHttpUrl(it.url);
+        const url = href ? '<a href="' + escapeHtml(href) + '" target="_blank" rel="noopener noreferrer" style="color:#4a7dff;text-decoration:none">↗</a> ' : "";
+        const why = it.why || (it.source ? it.source + (it.score ? " · score: " + it.score : "") : "");
+        sec.innerHTML += '<div class="card"><h3>' + url + escapeHtml(it.title) + '</h3><p>' + escapeHtml(why) + '</p></div>';
+      }
+    }
+    box.appendChild(sec);
+  }
+}
