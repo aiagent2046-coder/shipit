@@ -108,6 +108,9 @@ def quote_match_window(finding: dict, files: dict[str, str]) -> tuple[int, int] 
 
 
 def model_claim_evidence(finding: dict, files: dict[str, str]) -> dict:
+    from app.scan.python_sql_identity import sql_operation_selector
+
+    selector = sql_operation_selector(finding)
     window = quote_match_window(finding, files)
     observation = finding.get("observation")
     conditions = finding.get("required_conditions")
@@ -117,6 +120,7 @@ def model_claim_evidence(finding: dict, files: dict[str, str]) -> dict:
                   if isinstance(conditions, list) else [])
     return {
         "version": 1,
+        **({"operation_claim": selector} if selector is not None else {}),
         "source_check": ({"kind": "quote_match", "line_start": window[0], "line_end": window[1]}
                          if window else {"kind": "not_recorded"}),
         "observation": observation.strip() if isinstance(observation, str) and observation.strip() else None,
