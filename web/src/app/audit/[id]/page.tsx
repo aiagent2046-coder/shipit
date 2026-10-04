@@ -262,7 +262,7 @@ function AuditPageInner() {
 
           <RlsCheck auditId={view.id} token={token} repoUrl={view.repoUrl} />
 
-          <PreviewHistory score={view.score} />
+          <PreviewHistory score={view.score} findings={view.findings} />
         </div>
       )}
     </div>

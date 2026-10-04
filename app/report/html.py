@@ -20,6 +20,7 @@ from app.report.evidence import (
     model_acceptance_notice,
 )
 from app.report.grouping import GROUPABLE, group_for_display, related_finding_groups
+from app.report.dependency_snapshot import RECONCILIATION_DETAIL, unrepeated_dependency_matches
 from app.report.owner_roadmap import build_owner_roadmap
 from app.report.owner_report import build_owner_report, owner_report_context
 from app.report.plain_language import plain_fields, tier
@@ -322,7 +323,7 @@ def _preview_history(score: dict) -> str:
     )
 
 
-def _free_baseline(score: dict) -> str:
+def _free_baseline(score: dict, current_findings: list[dict] | None = None) -> str:
     baseline = score.get("free_baseline") or {}
     if baseline.get("version") != 1:
         return ""
@@ -341,6 +342,14 @@ def _free_baseline(score: dict) -> str:
                    'Static observations and model hypotheses were reused without rerunning their checks. '
                    'Earlier matches may be retained when the snapshot check is incomplete.</p>')
     prior = baseline.get("score")
+    unmatched = unrepeated_dependency_matches(score, current_findings) if current_findings is not None else []
+    if unmatched:
+        items = ''.join('<li>' + escape(str(finding.get("title") or "Dependency match"))
+                        + ' · ' + escape(str(finding.get("file") or "Location not recorded")) + '</li>'
+                        for finding in unmatched)
+        result += ('<aside aria-label="Dependency results need reconciliation">'
+                   '<strong>Dependency results need reconciliation</strong><p>'
+                   + str(len(unmatched)) + ' ' + RECONCILIATION_DETAIL + '</p><ul>' + items + '</ul></aside>')
     if not prior:
         return (result + '<p>Free audit unavailable: '
                 + escape(str(baseline.get("reason", "not recorded"))) + '.</p></section>')
@@ -492,7 +501,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
                 + ('<p>Paid analysis was reused; these counts describe the stored review.</p>'
                    if score.get("analysis_reused_from") else '') + '</section>') + body
 
-    history_html = _free_baseline(score) + _preview_history(score)
+    history_html = _free_baseline(score, findings) + _preview_history(score)
     if history_html:
         body = history_html + '<h2 class="sechead">Current scan observations</h2>' + body
 

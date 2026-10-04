@@ -6,6 +6,66 @@ import snapshotCases from "@/lib/fixtures/dependency_snapshot_cases.json";
 
 afterEach(cleanup);
 
+describe("unrepeated bundled dependency matches", () => {
+  const dependency = (evidence: Record<string, unknown> = {}, rule = "dependency-cve-match"): Finding => ({
+    rule_id: rule, title: "Advisory <script>unsafe()</script>", file: "<img src=x onerror=unsafe()>.lock",
+    source: "dependency", severity: "medium", category: "Security", confidence: .9,
+    claim_evidence: { version: 1, ecosystem: "PyPI", package: "Example_Package", installed_version: "1.2.1",
+      advisory_id: "GHSA-example", ...evidence } as unknown as Finding["claim_evidence"],
+  });
+  const baselineScore = (finding = dependency()): Score => ({ total: 0, categories: {}, free_baseline: {
+    version: 1, origin: "included", status: "completed", findings: [finding],
+    score: { total: 0, categories: {} },
+  } });
+  it("keeps an unmatched dependency visible outside collapsed history and escapes its title and file", () => {
+    const input = baselineScore();
+    const before = JSON.stringify(input);
+    const { container } = render(<><PreviewHistory score={input} findings={[]} /><SeveritySummary findings={[]} /></>);
+    const notice = screen.getByRole("complementary", { name: "Dependency results need reconciliation" });
+    expect(notice.closest("details")).toBeNull();
+    expect(notice.textContent).toContain("1 bundled-catalog matches");
+    expect(notice.textContent).toContain("Not repeated does not mean fixed or disproved");
+    expect(notice.textContent).toContain(dependency().title);
+    expect(notice.textContent).toContain(dependency().file);
+    expect(container.querySelector("script, img")).toBeNull();
+    expect(screen.getByText("No source observations recorded")).toBeTruthy();
+    expect(JSON.stringify(input)).toBe(before);
+  });
+  it("recognizes recorded alias overlap and normalized PyPI names in current SCA results", () => {
+    render(<PreviewHistory score={baselineScore()} findings={[dependency({ ecosystem: "pypi",
+      package: "example.package", advisory_id: "CVE-example", advisory_ids: ["CVE-example", "GHSA-example"] },
+    "dependency-known-vulnerability")]} />);
+    expect(screen.queryByRole("complementary")).toBeNull();
+  });
+  it.each([
+    { installed_version: "1.2.2" },
+    { advisory_id: "CVE-other", advisory_ids: [] },
+    { ecosystem: "npm" },
+    { package: "other" },
+  ])("does not suppress a different identity or advisory: %j", evidence => {
+    render(<PreviewHistory score={baselineScore()} findings={[dependency(evidence)]} />);
+    expect(screen.getByRole("complementary")).toBeTruthy();
+  });
+  it("does not treat missing current findings as an empty completed check", () => {
+    render(<PreviewHistory score={baselineScore()} />);
+    expect(screen.queryByRole("complementary")).toBeNull();
+  });
+  it("retains incomplete baseline identities even when an equally incomplete current record exists", () => {
+    const incomplete = dependency({ installed_version: "", advisory_ids: "GHSA-example" });
+    render(<PreviewHistory score={baselineScore(incomplete)} findings={[incomplete]} />);
+    expect(screen.getByRole("complementary")).toBeTruthy();
+  });
+  it("does not match advisory IDs recorded on non-dependency rules", () => {
+    render(<PreviewHistory score={baselineScore()} findings={[dependency({}, "llm-security")]} />);
+    expect(screen.getByRole("complementary")).toBeTruthy();
+  });
+  it("preserves npm scoped names instead of applying PyPI punctuation normalization", () => {
+    render(<PreviewHistory score={baselineScore(dependency({ ecosystem: "npm", package: "@Scope/foo_bar" }))}
+      findings={[dependency({ ecosystem: "npm", package: "@scope/foo-bar" })]} />);
+    expect(screen.getByRole("complementary")).toBeTruthy();
+  });
+});
+
 const prior: Finding = {
   rule_id: "llm-security", title: "Original claim <script>unsafe()</script>",
   severity: "high", confidence: 0.8, source: "llm", category: "Security",
