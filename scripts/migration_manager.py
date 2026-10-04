@@ -83,6 +83,13 @@ DEFAULT_BACKUP_DIR = "/var/backups/shipit/postgres"
 # just as actionable and could not leak. Same rule for anything carrying
 # DATABASE_URL.
 DSN_CREDENTIALS_RE = re.compile(r"(?<=://)[^/\s@]+(?=@)")
+DSN_SECRETS_RE = re.compile(
+    rf"(?P<userinfo>{DSN_CREDENTIALS_RE.pattern})"
+    r"|(?P<query>[?&](?:sslpassword|password)=)[^&\s#]*"
+    r"|(?P<keyword>(?<![\w])(?:sslpassword|password)\s*=\s*)"
+    r"(?:'(?:\\[\s\S]|[^'\\])*(?:'|\\?$)|(?:\\[\s\S]|[^\s\\])*)",
+    re.IGNORECASE,
+)
 
 APP_TABLES = (
     "accounts",
@@ -462,14 +469,21 @@ def database_url() -> str:
 
 
 def redact_dsn(text: str) -> str:
-    """Mask the credentials in any connection URI appearing in `text`.
+    """Mask URI credentials and libpq password values in client diagnostics.
 
     Applied to every diagnostic this script relays from psql or pg_dump, on
     the reasoning in DSN_CREDENTIALS_RE. The host and database name survive,
-    because those are what make a connection error actionable; the part before
-    the '@' is what must not reach a log.
+    because those are what make a connection error actionable. Query password
+    parameters and libpq keyword strings are accepted by the clients too.
+    Match once against the original text: a second parsing pass could mistake
+    a quote inside a value already replaced by the first pass for its boundary.
+    This only protects relayed diagnostics, not the process argument list.
     """
-    return DSN_CREDENTIALS_RE.sub("***", text)
+    return DSN_SECRETS_RE.sub(
+        lambda match: (match.group("query") or match.group("keyword") or "")
+        + "***",
+        text,
+    )
 
 
 def run_psql(

@@ -71,6 +71,34 @@ def test_a_complete_production_env_passes(tmp_path, monkeypatch):
     assert _run(tmp_path, monkeypatch, COMPLETE_ENV) == 0
 
 
+@pytest.mark.parametrize("flag", ["true", "TRUE", "True"])
+def test_production_rejects_all_tenant_vercel_cors_even_with_exact_origins(
+    tmp_path, monkeypatch, capsys, flag,
+):
+    env = dict(COMPLETE_ENV, CORS_ALLOW_VERCEL_PREVIEWS=flag)
+
+    assert _run(tmp_path, monkeypatch, env) == 78
+    error = capsys.readouterr().err
+    assert "CORS_ALLOW_VERCEL_PREVIEWS=true is not allowed in production" in error
+    assert "trusted exact origins in CORS_ALLOWED_ORIGINS" in error
+
+
+def test_production_accepts_explicit_origins_with_preview_cors_disabled(
+    tmp_path, monkeypatch,
+):
+    env = dict(COMPLETE_ENV, CORS_ALLOW_VERCEL_PREVIEWS="false")
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+
+@pytest.mark.parametrize("environment", ["development", "staging"])
+def test_preview_cors_opt_in_remains_available_outside_production(
+    tmp_path, monkeypatch, capsys, environment,
+):
+    env = {"ENVIRONMENT": environment, "CORS_ALLOW_VERCEL_PREVIEWS": "true"}
+    assert _run(tmp_path, monkeypatch, env) == 0
+    assert capsys.readouterr().err == ""
+
+
 def test_missing_audit_jobs_stats_token_warns_but_still_starts(
     tmp_path, monkeypatch, capsys,
 ):

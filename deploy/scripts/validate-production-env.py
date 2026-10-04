@@ -185,6 +185,17 @@ def main() -> int:
         if not values.get(name, "").strip():
             errors.append(f"{name} is required in production")
 
+    # The preview regex grants credentialed CORS access to every Vercel
+    # tenant, not only this project's previews. Keep that opt-in for local
+    # and staging use; production must name the trusted origins explicitly.
+    # Match configure_cors()'s flag semantics, including case-insensitivity.
+    if values.get("CORS_ALLOW_VERCEL_PREVIEWS", "").lower() == "true":
+        errors.append(
+            "CORS_ALLOW_VERCEL_PREVIEWS=true is not allowed in production; "
+            "set it to false and list trusted exact origins in "
+            "CORS_ALLOWED_ORIGINS"
+        )
+
     # Split by whether the two assignments actually disagree, because the two
     # cases cost different amounts and only one of them is worth refusing a
     # boot over.
