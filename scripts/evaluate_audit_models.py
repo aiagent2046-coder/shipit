@@ -40,7 +40,7 @@ CASES = (
 )
 
 
-def prepare() -> dict:
+def prepare(suite: str = "baseline", repeats: int = 1) -> dict:
     rows = []
     for case_id, fixture, name, expectation in CASES:
         source = (ROOT / "tests/detectors" / fixture / (name + ".fixture")).read_text()
@@ -48,7 +48,40 @@ def prepare() -> dict:
         rows.append({"id": case_id, "files": {name: source}, "prompt": prompt,
                      "prompt_sha256": hashlib.sha256((SYSTEM_PROMPT + "\0" + prompt).encode()).hexdigest(),
                      "review_expectation": expectation})
-    return {"version": 1, "system_prompt": SYSTEM_PROMPT, "models": list(MODELS),
+    if suite == "context":
+        for original in list(rows):
+            if not original["id"].startswith(("sql-", "yaml-")):
+                continue
+            files = dict(original["files"])
+            if original["id"].startswith("sql-"):
+                caller = (
+                    "from fastapi import APIRouter\n"
+                    "import psycopg\n"
+                    "import os\n"
+                    "from app.queries import find_user\n\n"
+                    "router = APIRouter()\n\n"
+                    "@router.get('/user')\n"
+                    "def user(user_id: str):\n"
+                    "    with psycopg.connect(os.environ['DATABASE_URL']) as conn:\n"
+                    "        return find_user(conn, user_id)\n"
+                )
+            else:
+                caller = (
+                    "from fastapi import APIRouter, Body\n"
+                    "from app.restore import restore\n\n"
+                    "router = APIRouter()\n\n"
+                    "@router.post('/restore')\n"
+                    "def import_data(data: str = Body(media_type='text/plain')):\n"
+                    "    return restore(data)\n"
+                )
+            files["app/routes.py"] = caller
+            prompt = build_prompt(list(files.items()), "security")
+            rows.append({"id": original["id"] + "-http", "files": files, "prompt": prompt,
+                         "prompt_sha256": hashlib.sha256((SYSTEM_PROMPT + "\0" + prompt).encode()).hexdigest(),
+                         "review_expectation": original["review_expectation"] +
+                         " HTTP caller supplies user_id/data; deployed reachability is still not established.",
+                         "paired_case": original["id"]})
+    return {"version": 2, "suite": suite, "repeats": repeats, "system_prompt": SYSTEM_PROMPT, "models": list(MODELS),
             "cases": rows, "results": [], "state": "prepared",
             "judgement": "Manual review required. Valid quotes are not proof of a true finding."}
 
@@ -77,43 +110,51 @@ def run(report: dict, key: str, output: Path, max_tokens: int,
     report["requested_max_tokens"] = max_tokens
     save(output, report)
     with httpx.Client(timeout=180, transport=transport, follow_redirects=False) as client:
-        for case in report["cases"]:
-            for model in report["models"]:
-                provider = Provider("openai_compat", "https://api.aitunnel.ru/v1", key, model)
-                payload = LLMClient._payload_openai(provider, report["system_prompt"],
-                                                    case["prompt"], max_tokens)
-                row = {"case": case["id"], "requested_model": model,
-                       "prompt_sha256": case["prompt_sha256"], "manual_verdict": None}
-                started = time.monotonic()
-                try:
-                    response = client.post(provider.base_url + "/chat/completions",
-                                           headers={"Authorization": "Bearer " + key}, json=payload)
-                    response.raise_for_status()
-                    data = response.json()
-                    # Save usage before parsing the answer: malformed/empty output may be billed.
-                    row["usage"] = data.get("usage")
+        jobs = [(repeat, case, model)
+                for repeat in range(1, report.get("repeats", 1) + 1)
+                for case in report["cases"]
+                for model in (report["models"][repeat - 1:] + report["models"][:repeat - 1])]
+        for repeat, case, model in jobs:
+            provider = Provider("openai_compat", "https://api.aitunnel.ru/v1", key, model)
+            payload = LLMClient._payload_openai(provider, report["system_prompt"],
+                                                case["prompt"], max_tokens)
+            row = {"repeat": repeat, "case": case["id"], "requested_model": model,
+                   "prompt_sha256": case["prompt_sha256"], "manual_verdict": None}
+            started = time.monotonic()
+            try:
+                response = client.post(provider.base_url + "/chat/completions",
+                                       headers={"Authorization": "Bearer " + key}, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                # Save usage before parsing the answer: malformed/empty output may be billed.
+                row["usage"] = data.get("usage")
+                usage = data.get("usage") or {}
+                row["cost_rub"] = usage.get("cost_rub")
+                if row["cost_rub"] is None:
                     row["cost_rub"] = data.get("cost_rub")
-                    row["served_model"] = data.get("model")
-                    choice = data["choices"][0]
-                    row["finish_reason"] = choice.get("finish_reason")
-                    raw = choice["message"].get("content")
-                    row["answer"] = raw
-                    row.update(assess(raw, case["files"]) if isinstance(raw, str)
-                               else {"strict_json_array": False, "quote_checks": None})
-                    if row["finish_reason"] != "stop" or not row["strict_json_array"]:
-                        row["error"] = "incomplete_or_invalid_answer"
-                except Exception as exc:
-                    # Do not save exception text/response bodies: they can echo credentials.
-                    row["error"] = type(exc).__name__
-                    if isinstance(exc, httpx.HTTPStatusError):
-                        row["http_status"] = exc.response.status_code
-                row["seconds"] = round(time.monotonic() - started, 3)
-                report["results"].append(row)
+                row["served_model"] = data.get("model")
+                choice = data["choices"][0]
+                row["finish_reason"] = choice.get("finish_reason")
+                raw = choice["message"].get("content")
+                row["answer"] = raw
+                row.update(assess(raw, case["files"]) if isinstance(raw, str)
+                           else {"strict_json_array": False, "quote_checks": None})
+                if row["finish_reason"] != "stop" or not row["strict_json_array"]:
+                    row["error"] = "incomplete_or_invalid_answer"
+            except Exception as exc:
+                # Do not save exception text/response bodies: they can echo credentials.
+                row["error"] = type(exc).__name__
+                if isinstance(exc, httpx.HTTPStatusError):
+                    row["http_status"] = exc.response.status_code
+            row["seconds"] = round(time.monotonic() - started, 3)
+            report["results"].append(row)
+            save(output, report)
+            print(f"{len(report['results'])}/{len(jobs)} {case['id']} {model}: "
+                  f"{row.get('error', 'saved')}", flush=True)
+            if "error" in row:
+                report["state"] = "stopped_on_error"
                 save(output, report)
-                if "error" in row:
-                    report["state"] = "stopped_on_error"
-                    save(output, report)
-                    return 1
+                return 1
     report["state"] = "completed_needs_review"
     save(output, report)
     return 0
@@ -122,7 +163,9 @@ def run(report: dict, key: str, output: Path, max_tokens: int,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--run", action="store_true", help="Make 18 potentially billable API calls")
+    parser.add_argument("--run", action="store_true", help="Execute the prepared suite (billable API calls)")
+    parser.add_argument("--suite", choices=("baseline", "context"), default="baseline")
+    parser.add_argument("--repeats", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--env", type=Path, help="Read AITUNNEL_API_KEY only; never shell-source this file")
     parser.add_argument("--max-tokens", type=int, default=4096,
                         help="Requested output limit, not a guaranteed spending cap")
@@ -131,10 +174,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Output already exists; use a new filename to preserve previous results")
     if not 1 <= args.max_tokens <= 16384:
         parser.error("max-tokens must be between 1 and 16384")
-    report = prepare()
+    report = prepare(args.suite, args.repeats)
     if not args.run:
         save(args.output, report)
-        print("Prepared 6 cases x 3 models = 18 calls. No API requests made.")
+        print(f"Prepared {len(report['cases']) * len(MODELS) * args.repeats} calls. No API requests made.")
         return 0
     key = os.environ.get("AITUNNEL_API_KEY")
     if not key and args.env:

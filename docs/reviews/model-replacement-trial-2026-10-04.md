@@ -1,5 +1,33 @@
 # Sonnet replacement: fixture trial
 
+## Second round: context and stability
+
+First round measured Sonnet 10.35 RUB / 31.110 seconds, DeepSeek 1.55 RUB /
+41.503 seconds, MiniMax 1.17 RUB / 86.530 seconds. Sonnet reported the target
+mechanism in all three risk cases; DeepSeek in YAML only; MiniMax in shell and
+YAML. All models returned empty answers for the three controls. One attempt
+is not an accuracy estimate. Sonnet also introduced an unsupported authentication
+claim in its SQL explanation. No replacement is approved by these results.
+
+```bash
+python scripts/evaluate_audit_models.py --suite context --repeats 3 --output /tmp/drydock-round2-plan.json
+python scripts/evaluate_audit_models.py --suite context --repeats 3 --run --env /opt/shipit/.env --output /tmp/drydock-round2-results.json
+```
+
+This makes up to 90 calls: ten cases, three models, three repetitions. Original
+six prompts are preserved. Four additional cases attach identical HTTP callers
+to SQL/YAML risk/control helpers. Only user_id has an HTTP source in the SQL
+context case; table/owner in the other function remain provenance-unknown.
+Router deployment and external reachability remain unproven. Baseline and
+context cases must be judged separately. Rotate model order each repetition.
+These are ten fixtures repeated, not 90 independent quality samples. Provider
+caching and rounding affect measured cost; this is a warm repeated workload.
+Costs now use usage.cost_rub first (including zero), falling back to top-level
+cost_rub only if absent/null. Missing cost remains unknown. Raw usage is kept.
+Results retain repetition numbers and request order, with progress after each
+call. Failure stops the run, so partial results must not be compared as if all
+models completed equal coverage. There is no automatic retry or resumption.
+
 Candidates: `deepseek-v4-pro-0813`, `minimax-m3`; control: `claude-sonnet-4.6`.
 Production configuration is unchanged. This trial does not select a winner automatically.
 

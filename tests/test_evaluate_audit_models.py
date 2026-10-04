@@ -52,3 +52,38 @@ def test_quote_validation_does_not_label_truth():
     assert result["quote_checks"] == ["source_quote_or_location_mismatch"]
     assert not trial.assess('```json\n[]\n```', {})["strict_json_array"]
     assert trial.assess("[]", {}) == {"strict_json_array": True, "quote_checks": []}
+
+
+def test_context_preserves_baseline_and_shares_callers():
+    baseline = trial.prepare()
+    extended = trial.prepare("context", 3)
+    assert extended["cases"][:6] == baseline["cases"]
+    assert len(extended["cases"]) == 10
+    cases = {c["id"]: c for c in extended["cases"]}
+    for family in ("sql", "yaml"):
+        risk = cases[family + "-risk-http"]
+        control = cases[family + "-control-http"]
+        assert risk["files"]["app/routes.py"] == control["files"]["app/routes.py"]
+        assert len(risk["files"]) == 2
+        assert risk["prompt_sha256"] != cases[family + "-risk"]["prompt_sha256"]
+    assert cases["yaml-control"]["prompt_sha256"] == "2c85017753342a1f0cd7dd5d79b3b0c2e9738cd09daf7f19b1279a6bc09f6c54"
+
+
+def test_repeats_rotation_and_nested_cost(tmp_path):
+    def respond(request):
+        body = json.loads(request.content)
+        return httpx.Response(200, json={
+            "model": body["model"], "usage": {"cost_rub": 0}, "cost_rub": 100,
+            "choices": [{"finish_reason": "stop", "message": {"content": "[]"}}]})
+
+    report = trial.prepare("context", 3)
+    assert trial.run(report, "synthetic", tmp_path / "results.json", 4096,
+                     httpx.MockTransport(respond)) == 0
+    rows = report["results"]
+    assert len(rows) == 90
+    assert len({(r["case"], r["requested_model"], r["repeat"]) for r in rows}) == 90
+    assert all(r["cost_rub"] == 0 for r in rows)
+    assert all(r["manual_verdict"] is None for r in rows)
+    for repeat in range(1, 4):
+        first_case = [r["requested_model"] for r in rows if r["repeat"] == repeat][:3]
+        assert first_case == list(trial.MODELS[repeat - 1:] + trial.MODELS[:repeat - 1])
