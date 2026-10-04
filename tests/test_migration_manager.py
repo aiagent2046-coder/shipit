@@ -712,9 +712,9 @@ def test_redact_dsn(text: str, expected: str) -> None:
      "password=***"),
     # URI-like content inside a quoted keyword value must not be processed
     # first: doing so would remove the quote which delimits the full secret.
-    ("password='postgresql://u:p@host fixture tail' host=db.invalid",
+    ("password='postgresql://u:p@host fixture tail' host=db.invalid",  # scan-allow: synthetic redaction fixture
      "password=*** host=db.invalid"),
-    ("postgresql://u:p@db.invalid/x?password=fixture&sslmode=require",
+    ("postgresql://u:p@db.invalid/x?password=fixture&sslmode=require",  # scan-allow: synthetic redaction fixture
      "postgresql://***@db.invalid/x?password=***&sslmode=require"),
     ("password authentication failed for user u; host=db.invalid",
      "password authentication failed for user u; host=db.invalid"),
