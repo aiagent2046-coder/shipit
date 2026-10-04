@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Small, manually judged model trial. Default: prepare only, no API calls.
+
+Uses production prompts/payloads/quote checks, but bypasses retries and fallback.
+This is a fixture trial, not a full scan or a claim of measured accuracy.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+import httpx
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from app.llm.client import LLMClient, Provider  # noqa: E402
+from app.scan.llm_scan import SYSTEM_PROMPT, build_prompt, rejection_reason  # noqa: E402
+from scripts.env_file import read_values  # noqa: E402
+
+MODELS = ("claude-sonnet-4.6", "deepseek-v4-pro-0813", "minimax-m3")
+CASES = (
+    ("sql-risk", "sql-injection-string-built-query/positive/concatenated-query", "app/queries.py",
+     "SQL construction is unsafe if arguments are attacker-controlled; caller provenance is absent."),
+    ("sql-control", "sql-injection-string-built-query/negative/parameterised-query", "app/queries.py",
+     "Bound value and constant column interpolation do not establish SQL injection."),
+    ("shell-risk", "command-injection-shell-built-command/positive/shell-c-keyword", "app/command.py",
+     "Request name becomes bash -c program text: command injection."),
+    ("shell-control", "command-injection-shell-built-command/negative/shell-c-positional-data", "app/command.py",
+     "Name is a quoted positional argument to a fixed program, not shell program text."),
+    ("yaml-risk", "unsafe-deserialization/positive/unsafe-yaml-safe-named-alias", "app/restore.py",
+     "UnsafeLoader is aliased SafeLoader; object construction risk requires untrusted data."),
+    ("yaml-control", "unsafe-deserialization/negative/safe-yaml-import-alias", "app/restore.py",
+     "The imported loader is SafeLoader; its alias SL does not make it unsafe."),
+)
+
+
+def prepare() -> dict:
+    rows = []
+    for case_id, fixture, name, expectation in CASES:
+        source = (ROOT / "tests/detectors" / fixture / (name + ".fixture")).read_text()
+        prompt = build_prompt([(name, source)], "security")
+        rows.append({"id": case_id, "files": {name: source}, "prompt": prompt,
+                     "prompt_sha256": hashlib.sha256((SYSTEM_PROMPT + "\0" + prompt).encode()).hexdigest(),
+                     "review_expectation": expectation})
+    return {"version": 1, "system_prompt": SYSTEM_PROMPT, "models": list(MODELS),
+            "cases": rows, "results": [], "state": "prepared",
+            "judgement": "Manual review required. Valid quotes are not proof of a true finding."}
+
+
+def assess(raw: str, files: dict) -> dict:
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, RecursionError):
+        return {"strict_json_array": False, "quote_checks": None}
+    if not isinstance(parsed, list):
+        return {"strict_json_array": False, "quote_checks": None}
+    return {"strict_json_array": True,
+            "quote_checks": [rejection_reason(finding, files) for finding in parsed]}
+
+
+def save(path: Path, report: dict) -> None:
+    temporary = path.with_suffix(path.suffix + ".partial")
+    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    temporary.replace(path)
+
+
+def run(report: dict, key: str, output: Path, max_tokens: int,
+        transport: httpx.BaseTransport | None = None) -> int:
+    # Fixed endpoint: credentials cannot be redirected by model output/configuration.
+    report["state"] = "running"
+    report["requested_max_tokens"] = max_tokens
+    save(output, report)
+    with httpx.Client(timeout=180, transport=transport, follow_redirects=False) as client:
+        for case in report["cases"]:
+            for model in report["models"]:
+                provider = Provider("openai_compat", "https://api.aitunnel.ru/v1", key, model)
+                payload = LLMClient._payload_openai(provider, report["system_prompt"],
+                                                    case["prompt"], max_tokens)
+                row = {"case": case["id"], "requested_model": model,
+                       "prompt_sha256": case["prompt_sha256"], "manual_verdict": None}
+                started = time.monotonic()
+                try:
+                    response = client.post(provider.base_url + "/chat/completions",
+                                           headers={"Authorization": "Bearer " + key}, json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    # Save usage before parsing the answer: malformed/empty output may be billed.
+                    row["usage"] = data.get("usage")
+                    row["cost_rub"] = data.get("cost_rub")
+                    row["served_model"] = data.get("model")
+                    choice = data["choices"][0]
+                    row["finish_reason"] = choice.get("finish_reason")
+                    raw = choice["message"].get("content")
+                    row["answer"] = raw
+                    row.update(assess(raw, case["files"]) if isinstance(raw, str)
+                               else {"strict_json_array": False, "quote_checks": None})
+                    if row["finish_reason"] != "stop" or not row["strict_json_array"]:
+                        row["error"] = "incomplete_or_invalid_answer"
+                except Exception as exc:
+                    # Do not save exception text/response bodies: they can echo credentials.
+                    row["error"] = type(exc).__name__
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        row["http_status"] = exc.response.status_code
+                row["seconds"] = round(time.monotonic() - started, 3)
+                report["results"].append(row)
+                save(output, report)
+                if "error" in row:
+                    report["state"] = "stopped_on_error"
+                    save(output, report)
+                    return 1
+    report["state"] = "completed_needs_review"
+    save(output, report)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--run", action="store_true", help="Make 18 potentially billable API calls")
+    parser.add_argument("--env", type=Path, help="Read AITUNNEL_API_KEY only; never shell-source this file")
+    parser.add_argument("--max-tokens", type=int, default=4096,
+                        help="Requested output limit, not a guaranteed spending cap")
+    args = parser.parse_args(argv)
+    if args.output.exists() or args.output.with_suffix(args.output.suffix + ".partial").exists():
+        parser.error("Output already exists; use a new filename to preserve previous results")
+    if not 1 <= args.max_tokens <= 16384:
+        parser.error("max-tokens must be between 1 and 16384")
+    report = prepare()
+    if not args.run:
+        save(args.output, report)
+        print("Prepared 6 cases x 3 models = 18 calls. No API requests made.")
+        return 0
+    key = os.environ.get("AITUNNEL_API_KEY")
+    if not key and args.env:
+        key = read_values(args.env).get("AITUNNEL_API_KEY")
+    if not key:
+        parser.error("AITUNNEL_API_KEY is required for --run")
+    return run(report, key, args.output, args.max_tokens)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
