@@ -4,6 +4,7 @@ import { SEVERITY_META, sortFindings } from "@/lib/format";
 import { isInformational, claimEvidenceRows, evidenceLabel, isNonProductionFinding, narrativeProjection, partialContradicted, sourceSeverityCounts, sourceReviewCount, needsSourceReview, syntaxContradicted, unsupportedTransport } from "@/lib/evidence";
 import { plainFields } from "@/lib/plain";
 import { relatedFindingGroups } from "@/lib/findingGroups";
+import { unrepeatedDependencyMatches } from "@/lib/dependencyReconciliation";
 import { projectOwnerReport, type OwnerReportCard, type OwnerReportContext, type OwnerReportProjection } from "@/lib/ownerReport";
 
 function revealOwnerFinding(index: number) {
@@ -196,9 +197,10 @@ function FindingCard({ finding, historical = false, included = false, refreshed 
   </li>;
 }
 
-export function PreviewHistory({ score }: { score: Score }) {
+export function PreviewHistory({ score, findings }: { score: Score; findings?: Finding[] }) {
   const history = score.preview_history;
   const baseline = score.free_baseline;
+  const unrepeated = unrepeatedDependencyMatches(score, findings);
   const full = baseline?.version === 1 ? (
     <section aria-label="Included free audit" className="my-6 space-y-3 rounded-lg border border-border p-4">
       <h2 className="text-lg font-semibold">Included free audit</h2>
@@ -210,6 +212,16 @@ export function PreviewHistory({ score }: { score: Score }) {
       {baseline.origin === "refreshed" && <p>Dependency matching was attempted again against the recorded snapshot.
         Static observations and model hypotheses were reused without rerunning their checks.
         Earlier matches may be retained when the snapshot check is incomplete.</p>}
+      {unrepeated.length > 0 && <aside aria-label="Dependency results need reconciliation"
+        className="space-y-2 rounded-lg border border-border bg-surface p-3">
+        <h3 className="font-semibold">Dependency results need reconciliation</h3>
+        <p>{unrepeated.length} bundled-catalog matches from the included free audit are not repeated in the current findings.
+          {" "}Different sources, dates, coverage or severity thresholds can produce different results.
+          {" "}Not repeated does not mean fixed or disproved. These records remain separate from current finding counts.</p>
+        <ul className="list-disc space-y-1 pl-5">{unrepeated.map((finding, index) =>
+          <li key={index}>{finding.title || "Recorded dependency match"}
+            {finding.file && <span className="break-all text-sm text-muted"> · {finding.file}</span>}</li>)}</ul>
+      </aside>}
       {baseline.score ? <details><summary>Full baseline findings and scope</summary>
         <AuditCoverage score={baseline.score} findings={baseline.findings} />
         <ul className="space-y-3">{baseline.findings.map((finding, index) =>

@@ -21,6 +21,53 @@ SCOPE = ("Exact npm/PyPI lockfile versions are compared with a bundled advisory 
          "Unknown assessments and packages absent from the snapshot are not safe results.")
 
 
+RECONCILIATION_DETAIL = (
+    "bundled-catalog matches from the included free audit are not repeated in the current findings. "
+    "Different sources, dates, coverage or severity thresholds can produce different results. "
+    "Not repeated does not mean fixed or disproved. "
+    "These records remain separate from current finding counts."
+)
+
+
+def unrepeated_dependency_matches(score: dict, findings: list[dict]) -> list[dict]:
+    """Compare recorded package/advisory identities, without inferring a resolution."""
+    baseline = score.get("free_baseline")
+    if not isinstance(baseline, dict) or baseline.get("version") != 1:
+        return []
+
+    def identity(finding):
+        evidence = finding.get("claim_evidence")
+        if not isinstance(evidence, dict):
+            return None, set()
+        fields = [evidence.get(key) for key in ("ecosystem", "package", "installed_version")]
+        if any(not isinstance(value, str) or not value.strip() for value in fields):
+            return None, set()
+        ecosystem, package, version = [value.strip() for value in fields]
+        ecosystem, package = ecosystem.lower(), package.lower()
+        if ecosystem == "pypi":
+            package = re.sub(r"[-_.]+", "-", package)
+        aliases = evidence.get("advisory_ids")
+        ids = [evidence.get("advisory_id"), *(aliases if isinstance(aliases, list) else [])]
+        return (ecosystem, package, version), {value.strip() for value in ids
+                                             if isinstance(value, str) and value.strip()}
+
+    current = {}
+    for finding in findings:
+        if finding.get("rule_id") not in {"dependency-cve-match", "dependency-known-vulnerability"}:
+            continue
+        key, ids = identity(finding)
+        if key is not None:
+            current.setdefault(key, set()).update(ids)
+    unmatched = []
+    for finding in baseline.get("findings") or []:
+        if not isinstance(finding, dict) or finding.get("rule_id") != "dependency-cve-match":
+            continue
+        key, ids = identity(finding)
+        if key is None or not ids.intersection(current.get(key, set())):
+            unmatched.append(finding)
+    return unmatched
+
+
 def _count(value: object) -> bool:
     return type(value) is int and 0 <= value <= 9_007_199_254_740_991
 
