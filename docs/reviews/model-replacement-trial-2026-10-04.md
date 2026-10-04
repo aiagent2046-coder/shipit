@@ -87,3 +87,14 @@ across arbitrary repositories.
 The existing scripts/compare_models.py compares overlap, not truth, and requires
 pricing entries. Do not fabricate fallback dollar prices to make new candidates
 pass its model allowlist. The fixture trial keeps actual provider usage instead.
+
+## Resumption after observed reasoning exhaustion
+
+Round 2 stopped at attempt 20: DeepSeek used 4096 completion tokens, all
+reported as reasoning, with finish_reason=length and no answer (2.73 RUB).
+Use --resume OLD.json --output NEW.json --run --continue-invalid to preserve
+all attempts and send only unattempted jobs. Saved failed attempts are never
+retried. Prompts, cases, models and token budget must match. Invalid completions
+are recorded and the experiment continues; transport/HTTP errors still stop.
+Completion with recorded errors is labelled completed_with_errors_needs_review.
+An empty valid answer and an exhausted reasoning budget remain distinct.

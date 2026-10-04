@@ -104,7 +104,7 @@ def save(path: Path, report: dict) -> None:
 
 
 def run(report: dict, key: str, output: Path, max_tokens: int,
-        transport: httpx.BaseTransport | None = None) -> int:
+        transport: httpx.BaseTransport | None = None, *, continue_invalid: bool = False) -> int:
     # Fixed endpoint: credentials cannot be redirected by model output/configuration.
     report["state"] = "running"
     report["requested_max_tokens"] = max_tokens
@@ -114,7 +114,10 @@ def run(report: dict, key: str, output: Path, max_tokens: int,
                 for repeat in range(1, report.get("repeats", 1) + 1)
                 for case in report["cases"]
                 for model in (report["models"][repeat - 1:] + report["models"][:repeat - 1])]
+        attempted = {(r["repeat"], r["case"], r["requested_model"]) for r in report["results"]}
         for repeat, case, model in jobs:
+            if (repeat, case["id"], model) in attempted:
+                continue
             provider = Provider("openai_compat", "https://api.aitunnel.ru/v1", key, model)
             payload = LLMClient._payload_openai(provider, report["system_prompt"],
                                                 case["prompt"], max_tokens)
@@ -151,11 +154,12 @@ def run(report: dict, key: str, output: Path, max_tokens: int,
             save(output, report)
             print(f"{len(report['results'])}/{len(jobs)} {case['id']} {model}: "
                   f"{row.get('error', 'saved')}", flush=True)
-            if "error" in row:
+            if "error" in row and not (continue_invalid and row["error"] == "incomplete_or_invalid_answer"):
                 report["state"] = "stopped_on_error"
                 save(output, report)
                 return 1
-    report["state"] = "completed_needs_review"
+    report["state"] = ("completed_with_errors_needs_review" if any("error" in r for r in report["results"])
+                       else "completed_needs_review")
     save(output, report)
     return 0
 
@@ -163,6 +167,10 @@ def run(report: dict, key: str, output: Path, max_tokens: int,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--resume", type=Path,
+                        help="Continue saved trial into a NEW output; never retry saved attempts")
+    parser.add_argument("--continue-invalid", action="store_true",
+                        help="Record invalid answers and continue; HTTP/network errors still stop")
     parser.add_argument("--run", action="store_true", help="Execute the prepared suite (billable API calls)")
     parser.add_argument("--suite", choices=("baseline", "context"), default="baseline")
     parser.add_argument("--repeats", type=int, choices=(1, 2, 3), default=1)
@@ -175,16 +183,37 @@ def main(argv: list[str] | None = None) -> int:
     if not 1 <= args.max_tokens <= 16384:
         parser.error("max-tokens must be between 1 and 16384")
     report = prepare(args.suite, args.repeats)
+    if args.resume:
+        report = json.loads(args.resume.read_text())
+        expected = prepare(report["suite"], report["repeats"])
+        for field in ("system_prompt", "models", "cases"):
+            if report[field] != expected[field]:
+                parser.error("Saved trial does not match current prompts/cases/models")
+        if report.get("requested_max_tokens") != args.max_tokens:
+            parser.error("Resume must preserve requested_max_tokens")
+        known = {c["id"]: c["prompt_sha256"] for c in report["cases"]}
+        seen = set()
+        for row in report["results"]:
+            identity = (row["repeat"], row["case"], row["requested_model"])
+            if (identity in seen or row["case"] not in known
+                    or row["prompt_sha256"] != known[row["case"]]
+                    or row["requested_model"] not in MODELS
+                    or row["repeat"] not in range(1, report["repeats"] + 1)):
+                parser.error("Invalid or duplicate saved attempt")
+            seen.add(identity)
+        report["resumed_from"] = str(args.resume)
+    report["continue_invalid"] = args.continue_invalid
     if not args.run:
         save(args.output, report)
-        print(f"Prepared {len(report['cases']) * len(MODELS) * args.repeats} calls. No API requests made.")
+        remaining = len(report["cases"]) * len(MODELS) * report["repeats"] - len(report["results"])
+        print(f"Prepared {remaining} remaining calls. No API requests made.")
         return 0
     key = os.environ.get("AITUNNEL_API_KEY")
     if not key and args.env:
         key = read_values(args.env).get("AITUNNEL_API_KEY")
     if not key:
         parser.error("AITUNNEL_API_KEY is required for --run")
-    return run(report, key, args.output, args.max_tokens)
+    return run(report, key, args.output, args.max_tokens, continue_invalid=args.continue_invalid)
 
 
 if __name__ == "__main__":

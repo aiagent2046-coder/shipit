@@ -87,3 +87,37 @@ def test_repeats_rotation_and_nested_cost(tmp_path):
     for repeat in range(1, 4):
         first_case = [r["requested_model"] for r in rows if r["repeat"] == repeat][:3]
         assert first_case == list(trial.MODELS[repeat - 1:] + trial.MODELS[:repeat - 1])
+
+
+def test_resume_skips_failed_attempt_and_continues_length_errors(tmp_path):
+    report = trial.prepare()
+    first = report['cases'][0]
+    report['results'] = [{'repeat': 1, 'case': first['id'], 'requested_model': trial.MODELS[0],
+                          'prompt_sha256': first['prompt_sha256'], 'error': 'incomplete_or_invalid_answer',
+                          'cost_rub': 2.73}]
+    calls = []
+
+    def respond(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, json={'usage': {'cost_rub': 1}, 'choices': [
+            {'finish_reason': 'length', 'message': {'content': None}}]})
+
+    assert trial.run(report, 'synthetic', tmp_path / 'continued.json', 4096,
+                     httpx.MockTransport(respond), continue_invalid=True) == 0
+    assert len(calls) == 17
+    assert calls[0]['model'] == trial.MODELS[1]
+    assert len(report['results']) == 18
+    assert report['results'][0]['cost_rub'] == 2.73
+    assert report['state'] == 'completed_with_errors_needs_review'
+
+
+def test_resume_rejects_changed_budget_before_calls(tmp_path):
+    import pytest
+    report = trial.prepare()
+    report['requested_max_tokens'] = 4096
+    source = tmp_path / 'original.json'
+    trial.save(source, report)
+    with pytest.raises(SystemExit):
+        trial.main(['--resume', str(source), '--output', str(tmp_path / 'next.json'),
+                    '--max-tokens', '8192'])
+    assert not (tmp_path / 'next.json').exists()
