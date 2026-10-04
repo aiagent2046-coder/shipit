@@ -691,6 +691,78 @@ def test_redact_dsn(text: str, expected: str) -> None:
     assert migration_manager.redact_dsn(text) == expected
 
 
+@pytest.mark.parametrize(("text", "expected"), [
+    ("postgresql://db.invalid/x?password=fixture%20secret&sslmode=require",
+     "postgresql://db.invalid/x?password=***&sslmode=require"),
+    ("postgresql://db.invalid/x?user=u&sslpassword=fixture&password=second",
+     "postgresql://db.invalid/x?user=u&sslpassword=***&password=***"),
+    ("host=db.invalid password=fixture dbname=x",
+     "host=db.invalid password=*** dbname=x"),
+    ("host=db.invalid password = 'fixture secret' dbname=x",
+     "host=db.invalid password = *** dbname=x"),
+    (r"password='fixture\' secret\\tail' host=db.invalid",
+     "password=*** host=db.invalid"),
+    (r"password=fixture\ secret\\tail host=db.invalid",
+     "password=*** host=db.invalid"),
+    ("sslpassword='fixture secret' host=db.invalid",
+     "sslpassword=*** host=db.invalid"),
+    ("password='unterminated fixture secret",
+     "password=***"),
+    ("password='unterminated fixture secret" + "\\",
+     "password=***"),
+    # URI-like content inside a quoted keyword value must not be processed
+    # first: doing so would remove the quote which delimits the full secret.
+    ("password='postgresql://u:p@host fixture tail' host=db.invalid",
+     "password=*** host=db.invalid"),
+    ("postgresql://u:p@db.invalid/x?password=fixture&sslmode=require",
+     "postgresql://***@db.invalid/x?password=***&sslmode=require"),
+    ("password authentication failed for user u; host=db.invalid",
+     "password authentication failed for user u; host=db.invalid"),
+])
+def test_redact_libpq_password_formats(text: str, expected: str) -> None:
+    assert migration_manager.redact_dsn(text) == expected
+
+
+@pytest.mark.parametrize("client", ["psql", "pg_dump"])
+@pytest.mark.parametrize("stream", ["stderr", "stdout"])
+@pytest.mark.parametrize("dsn", [
+    "postgresql://db.invalid/x?user=u&password=fixture-marker&sslmode=require",
+    r"host=db.invalid password='fixture-marker\' tail' dbname=x",
+])
+def test_failed_database_clients_redact_password_formats(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client: str,
+    stream: str,
+    dsn: str,
+) -> None:
+    """Exercise both diagnostic channels without connecting to a database."""
+    diagnostic = f"connection rejected: {dsn}"
+    body = f"sys.{stream}.write({diagnostic!r})\nraise SystemExit(1)\n"
+    if client == "pg_dump":
+        directory = backup_environment(monkeypatch, tmp_path, dump=body)
+    else:
+        fake_binary(tmp_path / "psql", body)
+        monkeypatch.setenv("PATH", f"{tmp_path}:" + migration_manager.os.environ["PATH"])
+    monkeypatch.setenv("DATABASE_URL", dsn)
+
+    with pytest.raises(migration_manager.MigrationError) as caught:
+        if client == "psql":
+            migration_manager.run_psql("SELECT 1")
+        else:
+            migration_manager.backup_before_apply(pending_one(tmp_path))
+
+    message = str(caught.value)
+    assert "fixture-marker" not in message
+    assert "tail" not in message
+    assert "password=***" in message
+    assert "db.invalid" in message
+    assert "connection rejected" in message
+    if client == "pg_dump":
+        assert "No migration was applied" in message
+        assert list(directory.glob("*.dump*")) == []
+
+
 # --- where the database comes from -----------------------------------------
 #
 # Until 2026-08-25 this read the environment and nothing else, so the release
