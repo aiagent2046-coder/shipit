@@ -153,3 +153,41 @@ A reviewer must assess source-supported mechanisms and reachability against
 both the selected files and omitted caller/guard context. No findings is not
 proof of safety. Source selection is the existing production selection, not
 complete repository coverage. A single repository cannot prove overall parity.
+
+## 2026-10-05: bounded auth comparison and seeded follow-up
+
+The full-repository trial stopped after Sonnet auth (317,169 input tokens,
+190.32 RUB, 5.718 s) and MiMo ReadTimeout (180.071 s, cost unknown).
+Do not automatically retry or interpret the timeout as zero cost.
+
+The bounded auth trial at snapshot c2328e9548bd6b7eb3b06e309386cd53be541f82
+completed both calls. Shared prompt hash:
+`b1ac49bb08de512b905ae42cfb4c07683eb9960bfb9fdc3c6a471768385983d8`.
+User-supplied results:
+
+| Model | Input tokens | Output tokens | RUB | Seconds | Reported findings |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| claude-sonnet-4.6 | 53531 | 4 | 32.14 | 2.412 | 0 |
+| mimo-v2.6-pro | 56848 | 2863 (2860 reasoning) | 5.45 | 61.441 | 0 |
+
+Both returned valid arrays with stop finish reason; neither used cached tokens.
+This is a cost/latency observation, not proof of equal detection quality.
+
+`--scope auth-seeded` now prepares the same scope with exactly two in-memory
+line replacements, one call per model, max output 8192 and read timeout 600 s.
+The source archive and application files are never modified. Mutation anchors
+must match exactly once; oversized prompts fail before provider access.
+
+Expected mechanisms (stored in report metadata, never sent to the models):
+1. `account_for_key` falls back to `get_by_id(api_key)`: an existing known UUID
+   authenticates as that account without possessing its secret, with configured
+   pepper/database. It also persists via cookie plus the existing CSRF header.
+2. An authenticated caller chooses the key-rotation target through JSON
+   `account_id`, receives the other account's new key and invalidates the old
+   one. Validate with the caller's normal authentication independently of #1.
+
+Models must identify the mechanisms and source evidence; knowing a UUID is an
+explicit prerequisite, not a proven UUID disclosure. One finding describing both
+mechanisms can count as detecting both. Additional claims require separate manual
+review. The earlier baseline is reused without another paid call. This small
+paired experiment alone does not establish general model equivalence.

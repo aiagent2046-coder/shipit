@@ -87,9 +87,33 @@ def auth_excerpt(source: str, names: set[str]) -> str:
     return "".join(lines)
 
 
-def prepare_auth(data: bytes, revision: str) -> dict:
+AUTH_MUTATIONS = (
+    ("app/accounts.py",
+     "    return await account_repo.get_by_key_hash(hash_api_key(api_key))",
+     "    return await account_repo.get_by_key_hash(hash_api_key(api_key)) or await account_repo.get_by_id(api_key)"),
+    ("app/routes/accounts.py",
+     '    rotated = await account_repo.rotate_key(account["id"])',
+     '    rotated = await account_repo.rotate_key(str((await _json_object_body(request))'
+     '.get("account_id") or account["id"]))'),
+)
+
+
+def seed_auth_files(files: dict[str, str]) -> dict[str, str]:
+    """Return an in-memory mutation; never write application sources."""
+    mutated = dict(files)
+    for name, before, after in AUTH_MUTATIONS:
+        if mutated[name].count(before) != 1:
+            raise ValueError("Mutation anchor missing or ambiguous: " + name)
+        mutated[name] = mutated[name].replace(before, after, 1)
+        ast.parse(mutated[name])
+    return mutated
+
+
+def prepare_auth(data: bytes, revision: str, *, seeded: bool = False) -> dict:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         files = {name: archive.read(name).decode("utf-8") for name in (*AUTH_FILES, *AUTH_EXCERPTS)}
+    if seeded:
+        files = seed_auth_files(files)
     selected = [(name, auth_excerpt(text, AUTH_EXCERPTS[name]) if name in AUTH_EXCERPTS else text)
                 for name, text in files.items()]
     context = ("\nScope: account API-key login/logout, account routes, cookie handling, "
@@ -105,7 +129,7 @@ def prepare_auth(data: bytes, revision: str) -> dict:
             "prompt_sha256": hashlib.sha256((llm_scan.SYSTEM_PROMPT + "\0" + prompt).encode()).hexdigest(),
             "files": dict(selected), "submitted_chars": sum(len(t) for _, t in selected),
             "submitted_files": list(files), "trimmed_files": list(AUTH_EXCERPTS)}
-    return {"version": 1, "suite": "pinned-auth-small", "revision": revision,
+    report = {"version": 1, "suite": "pinned-auth-seeded" if seeded else "pinned-auth-small", "revision": revision,
             "archive_sha256": hashlib.sha256(data).hexdigest(),
             "system_prompt": llm_scan.SYSTEM_PROMPT, "models": list(MODELS),
             "cases": [case], "repeats": 1, "results": [], "state": "prepared",
@@ -113,6 +137,14 @@ def prepare_auth(data: bytes, revision: str) -> dict:
             "source_facts": {}, "input_character_limit": limit,
             "read_timeout_seconds": 600,
             "judgement": "Partial source scope; raw hypotheses require manual review. No automatic retries."}
+    if seeded:
+        report["mutations"] = [{"file": name, "before": before, "after": after}
+                               for name, before, after in AUTH_MUTATIONS]
+        report["expected_findings"] = [
+            "Existing account UUID accepted as API key via get_by_id fallback; requires configured pepper/database.",
+            "Authenticated caller can rotate another known account UUID supplied in body and receive its new API key.",
+        ]
+    return report
 
 
 def resume_results(expected: dict, previous: dict) -> dict:
@@ -135,7 +167,7 @@ def resume_results(expected: dict, previous: dict) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scope", choices=("full", "auth-small"), default="full")
+    parser.add_argument("--scope", choices=("full", "auth-small", "auth-seeded"), default="full")
     parser.add_argument("--repo", type=Path, default=ROOT)
     parser.add_argument("--revision", required=True, help="Full immutable commit SHA")
     parser.add_argument("--output", type=Path, required=True)
@@ -153,7 +185,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Revision does not resolve to the requested commit")
     # No checkout, build, dependency installation or execution of scanned code.
     data = subprocess.check_output(["git", "-C", str(args.repo), "archive", "--format=zip", sha])
-    report = (prepare_auth if args.scope == "auth-small" else prepare_archive)(data, sha)
+    report = (prepare_archive(data, sha) if args.scope == "full"
+              else prepare_auth(data, sha, seeded=args.scope == "auth-seeded"))
     report["scanner_revision"] = subprocess.check_output(
         ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
     if args.resume:
