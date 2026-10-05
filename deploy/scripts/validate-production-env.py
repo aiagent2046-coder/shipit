@@ -257,6 +257,17 @@ def main() -> int:
             "would silently return static-only"
         )
 
+    # A shared Luna override must not leak into the direct Anthropic fallback.
+    # Keep this preflight script independent of installed application packages.
+    anthropic_model = (values.get("ANTHROPIC_LLM_MODEL")
+                       or values.get("LLM_MODEL") or "claude-sonnet-4-6")
+    if (values.get("ANTHROPIC_API_KEY")
+            and anthropic_model in {"gpt-6-luna", "openai/gpt-6-luna"}):
+        errors.append(
+            "Luna cannot use direct Anthropic: set AITUNNEL_LLM_MODEL for Luna "
+            "and ANTHROPIC_LLM_MODEL to a supported Anthropic fallback model"
+        )
+
     # A warning, not a requirement: every token above gates a side-effecting
     # /internal endpoint that a systemd timer drives, so a missing one silently
     # stops real work. AUDIT_JOBS_STATS_TOKEN only gates the two read-only

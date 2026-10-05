@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import BinaryIO
 
-from app.llm import pricing
+from app.llm.accounting import estimate_stats_cost
 from app.llm.client import LLMClient, LLMError
 from app.llm.response_diagnostics import response_diagnostics
 from app.scan.prompt_context import PromptExcerpt, numbered_lines, python_excerpt, related_test
@@ -851,13 +851,16 @@ class LLMScanStats:
     # Cost-accounting totals, summed across every client.complete() call this
     # scan made (passes x rubrics). `calls` == 0 means no LLM ran (no
     # rubric-relevant files), which is the signal app/main.py uses to write NO
-    # llm_usage row. `model` is the last served model seen; all calls in a scan
-    # use the same configured model, so last-seen is representative. These flow
+    # llm_usage row. `model` is the last served model seen; a provider fallback
+    # may serve another model. Per-model totals below retain its price. These flow
     # out unchanged via run_scan()["llm"] to the cost recorder in main.py.
     calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     model: str | None = None
+    # None preserves legacy aggregate-only stats; populated on first success.
+    # Tokens include billed reasoning output, already in usage.output_tokens.
+    successful_model_usage: dict[str, dict[str, int]] | None = None
     # True when the per-job spend ceiling (JOB_COST_CAP_USD) was hit mid-loop
     # and the scan stopped early. The findings returned are still real and
     # verified -- just a partial set. app/scan/pipeline.py surfaces this in the
@@ -1539,6 +1542,12 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
           stats.input_tokens += usage.input_tokens
           stats.output_tokens += usage.output_tokens
           stats.model = usage.model
+          if stats.successful_model_usage is None:
+              stats.successful_model_usage = {}
+          model_usage = stats.successful_model_usage.setdefault(
+              usage.model, {"input_tokens": 0, "output_tokens": 0})
+          model_usage["input_tokens"] += usage.input_tokens
+          model_usage["output_tokens"] += usage.output_tokens
           # Did the provider read what we sent? Checked per call, because a
           # single rubric over the window is enough to make the score a
           # statement about part of the repository, and averaging it across
@@ -1655,13 +1664,9 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
           # scored on the strength of a prompt whose reply never arrived.
           if parsed is not None:
               _record_ran(rubric)
-          # Cost cap: price the tokens accumulated so far (all calls this scan
-          # used the same served model) and stop before the NEXT call if we've
-          # crossed the ceiling. Checked after the call, not before: the cap
-          # stops subsequent calls; one response can overshoot the estimate.
-          if pricing.cost_usd(
-                  stats.model, stats.input_tokens,
-                  stats.output_tokens) >= (JOB_COST_CAP_USD if cost_cap_usd is None else cost_cap_usd):
+          # Keep each served model's rate when fallback changes providers.
+          # Checked after the call: one response can overshoot the estimate.
+          if estimate_stats_cost(vars(stats)) >= (JOB_COST_CAP_USD if cost_cap_usd is None else cost_cap_usd):
               stats.cost_cap_exceeded = True
               break
     # Dedup here (not in the pipeline): this is the seam where the two

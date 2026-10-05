@@ -119,10 +119,16 @@ from scripts.batch_audit import SERIES  # noqa: E402
 # reasoning model, so its output share is larger than Haiku's and the real
 # figure will land above this one -- the estimate is a floor, and the run's own
 # usage block is what counts.
+#
+# Luna is also DERIVED, not measured on a full repository: Haiku's $0.80
+# scaled by the conservative Luna/Haiku input ratio (0.125 / 1.00), rounded
+# up to $0.10. Reasoning can increase output usage; this planning estimate is
+# not a billing ceiling. Both accepted provider aliases share the estimate.
 _ROUGH_COST_PER_AUDIT = {"claude-sonnet-4.6": 3.50, "claude-sonnet-4-6": 3.50,
                          "claude-sonnet-5": 4.55,   # +30% tokenizer, measured
                          "claude-haiku-4.5": 0.80, "claude-haiku-4-5": 0.80,
-                         "glm-5.3-flash": 0.06}
+                         "glm-5.3-flash": 0.06,
+                         "gpt-6-luna": 0.10, "openai/gpt-6-luna": 0.10}
 
 # How far apart two findings may sit and still be "the same place". Models
 # disagree about which line of a handler to point at. Three, because that is

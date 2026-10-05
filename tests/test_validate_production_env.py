@@ -665,6 +665,28 @@ def test_no_provider_configured_is_not_an_error(tmp_path, monkeypatch):
     assert _run(tmp_path, monkeypatch, COMPLETE_ENV) == 0
 
 
+@pytest.mark.parametrize("model", ["gpt-6-luna", "openai/gpt-6-luna"])
+@pytest.mark.parametrize("variable", ["LLM_MODEL", "ANTHROPIC_LLM_MODEL"])
+def test_luna_cannot_be_inherited_by_direct_anthropic(tmp_path, monkeypatch, capsys, model, variable):
+    env = dict(COMPLETE_ENV, ANTHROPIC_API_KEY="fake-anthropic-key", **{variable: model})
+    assert _run(tmp_path, monkeypatch, env) == 78
+    assert "Luna cannot use direct Anthropic" in capsys.readouterr().err
+
+
+def test_luna_primary_with_explicit_sonnet_fallback_passes(tmp_path, monkeypatch):
+    env = dict(COMPLETE_ENV, AITUNNEL_API_KEY="fake-aitunnel-key",
+               AITUNNEL_BASE_URL="https://api.aitunnel.ru/v1", LLM_MODEL="gpt-6-luna",
+               AITUNNEL_LLM_MODEL="gpt-6-luna", ANTHROPIC_API_KEY="fake-anthropic-key",
+               ANTHROPIC_LLM_MODEL="claude-sonnet-4-6")
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+
+def test_luna_without_anthropic_fallback_passes(tmp_path, monkeypatch):
+    env = dict(COMPLETE_ENV, AITUNNEL_API_KEY="fake-aitunnel-key",
+               AITUNNEL_BASE_URL="https://api.aitunnel.ru/v1", AITUNNEL_LLM_MODEL="gpt-6-luna")
+    assert _run(tmp_path, monkeypatch, env) == 0
+
+
 @pytest.mark.parametrize("value", ["", "nonsense", "0", "-1", "NaN", "sNaN", "Infinity", "-Infinity"])
 def test_invalid_cost_cap_fails_preflight_and_runtime(value, tmp_path, monkeypatch, capsys):
     from app.scan.llm_scan import parse_job_cost_cap
