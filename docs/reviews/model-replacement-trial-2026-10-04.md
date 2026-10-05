@@ -117,3 +117,39 @@ No production model or provider configuration changes. When resuming, the saved
 model selection is retained; an explicit different selection/order is rejected.
 A length-limited response is a failure under this budget, not proof that the
 model can never solve the example. Comparison is conditional on this setup.
+
+## Pinned repository comparison: Sonnet and MiMo
+
+Runner: scripts/evaluate_repository_models.py. Source snapshot:
+`c2328e9548bd6b7eb3b06e309386cd53be541f82` (shipit, merged PR 618).
+It reads git archive bytes without checking out or executing the scanned code.
+Archive SHA256, source commit, scanner revision, prompt hashes, selected paths,
+trimmed files, source facts and full original text of selected files are saved.
+
+Uses production source-fact collection, rubric selection and prompt fitting.
+Both models intentionally get the Sonnet input budget (advertised MiMo context
+is 1M at https://aitunnel.ru/models/mimo-v2-6-pro). This overrides the smaller
+unknown-model fallback in production metadata for this experiment only.
+No model-specific shrinking or retries: equal submitted content is essential.
+Four rubrics x two passes x two models means up to 16 calls. Default output
+limit is 8192, read from RUBRIC_MAX_TOKENS exactly as in production code; this
+is a code default, not a measurement of the live service environment.
+
+```bash
+RUBRIC_MAX_TOKENS=8192 python scripts/evaluate_repository_models.py --revision c2328e9548bd6b7eb3b06e309386cd53be541f82 --output /tmp/repo-model-plan.json
+RUBRIC_MAX_TOKENS=8192 python scripts/evaluate_repository_models.py --revision c2328e9548bd6b7eb3b06e309386cd53be541f82 --output /tmp/repo-model-results.json --run --env /opt/shipit/.env
+```
+
+Use --resume OLD.json with a NEW --output to skip all saved attempts, including
+failures, and retain the same snapshot/prompts/budget. Incomplete output is saved
+as an error; HTTP/transport errors stop. All billed raw usage is retained when
+returned. No monetary cap is enforced by this runner; the fixture costs are
+not estimates for much larger repository prompts. Inspect actual input-token
+usage for possible provider truncation before comparing costs or findings.
+
+This is controlled raw LLM comparison, not the full production report pipeline:
+no semantic rejection, grouping, deduplication or scoring after quote checks.
+A reviewer must assess source-supported mechanisms and reachability against
+both the selected files and omitted caller/guard context. No findings is not
+proof of safety. Source selection is the existing production selection, not
+complete repository coverage. A single repository cannot prove overall parity.
