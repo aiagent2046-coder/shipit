@@ -1,0 +1,155 @@
+{
+  "description": "Saved pagination observations 21 and 37 from audit d8ae8860; GET source only, no model request required.",
+  "source_file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/messages/route.ts",
+  "source": "import { NextRequest, NextResponse, after } from 'next/server';\nimport { createClient } from '@supabase/supabase-js';\nimport { parseBody, messagesSchema } from '@/lib/validation';\nimport { buildSystemPrompt, DEFAULT_IDENTITY, type AvatarIdentity } from '@/lib/avatar/identity';\nimport { checkLimit } from '@/lib/rate-limit';\nimport { anthropicDispatcher } from '@/lib/anthropic-dispatcher';\n\nexport async function GET(req: NextRequest) {\n  const token = req.headers.get('authorization')?.replace('Bearer ', '');\n  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });\n\n  // Клиент с правами пользователя (RLS работает)\n  const supabase = createClient(\n    process.env.NEXT_PUBLIC_SUPABASE_URL!,\n    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,\n    { global: { headers: { Authorization: `Bearer ${token}` } } }\n  );\n\n  const { data: { user }, error: userErr } = await supabase.auth.getUser(token);\n  if (userErr || !user) return NextResponse.json({ error: 'Invalid token' }, { status: 401 });\n\n  const matchId = req.nextUrl.searchParams.get('matchId');\n  if (!matchId) return NextResponse.json({ error: 'matchId is required' }, { status: 400 });\n\n  // Проверить, что пользователь — участник мэтча\n  const { data: match, error: matchErr } = await supabase\n    .from('matches')\n    .select('id, founder1_id, founder2_id')\n    .eq('id', matchId)\n    .single();\n\n  if (matchErr || !match) {\n    return NextResponse.json({ error: 'Match not found' }, { status: 404 });\n  }\n\n  // Найти founder_profiles для текущего пользователя\n  const { data: myProfile } = await supabase\n    .from('founder_profiles')\n    .select('id')\n    .eq('user_id', user.id)\n    .single();\n\n  if (!myProfile) {\n    return NextResponse.json({ error: 'Profile not found' }, { status: 404 });\n  }\n\n  if (myProfile.id !== match.founder1_id && myProfile.id !== match.founder2_id) {\n    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });\n  }\n\n  // ?after=<ISO created_at> — инкрементальная подгрузка: только сообщения новее.\n  // Без параметра возвращаем всё (начальная загрузка, обратная совместимость).\n  const afterTs = req.nextUrl.searchParams.get('after');\n\n  let query = supabase\n    .from('messages')\n    .select('*')\n    .eq('match_id', matchId)\n    .order('created_at', { ascending: true });\n\n  if (afterTs) {\n    query = query.gt('created_at', afterTs);\n  }\n\n  const { data: messages, error: msgsErr } = await query;\n\n  if (msgsErr) {\n    return NextResponse.json({ error: msgsErr.message }, { status: 500 });\n  }\n\n    // Добавляем флаг is_me, чтобы клиент точно знал, чье это сообщение\n  const messagesWithFlags = (messages || []).map(m => ({\n    ...m,\n    is_me: m.sender_id === myProfile.id,\n  }));\n\n  return NextResponse.json({ messages: messagesWithFlags, myFounderId: myProfile.id });\n}\n",
+  "findings": [
+    {
+      "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/messages/route.ts",
+      "line": 55,
+      "title": "GET messages endpoint fetches all messages for a match with no pagination limit",
+      "masked": "",
+      "source": "llm",
+      "context": null,
+      "rule_id": "llm-money",
+      "category": "Money & Data",
+      "fix_hint": "Add a `.limit(200)` (or similar) to the initial query and document that clients should use `?after=` for incremental loading. Alternatively, always require the client to paginate using cursor-based pagination.",
+      "severity": "low",
+      "confidence": 0.65,
+      "explanation": "The GET handler for messages fetches all messages for a match in a single query with no LIMIT. For active matches with many messages over time, this query will return an unbounded number of rows, increasing database read costs and response payload size. The `?after=` parameter provides incremental loading but only when the client passes it; the initial load (no `after` parameter) always fetches everything.",
+      "claim_evidence": {
+        "version": 1,
+        "producer": {
+          "model": "claude-sonnet-4.6",
+          "rubric": "money",
+          "response": 3
+        },
+        "observation": "The query at lines 55-59 selects all columns from messages for a match_id with no `.limit()`. The `afterTs` branch at line 61 adds a `.gt()` filter but only when the client provides the parameter.",
+        "source_check": {
+          "kind": "quote_match",
+          "line_end": 67,
+          "line_start": 53
+        },
+        "syntax_check": {
+          "kind": "unsupported",
+          "claim": "Unsupported syntax claim.",
+          "detail": "No supported, unambiguous syntax premise recognized in the title.",
+          "result": "not_checked"
+        },
+        "context_checks": [
+          {
+            "kind": "finite_clamp_rpc_argument",
+            "claim": "An immutable finite clamp result is the recorded direct RPC-syntax argument.",
+            "scope": "bounded_source_context",
+            "detail": "No bound limit observation in the supported direct source path. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+            "result": "not_checked"
+          },
+          {
+            "kind": "imported_collection_return_cap",
+            "claim": "The recorded direct imported helper call has a return-chain slice and a bound cap argument.",
+            "scope": "bounded_source_context",
+            "detail": "No bound limit observation in the supported direct source path. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+            "result": "not_checked"
+          }
+        ],
+        "premise_checks": [
+          {
+            "kind": "query_limit_unbounded",
+            "claim": "The query receives the raw limit without a finite bounded clamp.",
+            "detail": "No unambiguous source counterexample found within this check's scope.",
+            "result": "not_checked",
+            "target": "messages",
+            "line_end": 65,
+            "line_start": 55,
+            "anchor_line_end": 65,
+            "anchor_line_start": 55
+          }
+        ],
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "source_assessments": [],
+        "required_conditions": [
+          "A match accumulates a large number of messages over time",
+          "A client performs an initial load (no `after` parameter)"
+        ],
+        "source_issue_identity": null
+      },
+      "origin_category": null,
+      "verification_method": "model_review",
+      "verification_status": "unverified"
+    },
+    {
+      "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/messages/route.ts",
+      "line": 55,
+      "title": "Messages GET fetches all messages for a match with no row limit",
+      "masked": "",
+      "source": "llm",
+      "context": null,
+      "rule_id": "llm-money",
+      "category": "Money & Data",
+      "fix_hint": "Add a .limit(N) (e.g. last 100 messages) to the initial full-load query and implement cursor-based pagination for older messages if needed.",
+      "severity": "low",
+      "confidence": 0.7,
+      "explanation": "The GET handler for messages fetches all messages in a match with no LIMIT. For active long-running conversations, this query will grow unboundedly, increasing database read cost and response payload size over time.",
+      "claim_evidence": {
+        "version": 1,
+        "producer": {
+          "model": "claude-sonnet-4.6",
+          "rubric": "money",
+          "response": 7
+        },
+        "observation": "The query at line 55 selects all messages for a match_id with no limit. The ?after= incremental parameter helps for polling but the initial full load has no cap.",
+        "source_check": {
+          "kind": "quote_match",
+          "line_end": 67,
+          "line_start": 53
+        },
+        "syntax_check": {
+          "kind": "unsupported",
+          "claim": "Unsupported syntax claim.",
+          "detail": "No supported, unambiguous syntax premise recognized in the title.",
+          "result": "not_checked"
+        },
+        "context_checks": [
+          {
+            "kind": "finite_clamp_rpc_argument",
+            "claim": "An immutable finite clamp result is the recorded direct RPC-syntax argument.",
+            "scope": "bounded_source_context",
+            "detail": "No bound limit observation in the supported direct source path. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+            "result": "not_checked"
+          },
+          {
+            "kind": "imported_collection_return_cap",
+            "claim": "The recorded direct imported helper call has a return-chain slice and a bound cap argument.",
+            "scope": "bounded_source_context",
+            "detail": "No bound limit observation in the supported direct source path. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+            "result": "not_checked"
+          }
+        ],
+        "premise_checks": [
+          {
+            "kind": "query_limit_unbounded",
+            "claim": "The query receives the raw limit without a finite bounded clamp.",
+            "detail": "No unambiguous source counterexample found within this check's scope.",
+            "result": "not_checked",
+            "target": "query",
+            "line_end": 65,
+            "line_start": 55,
+            "anchor_line_end": 65,
+            "anchor_line_start": 55
+          }
+        ],
+        "conditions_status": "not_checked",
+        "consequence_status": "not_checked",
+        "source_assessments": [],
+        "required_conditions": [
+          "A match accumulates a large number of messages over time",
+          "The initial load (without ?after=) is called frequently"
+        ],
+        "source_issue_identity": null
+      },
+      "origin_category": null,
+      "verification_method": "model_review",
+      "verification_status": "unverified"
+    }
+  ]
+}

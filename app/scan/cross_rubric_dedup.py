@@ -25,7 +25,7 @@ from app.scan.external_operation_identity import (
 )
 from app.scan.query_read_identity import (
     MECHANISM as QUERY_READ, CLAIM_SCOPE as QUERY_READ_SCOPE,
-    compatible_query_read_claims, valid_query_read_identity,
+    compatible_query_read_claims, query_read_premise_projection, valid_query_read_identity,
 )
 from app.scan.python_sql_identity import (
     MECHANISM as PYTHON_SQL, compatible_sql_claims, valid_sql_identity,
@@ -170,6 +170,8 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
         a, b = ea.get(key), eb.get(key)
         if network and key == "premise_checks":
             a, b = network_premise_projection(a, identity_a), network_premise_projection(b, identity_b)
+        if query_read and key == "premise_checks":
+            a, b = query_read_premise_projection(a, identity_a), query_read_premise_projection(b, identity_b)
         if has_source:
             a, b = _check_status(a), _check_status(b)
         if a != b:

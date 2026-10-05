@@ -58,3 +58,44 @@ Finding JSON is needed to measure the report-wide change without reconstruction.
 
 Engine version advances to `2026-10-05-3` because grouping can change cached
 audit output. Existing saved reports are not rewritten by this code change.
+
+## Follow-up with the full stored JSON
+
+The full database export subsequently supplied all 68 stored Findings,
+including 44 LLM cards representing 53 original LLM observations. Replaying
+their stored identities alone is unchanged. The complete pagination pair
+revealed a second blocker beyond title grammar: the first model check names
+the table `messages`, while the second names the local variable `query`.
+Both check ranges are 55–65 with source quote ranges 53–67. This means the
+title-only change above was insufficient for this actual pair.
+
+The follow-up resolves a direct local SELECT binding from the archive, with
+one direct await and only known same-binding filter/order updates. The proof
+is independent of the model selector and records an identifier hash and byte
+span in identity v2. Escapes, unknown writes, aliases, shadowing, optional
+calls, escaped identifier spellings and multiple consumptions abstain. This
+is a source identity, not proof of SDK behavior or a missing runtime limit.
+
+Only pending (`not_checked`) premises citing the SELECT can compare a proven
+binding target with its table. Observed/contradicted results and other status
+fields retain their distinctions. Original targets and all evidence remain
+unchanged in `grouped_originals`; v1 identities retain table-only semantics.
+
+Offline verification on the exact archive re-resolved only the two pagination
+identities from their saved title, narrative, conditions, quote coordinates
+and recorded premise requests, then regrouped all stored Findings:
+
+- total cards: **68 → 67**;
+- LLM cards: **44 → 43**;
+- original LLM observations: **53 → 53**;
+- every original field is retained, apart from the deliberately recomputed
+  pagination identities; a second grouping pass is identical;
+- only the pagination pair gains a group; other candidates remain separate.
+
+The saved-pair regression fixture retains the two complete Findings and the
+source GET handler with its original line numbers. The fixture's source is a
+bounded excerpt, so its file hash intentionally differs from the full archive;
+the report-wide offline measurement above uses the full archive. No model
+responses were regenerated and no production rows were rewritten.
+
+The follow-up engine version is `2026-10-05-4`.
