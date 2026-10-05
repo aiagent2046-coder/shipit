@@ -26,6 +26,11 @@ import httpx
 # can differ per provider — app/llm/pricing.py keys on the RESPONSE name.
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
+# Opt-in OpenAI-compatible model; both names were documented by AITunnel.
+# The pilot used medium effort without sampling parameters or tools. Keep
+# that request contract rather than inheriting Claude's max_tokens payload.
+LUNA_MODELS = frozenset({"gpt-6-luna", "openai/gpt-6-luna"})
+
 # Models that REJECT a non-default `temperature` with a 400, and for which
 # thinking is on by default.
 #
@@ -51,6 +56,7 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 # rather than a wrong number. Add a model's rows here AND in
 # app/llm/pricing.py before putting it in rotation.
 MODELS_WITHOUT_SAMPLING_PARAMS = frozenset({
+    *LUNA_MODELS,
     "claude-sonnet-5",
     "claude-opus-5",
     "claude-fable-5",
@@ -143,6 +149,9 @@ MODEL_INPUT_TOKENS = {
 # chars/token -- so a prompt built for it is about 24% smaller than its budget
 # allows. Wasteful, not dangerous, and the safe direction of the two.
 DEFAULT_INPUT_TOKENS = 200_000
+
+# Luna deliberately uses the conservative default above. The small pilot did
+# not measure its advertised million-token context on repository-sized input.
 
 # Characters per token on the code this scanner sends: 3,777,616 / 1,256,000
 # over four real rubric prompts. Not the ~4 that prose gets, which is where
@@ -432,6 +441,8 @@ class LLMClient:
         at temperature=0", which is why the content-digest cache, not this
         parameter, is what makes a re-audit reproducible.
         """
+        if p.model in LUNA_MODELS:
+            raise ValueError("Luna requires an OpenAI-compatible provider; configure ANTHROPIC_LLM_MODEL separately")
         body: dict = {
             "model": p.model,
             "max_tokens": max_tokens,
@@ -452,9 +463,9 @@ class LLMClient:
                         max_tokens: int) -> dict:
         """The /chat/completions body for the OpenAI-compatible provider.
 
-        No `thinking` key: it is not part of that wire format, and the
-        provider decides. Only the sampling parameter is conditional, for the
-        same 400 the Anthropic path avoids.
+        Luna's completion limit includes reasoning and visible text. Its
+        explicit medium effort matches the reviewed pilot. Claude retains its
+        existing max_tokens and sampling/cache behavior.
         """
         body: dict = {
             "model": p.model,
@@ -464,6 +475,10 @@ class LLMClient:
                 {"role": "user", "content": user},
             ],
         }
+        if p.model in LUNA_MODELS:
+            body.pop("max_tokens")
+            body["max_completion_tokens"] = max_tokens
+            body["reasoning_effort"] = "medium"
         if supports_sampling_params(p.model):
             body["temperature"] = 0
         if (os.environ.get("AITUNNEL_PROMPT_CACHE") == "1"
@@ -496,6 +511,14 @@ class LLMClient:
                 usage = _usage_anthropic(data, p.model)
             else:
                 choice = data["choices"][0]
+                if p.model in LUNA_MODELS:
+                    if data.get("model") not in LUNA_MODELS:
+                        raise ValueError("Luna served_model_mismatch")
+                    if choice.get("finish_reason") != "stop" or choice["message"].get("refusal"):
+                        # Even a parseable [] is not a completed review when
+                        # reasoning exhausted the limit or the model refused.
+                        # The exception path retains usage and billed cost.
+                        raise ValueError("Luna incomplete_or_refused_answer")
                 text = _answer_or_raise(choice["message"].get("content"),
                                         p, choice, data.get("usage"))
                 usage = _usage_openai(data, p.model)

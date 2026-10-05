@@ -98,7 +98,6 @@ from app.ingest.stack_detect import detect_stack
 from app import sandbox_client
 from app.sandbox_client import SandboxRunnerUnavailable
 from app.llm.client import LLMClient
-from app.llm import pricing
 from app.log_context import log_context, set_log_context
 from app.logging_config import configure_logging, environment_from_env
 from app.monitor import (
@@ -405,7 +404,7 @@ async def _record_llm_usage(
     if not isinstance(llm_stats, dict):
         return
     try:
-        from app.llm.accounting import provider_usage_summary
+        from app.llm.accounting import estimate_stats_cost, provider_usage_summary
 
         calls = int(llm_stats.get("calls") or 0)
         try:
@@ -418,7 +417,7 @@ async def _record_llm_usage(
         input_tokens = int(llm_stats.get("input_tokens") or 0)
         output_tokens = int(llm_stats.get("output_tokens") or 0)
         model = llm_stats.get("model") or "unknown"
-        cost = pricing.cost_usd(model, input_tokens, output_tokens)
+        cost = estimate_stats_cost(llm_stats)
         await llm_usage_repo.create(
             job_type=job_type, job_id=job_id, account_id=account_id,
             model=model, calls=calls, input_tokens=input_tokens,

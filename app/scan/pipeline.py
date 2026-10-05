@@ -23,11 +23,14 @@ from app.scan.manifest import scan_manifest
 from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.static import run_static_scan
+from app.scan.model_identity import configured_model_engine_version
 from app.scan.version import AUDIT_ENGINE_VERSION
 from app.scan.check_failure_scoring import failed_check_categories
 from app.sca.osv import OsvClient
 from app.sca.stage import run_sca_stage
 from app.sca.snapshot import run_snapshot_stage
+
+AUDIT_ENGINE_VERSION = configured_model_engine_version(AUDIT_ENGINE_VERSION)
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +52,11 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # invalidate cached results: the LLM prompt (app/scan/llm_scan.py), the
 # scoring formula (app/scan/scoring.py), the static rules
 # (app/scan/secrets.py, app/scan/checks.py), or the LLM model. The model is
-# a RUNTIME value (DEFAULT_MODEL / the LLM_MODEL env override in
-# app/llm/client.py), NOT a code constant, so changing LLM_MODEL alone will
-# not change this string -- an operator who switches models must bump this
-# by hand, or the cache will keep serving pre-switch results.
+# a RUNTIME value in app/llm/client.py. A configured primary provider chain
+# containing Luna gets an automatic model-policy suffix, shared by API and
+# worker; restart both processes after configuration changes. Other model
+# switches (including preview-only changes) still require a manual version
+# bump, or the cache will keep serving pre-switch results.
 #
 # Folded into the audit cache key alongside content_digest (see
 # AuditRepository.get_by_content_hash): a bump makes the next audit of

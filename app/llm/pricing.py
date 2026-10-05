@@ -28,9 +28,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-# The date the prices below were last verified against the providers. Bump it
-# whenever PRICE_TABLE changes, so a stale table is visible rather than silent.
-PRICING_LAST_UPDATED = "2026-08-28"
+# Last table change, not a claim that every historical row was reverified.
+# 2026-10-05: verified Luna's official rates; existing model rows are unchanged.
+PRICING_LAST_UPDATED = "2026-10-05"
 
 _PER_MILLION = Decimal(1_000_000)
 
@@ -119,6 +119,24 @@ _GLM_5_3_FLASH: dict[str, Decimal] = {
     "input": Decimal("0.08"),
     "output": Decimal("0.25"),
 }
+# OpenAI Standard list prices, verified 2026-10-05:
+# https://developers.openai.com/api/docs/models/gpt-6-luna
+# Cache reads cost $0.01/MTok; cache writes cost $0.125/MTok. Requests over
+# 272,000 input tokens use 2x input/cache rates and 1.5x output for the FULL
+# request. cost_usd() only receives job totals, so it cannot reconstruct cache
+# mixes or individual request sizes. Its Luna estimate therefore charges all
+# input at the cache-write rate and applies the long-context multipliers when
+# the aggregate crosses the threshold. This can overestimate cached reads or
+# many short requests, but avoids undercounting a single long request. It is
+# an internal Standard-rate estimate, not an AITunnel invoice or hard bound;
+# actual provider RUB charges remain recorded separately.
+_LUNA_MODELS = frozenset({"gpt-6-luna", "openai/gpt-6-luna"})
+_LUNA_LONG_CONTEXT_THRESHOLD = 272_000
+_LUNA_CACHE_WRITE_RATE = Decimal("0.125")
+_LUNA: dict[str, Decimal] = {
+    "input": Decimal("0.10"),
+    "output": Decimal("0.50"),
+}
 # grok-4.20-multi-agent has no model-specific price. The operator reported
 # these AITunnel samples on 2026-09-13 (input/output tokens -> billed RUB):
 #
@@ -152,6 +170,8 @@ PRICE_TABLE: dict[str, dict[str, Decimal]] = {
     "claude-haiku-4.5": _HAIKU_4_5,
     "claude-haiku-4-5": _HAIKU_4_5,
     "glm-5.3-flash": _GLM_5_3_FLASH,
+    "gpt-6-luna": _LUNA,
+    "openai/gpt-6-luna": _LUNA,
 }
 
 # Fallback for a model not in the table (an unexpected served model, or a new
@@ -171,11 +191,21 @@ def price_for(model: str) -> dict[str, Decimal]:
 
 
 def cost_usd(model: str, input_tokens: int, output_tokens: int) -> Decimal:
-    """Computed USD cost for a job's summed token counts. Decimal throughout so
+    """Estimated USD cost for a job's summed token counts. Decimal throughout so
     money never carries binary-float rounding error; the caller stores it into
     numeric(12,6). Negative/garbage token counts are clamped to 0 so a provider
-    returning a nonsense usage block can never produce a negative cost."""
+    returning a nonsense usage block can never produce a negative cost.
+
+    Luna uses a conservative cache-write input rate and an aggregate threshold
+    for long-context pricing; see its table comment for the estimation limits.
+    """
     price = price_for(model)
     inp = Decimal(max(0, int(input_tokens)))
     out = Decimal(max(0, int(output_tokens)))
-    return (inp * price["input"] + out * price["output"]) / _PER_MILLION
+    input_rate, output_rate = price["input"], price["output"]
+    if model in _LUNA_MODELS:
+        input_rate = max(input_rate, _LUNA_CACHE_WRITE_RATE)
+        if inp > _LUNA_LONG_CONTEXT_THRESHOLD:
+            input_rate *= Decimal("2")
+            output_rate *= Decimal("1.5")
+    return (inp * input_rate + out * output_rate) / _PER_MILLION

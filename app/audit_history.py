@@ -8,7 +8,7 @@ from copy import deepcopy
 import json
 import asyncio
 
-from app.llm import pricing
+from app.llm.accounting import estimate_stats_cost
 from app.scan import llm_scan
 from app.scan.pipeline import FREE_TIER_MODEL, FREE_TIER_MODEL_BY_KIND, FREE_TIER_RUBRICS
 
@@ -158,8 +158,7 @@ async def ensure_paid_baseline(repo, scan, raw, client, digest, engine, *, runne
             refreshed["score"], refreshed["findings"], "refreshed",
             baseline.get("audit_id") or baseline.get("source_audit_id"))}
     usage = scan.get("llm_usage") or {}
-    remaining = llm_scan.JOB_COST_CAP_USD - pricing.cost_usd(
-        usage.get("model"), usage.get("input_tokens", 0), usage.get("output_tokens", 0))
+    remaining = llm_scan.JOB_COST_CAP_USD - estimate_stats_cost(usage)
     skip = ("no_providers_configured" if not client.providers else
             "paid_job_cost_cap" if remaining <= 0 else None)
     preview_client = client if skip else client.with_model(FREE_TIER_MODEL, by_kind=FREE_TIER_MODEL_BY_KIND)

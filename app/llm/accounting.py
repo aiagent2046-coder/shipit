@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, localcontext
 
+from app.llm import pricing
+
 
 def provider_usage_summary(attempts: list[dict]) -> dict | None:
     """Unknown charges are never zero, even when another attempt has a price.
@@ -48,3 +50,20 @@ def provider_usage_summary(attempts: list[dict]) -> dict | None:
         "cost_complete": complete,
         "attempts": attempts,
     }
+
+
+def estimate_stats_cost(stats: dict) -> Decimal:
+    """Estimate successful completions at each served model's own USD rate.
+
+    Older rows and test doubles only carry aggregate tokens. Retain that
+    calculation when no per-model breakdown was recorded. Failed attempts
+    remain outside this historical USD estimate; their actual RUB charges,
+    including unknown charges, are retained separately in provider_usage.
+    """
+    models = stats.get("successful_model_usage")
+    if models is not None:
+        return sum((pricing.cost_usd(model, row["input_tokens"], row["output_tokens"])
+                    for model, row in models.items()), Decimal("0"))
+    return pricing.cost_usd(stats.get("model") or "unknown",
+                            stats.get("input_tokens") or 0,
+                            stats.get("output_tokens") or 0)
