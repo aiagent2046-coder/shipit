@@ -25,6 +25,7 @@ from app.llm.response_diagnostics import response_diagnostics
 from app.scan.prompt_context import PromptExcerpt, numbered_lines, python_excerpt, related_test
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
 from app.scan.claim_narrative import project_claim_narrative
+from app.scan.fact_projection_grouping import group_fact_projections
 from app.scan.syntax_claims import SyntaxVerifier
 from app.scan.premise_context import finding_context
 from app.scan.recommendations import prepare_recommendation
@@ -1685,6 +1686,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     # Grouping retains original model prose. Project only after recommendation
     # preparation and grouping, so neither can reactivate a contradicted claim.
     grouped = [project_claim_narrative(f, current_source_hashes=current_source_hashes) for f in grouped]
+    grouped = group_fact_projections(grouped)
     for row in stats.model_findings:
         row["saved"] = sum((f.claim_evidence or {}).get("producer", {}).get("model") == row["model"]
                            for f in grouped)

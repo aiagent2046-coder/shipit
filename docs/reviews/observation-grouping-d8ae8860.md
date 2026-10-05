@@ -99,3 +99,44 @@ the report-wide offline measurement above uses the full archive. No model
 responses were regenerated and no production rows were rewritten.
 
 The follow-up engine version is `2026-10-05-4`.
+
+## Fact-count projection grouping
+
+The complete stored Findings 18 and 36 have the same deterministic
+`fact_input_count_unbounded` correction: `sanitizeFacts` caps the collection
+at 40 items before the recorded renderer. This contradicts the claim that
+an uncapped number of facts reaches that renderer, but says nothing about
+whether the preceding database read, complete prompt or bill is bounded.
+Their original model narratives and required conditions differ; in particular,
+36 retains an original condition claiming the helper does not cap fact count.
+Those historical statements must not become a shared verified hypothesis.
+
+A separate pass now groups matching **corrected interpretations** after
+narrative projection. Each projection is validated against its saved source
+binding and wording. All other fields must match exactly, including the full
+source assessments, context, pending premise checks, severity, category,
+verification status and producer model/rubric. Only confidence, response
+number, pending required conditions and superseded model prose may differ.
+The highest-confidence representative is retained without increasing its
+confidence. Complete projected originals, including all original model prose
+and conditions, remain in `grouped_originals` and public HTML/web/SARIF exports.
+
+This pass handles singleton findings only. Existing groups are not flattened
+or extended, even if their representative appears identical: one root does not
+establish the compatibility of every historical interpretation. Reapplying
+this pass is idempotent. Other mechanisms and generic hypothesis grouping
+are unchanged. It does not reduce the cost of the model calls already made.
+
+Offline replay starts from the 67-card baseline above (only the two pagination
+identities re-resolved against the same archive), then applies the new pass:
+
+- total cards: **67 → 66**;
+- LLM cards: **43 → 42**;
+- original LLM observations: **53 → 53**, with every field unchanged;
+- only the fact-count pair gains a group; existing groups remain untouched.
+
+Both complete saved fact Findings are retained as a regression fixture. A
+mocked fresh pipeline test also produces two different model narratives and
+verifies the correction, grouping, preservation and accepted/saved counts.
+No model calls were made and no production audit rows were rewritten.
+Engine version advances to `2026-10-05-5` for the changed cached report output.

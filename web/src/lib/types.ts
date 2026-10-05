@@ -270,7 +270,7 @@ export interface Finding {
     source_context?: { kind: string; uri_scheme?: string; uri_kind?: string } | null;
     grouped_originals?: Record<string, unknown>[];
     grouped_claim_scope?: {
-      mechanism: "react_network_rejection_cleanup" | "query_read_volume";
+      mechanism: "react_network_rejection_cleanup" | "query_read_volume" | "fact_count_projection";
       scope: string;
       consequences: string;
       title_source_disagreements?: { original_index: number; result: "different_handler_label";

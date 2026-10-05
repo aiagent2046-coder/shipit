@@ -901,5 +901,1281 @@
         "consequences": "Original conditions, retention assumptions and claimed costs remain separate and unverified."
       }
     }
+  },
+  "fact_group": {
+    "rule_id": "llm-money",
+    "title": "Fact count is capped before rendering; database read needs separate review",
+    "severity": "low",
+    "confidence": 0.7,
+    "category": "Money & Data",
+    "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+    "line": 217,
+    "masked": "",
+    "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+    "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+    "context": null,
+    "origin_category": null,
+    "source": "llm",
+    "verification_status": "unverified",
+    "verification_method": "model_review",
+    "claim_evidence": {
+      "version": 1,
+      "producer": {
+        "model": "claude-sonnet-4.6",
+        "rubric": "money",
+        "response": 3
+      },
+      "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check.",
+      "source_check": {
+        "kind": "quote_match",
+        "line_end": 224,
+        "line_start": 215
+      },
+      "syntax_check": {
+        "kind": "unsupported",
+        "claim": "Unsupported syntax claim.",
+        "detail": "No supported, unambiguous syntax premise recognized in the title.",
+        "result": "not_checked"
+      },
+      "context_checks": [
+        {
+          "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+          "kind": "cost_context",
+          "line": 119,
+          "scope": "POST",
+          "checks": [
+            {
+              "kind": "imported_helper_slice_bounds",
+              "line": 223,
+              "detail": "This direct named import resolves to a helper with literal numeric slice bounds in its returned expression. Omitted options defaults are listed separately. Other prompt inputs, appended suffixes, transformations, runtime method bindings and the total size or cost of a model request are not verified.",
+              "result": "observed",
+              "slices": [
+                {
+                  "end": 40,
+                  "line": 41,
+                  "uses_omitted_options_default": true
+                },
+                {
+                  "end": 500,
+                  "line": 42,
+                  "uses_omitted_options_default": true
+                }
+              ],
+              "summary": "Call at line 223 links to a helper whose returned expression contains slice bounds: 0..40 at helper line 41, 0..500 at helper line 42. These are source bounds, not proof of total prompt size or cost.",
+              "helper_file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+              "helper_line": 32,
+              "import_line": 5,
+              "helper_scope": "sanitizeFacts"
+            }
+          ],
+          "result": "observed",
+          "line_end": 458
+        },
+        {
+          "kind": "finite_clamp_rpc_argument",
+          "claim": "An immutable finite clamp result is the recorded direct RPC-syntax argument.",
+          "scope": "bounded_source_context",
+          "detail": "No bound limit observation in the supported direct source path. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+          "result": "not_checked"
+        },
+        {
+          "kind": "imported_collection_return_cap",
+          "claim": "The recorded direct imported helper call has a return-chain slice and a bound cap argument.",
+          "scope": "bounded_source_context",
+          "detail": "The bound call uses a direct return-chain slice cap; preceding query size and later consumers are not checked. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+          "result": "observed",
+          "source_binding": {
+            "call": {
+              "span": [
+                11797,
+                11823
+              ],
+              "line_end": 223,
+              "line_start": 223
+            },
+            "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+            "span": [
+              6609,
+              25315
+            ],
+            "slice": {
+              "span": [
+                1927,
+                2026
+              ],
+              "line_end": 41,
+              "line_start": 38
+            },
+            "upper": 40,
+            "callee": {
+              "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+              "span": [
+                1690,
+                2097
+              ],
+              "line_end": 43,
+              "line_start": 32,
+              "source_sha256": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813"
+            },
+            "import": {
+              "name": "sanitizeFacts",
+              "span": [
+                309,
+                500
+              ],
+              "line_end": 5,
+              "line_start": 5
+            },
+            "return": {
+              "span": [
+                1920,
+                2095
+              ],
+              "line_end": 42,
+              "line_start": 38
+            },
+            "line_end": 458,
+            "override": null,
+            "parameter": "maxFacts",
+            "line_start": 119,
+            "resolution": {
+              "kind": "literal_config_source_candidate",
+              "configuration": {
+                "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json",
+                "span": [
+                  0,
+                  698
+                ],
+                "line_end": 41,
+                "line_start": 1,
+                "source_sha256": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97"
+              }
+            },
+            "argument_mode": "omitted_options_default",
+            "caller_result": {
+              "span": [
+                11786,
+                11823
+              ],
+              "line_end": 223,
+              "line_start": 223
+            },
+            "source_sha256": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c",
+            "input_argument": {
+              "span": [
+                11811,
+                11822
+              ],
+              "line_end": 223,
+              "line_start": 223
+            },
+            "cap_declaration": {
+              "span": [
+                1833,
+                1870
+              ],
+              "line_end": 36,
+              "line_start": 36
+            },
+            "default_declaration": {
+              "span": [
+                1374,
+                1388
+              ],
+              "line_end": 28,
+              "line_start": 28
+            },
+            "runtime_array_identity": "not_checked"
+          }
+        }
+      ],
+      "premise_checks": [
+        {
+          "kind": "query_limit_unbounded",
+          "claim": "The query receives the raw limit without a finite bounded clamp.",
+          "detail": "No unambiguous source counterexample found within this check's scope.",
+          "result": "not_checked",
+          "target": "facts",
+          "line_end": 222,
+          "line_start": 217,
+          "anchor_line_end": 222,
+          "anchor_line_start": 217
+        }
+      ],
+      "conditions_status": "not_checked",
+      "consequence_status": "not_checked",
+      "source_assessments": [
+        {
+          "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+          "kind": "fact_input_count_unbounded",
+          "claim": "The cited query result reaches the recorded fact-block consumer without a collection-count cap.",
+          "detail": "The cited query-result binding enters the capped helper and its unchanged returned collection is the sole array argument of the recorded direct fact-block renderer. This contradicts an uncapped fact count on that source path. The preceding database read is not capped by this downstream slice; no total prompt-size or billing conclusion follows. Only this recorded source premise is assessed; the whole finding is not dismissed. Runtime bindings, other operations and paths, data volume, token/byte totals, billing, authorization policy and harmful outcomes remain unverified.",
+          "method": "source_ast",
+          "result": "contradicted",
+          "line_end": 458,
+          "line_start": 119,
+          "source_sha256": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c",
+          "whole_finding": false,
+          "source_binding": {
+            "call": {
+              "span": [
+                11797,
+                11823
+              ],
+              "line_end": 223,
+              "line_start": 223
+            },
+            "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+            "span": [
+              6609,
+              25315
+            ],
+            "slice": {
+              "span": [
+                1927,
+                2026
+              ],
+              "line_end": 41,
+              "line_start": 38
+            },
+            "upper": 40,
+            "callee": {
+              "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+              "span": [
+                1690,
+                2097
+              ],
+              "line_end": 43,
+              "line_start": 32,
+              "source_sha256": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813"
+            },
+            "import": {
+              "name": "sanitizeFacts",
+              "span": [
+                309,
+                500
+              ],
+              "line_end": 5,
+              "line_start": 5
+            },
+            "return": {
+              "span": [
+                1920,
+                2095
+              ],
+              "line_end": 42,
+              "line_start": 38
+            },
+            "consumer": {
+              "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+              "span": [
+                2476,
+                2874
+              ],
+              "return": {
+                "span": [
+                  2561,
+                  2872
+                ],
+                "line_end": 55,
+                "line_start": 50
+              },
+              "line_end": 56,
+              "line_start": 48,
+              "mapped_input": {
+                "span": [
+                  2816,
+                  2840
+                ],
+                "line_end": 54,
+                "line_start": 54
+              },
+              "source_sha256": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813"
+            },
+            "line_end": 458,
+            "override": null,
+            "parameter": "maxFacts",
+            "line_start": 119,
+            "resolution": {
+              "kind": "literal_config_source_candidate",
+              "configuration": {
+                "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json",
+                "span": [
+                  0,
+                  698
+                ],
+                "line_end": 41,
+                "line_start": 1,
+                "source_sha256": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97"
+              }
+            },
+            "query_result": {
+              "span": [
+                11619,
+                11775
+              ],
+              "line_end": 221,
+              "line_start": 217
+            },
+            "argument_mode": "omitted_options_default",
+            "caller_result": {
+              "span": [
+                11786,
+                11823
+              ],
+              "line_end": 223,
+              "line_start": 223
+            },
+            "consumer_call": {
+              "span": [
+                13279,
+                13303
+              ],
+              "line_end": 242,
+              "line_start": 242
+            },
+            "source_sha256": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c",
+            "input_argument": {
+              "span": [
+                11811,
+                11822
+              ],
+              "line_end": 223,
+              "line_start": 223
+            },
+            "cap_declaration": {
+              "span": [
+                1833,
+                1870
+              ],
+              "line_end": 36,
+              "line_start": 36
+            },
+            "consumer_import": {
+              "span": [
+                309,
+                500
+              ],
+              "line_end": 5,
+              "line_start": 5
+            },
+            "total_prompt_bound": "not_checked",
+            "consumer_resolution": {
+              "kind": "literal_config_source_candidate",
+              "configuration": {
+                "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json",
+                "span": [
+                  0,
+                  698
+                ],
+                "line_end": 41,
+                "line_start": 1,
+                "source_sha256": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97"
+              }
+            },
+            "database_read_bound": "not_checked",
+            "default_declaration": {
+              "span": [
+                1374,
+                1388
+              ],
+              "line_end": 28,
+              "line_start": 28
+            },
+            "runtime_array_identity": "not_checked"
+          }
+        }
+      ],
+      "required_conditions": [
+        "A user has accumulated many facts over many conversations",
+        "No external cap on agent_context rows per user exists in the database (e.g. no trigger or application-level enforcement)"
+      ],
+      "narrative_projection": {
+        "kind": "fact_input_count_unbounded",
+        "active": {
+          "title": "Fact count is capped before rendering; database read needs separate review",
+          "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+          "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+          "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check."
+        },
+        "method": "source_bound_projection",
+        "version": 1,
+        "original": {
+          "title": "agent_context facts table fetched without a row limit — unbounded growth increases per-request token cost",
+          "fix_hint": "Verify whether `sanitizeFacts` in lib/agents/save-facts.ts applies a count limit (the file was not provided). If it does not, add `.limit(50)` to the query and/or cap the list in `sanitizeFacts` to a maximum number of facts (e.g. 50) to bound token usage per request.",
+          "producer": {
+            "model": "claude-sonnet-4.6",
+            "rubric": "money",
+            "response": 3
+          },
+          "explanation": "Every agent chat request fetches all facts for the user from `agent_context` with no LIMIT clause. The `sanitizeFacts` helper applies length limits per fact but does not cap the total number of facts fetched from the database. As a user accumulates facts over time (each conversation can add up to 10 new facts via `<save_facts>` blocks), the full list is prepended to every Claude request. This increases token consumption and therefore API cost proportionally with the number of stored facts, with no ceiling.",
+          "observation": "The query at lines 217-222 selects all `content` rows for the user with no `.limit()`. The `sanitizeFacts` call at line 224 truncates individual fact strings but does not limit the count. The `buildFactBlock` function receives the full list."
+        },
+        "source_hashes": {
+          "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97",
+          "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813",
+          "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c"
+        },
+        "whole_finding": false,
+        "applied_checks": [
+          "fact_input_count_unbounded"
+        ],
+        "previous_fix_hint": "Verify whether `sanitizeFacts` in lib/agents/save-facts.ts applies a count limit (the file was not provided). If it does not, add `.limit(50)` to the query and/or cap the list in `sanitizeFacts` to a maximum number of facts (e.g. 50) to bound token usage per request."
+      },
+      "source_issue_identity": null,
+      "grouped_originals": [
+        {
+          "rule_id": "llm-money",
+          "title": "Fact count is capped before rendering; database read needs separate review",
+          "severity": "low",
+          "confidence": 0.7,
+          "category": "Money & Data",
+          "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+          "line": 217,
+          "masked": "",
+          "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+          "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+          "context": null,
+          "origin_category": null,
+          "source": "llm",
+          "verification_status": "unverified",
+          "verification_method": "model_review",
+          "claim_evidence": {
+            "version": 1,
+            "producer": {
+              "model": "claude-sonnet-4.6",
+              "rubric": "money",
+              "response": 3
+            },
+            "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check.",
+            "source_check": {
+              "kind": "quote_match",
+              "line_end": 224,
+              "line_start": 215
+            },
+            "syntax_check": {
+              "kind": "unsupported",
+              "claim": "Unsupported syntax claim.",
+              "detail": "No supported, unambiguous syntax premise recognized in the title.",
+              "result": "not_checked"
+            },
+            "context_checks": [
+              {
+                "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+                "kind": "cost_context",
+                "line": 119,
+                "scope": "POST",
+                "checks": [
+                  {
+                    "kind": "imported_helper_slice_bounds",
+                    "line": 223,
+                    "detail": "This direct named import resolves to a helper with literal numeric slice bounds in its returned expression. Omitted options defaults are listed separately. Other prompt inputs, appended suffixes, transformations, runtime method bindings and the total size or cost of a model request are not verified.",
+                    "result": "observed",
+                    "slices": [
+                      {
+                        "end": 40,
+                        "line": 41,
+                        "uses_omitted_options_default": true
+                      },
+                      {
+                        "end": 500,
+                        "line": 42,
+                        "uses_omitted_options_default": true
+                      }
+                    ],
+                    "summary": "Call at line 223 links to a helper whose returned expression contains slice bounds: 0..40 at helper line 41, 0..500 at helper line 42. These are source bounds, not proof of total prompt size or cost.",
+                    "helper_file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+                    "helper_line": 32,
+                    "import_line": 5,
+                    "helper_scope": "sanitizeFacts"
+                  }
+                ],
+                "result": "observed",
+                "line_end": 458
+              },
+              {
+                "kind": "finite_clamp_rpc_argument",
+                "claim": "An immutable finite clamp result is the recorded direct RPC-syntax argument.",
+                "scope": "bounded_source_context",
+                "detail": "No bound limit observation in the supported direct source path. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+                "result": "not_checked"
+              },
+              {
+                "kind": "imported_collection_return_cap",
+                "claim": "The recorded direct imported helper call has a return-chain slice and a bound cap argument.",
+                "scope": "bounded_source_context",
+                "detail": "The bound call uses a direct return-chain slice cap; preceding query size and later consumers are not checked. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+                "result": "observed",
+                "source_binding": {
+                  "call": {
+                    "span": [
+                      11797,
+                      11823
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+                  "span": [
+                    6609,
+                    25315
+                  ],
+                  "slice": {
+                    "span": [
+                      1927,
+                      2026
+                    ],
+                    "line_end": 41,
+                    "line_start": 38
+                  },
+                  "upper": 40,
+                  "callee": {
+                    "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+                    "span": [
+                      1690,
+                      2097
+                    ],
+                    "line_end": 43,
+                    "line_start": 32,
+                    "source_sha256": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813"
+                  },
+                  "import": {
+                    "name": "sanitizeFacts",
+                    "span": [
+                      309,
+                      500
+                    ],
+                    "line_end": 5,
+                    "line_start": 5
+                  },
+                  "return": {
+                    "span": [
+                      1920,
+                      2095
+                    ],
+                    "line_end": 42,
+                    "line_start": 38
+                  },
+                  "line_end": 458,
+                  "override": null,
+                  "parameter": "maxFacts",
+                  "line_start": 119,
+                  "resolution": {
+                    "kind": "literal_config_source_candidate",
+                    "configuration": {
+                      "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json",
+                      "span": [
+                        0,
+                        698
+                      ],
+                      "line_end": 41,
+                      "line_start": 1,
+                      "source_sha256": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97"
+                    }
+                  },
+                  "argument_mode": "omitted_options_default",
+                  "caller_result": {
+                    "span": [
+                      11786,
+                      11823
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "source_sha256": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c",
+                  "input_argument": {
+                    "span": [
+                      11811,
+                      11822
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "cap_declaration": {
+                    "span": [
+                      1833,
+                      1870
+                    ],
+                    "line_end": 36,
+                    "line_start": 36
+                  },
+                  "default_declaration": {
+                    "span": [
+                      1374,
+                      1388
+                    ],
+                    "line_end": 28,
+                    "line_start": 28
+                  },
+                  "runtime_array_identity": "not_checked"
+                }
+              }
+            ],
+            "premise_checks": [
+              {
+                "kind": "query_limit_unbounded",
+                "claim": "The query receives the raw limit without a finite bounded clamp.",
+                "detail": "No unambiguous source counterexample found within this check's scope.",
+                "result": "not_checked",
+                "target": "facts",
+                "line_end": 222,
+                "line_start": 217,
+                "anchor_line_end": 222,
+                "anchor_line_start": 217
+              }
+            ],
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "source_assessments": [
+              {
+                "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+                "kind": "fact_input_count_unbounded",
+                "claim": "The cited query result reaches the recorded fact-block consumer without a collection-count cap.",
+                "detail": "The cited query-result binding enters the capped helper and its unchanged returned collection is the sole array argument of the recorded direct fact-block renderer. This contradicts an uncapped fact count on that source path. The preceding database read is not capped by this downstream slice; no total prompt-size or billing conclusion follows. Only this recorded source premise is assessed; the whole finding is not dismissed. Runtime bindings, other operations and paths, data volume, token/byte totals, billing, authorization policy and harmful outcomes remain unverified.",
+                "method": "source_ast",
+                "result": "contradicted",
+                "line_end": 458,
+                "line_start": 119,
+                "source_sha256": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c",
+                "whole_finding": false,
+                "source_binding": {
+                  "call": {
+                    "span": [
+                      11797,
+                      11823
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+                  "span": [
+                    6609,
+                    25315
+                  ],
+                  "slice": {
+                    "span": [
+                      1927,
+                      2026
+                    ],
+                    "line_end": 41,
+                    "line_start": 38
+                  },
+                  "upper": 40,
+                  "callee": {
+                    "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+                    "span": [
+                      1690,
+                      2097
+                    ],
+                    "line_end": 43,
+                    "line_start": 32,
+                    "source_sha256": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813"
+                  },
+                  "import": {
+                    "name": "sanitizeFacts",
+                    "span": [
+                      309,
+                      500
+                    ],
+                    "line_end": 5,
+                    "line_start": 5
+                  },
+                  "return": {
+                    "span": [
+                      1920,
+                      2095
+                    ],
+                    "line_end": 42,
+                    "line_start": 38
+                  },
+                  "consumer": {
+                    "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+                    "span": [
+                      2476,
+                      2874
+                    ],
+                    "return": {
+                      "span": [
+                        2561,
+                        2872
+                      ],
+                      "line_end": 55,
+                      "line_start": 50
+                    },
+                    "line_end": 56,
+                    "line_start": 48,
+                    "mapped_input": {
+                      "span": [
+                        2816,
+                        2840
+                      ],
+                      "line_end": 54,
+                      "line_start": 54
+                    },
+                    "source_sha256": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813"
+                  },
+                  "line_end": 458,
+                  "override": null,
+                  "parameter": "maxFacts",
+                  "line_start": 119,
+                  "resolution": {
+                    "kind": "literal_config_source_candidate",
+                    "configuration": {
+                      "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json",
+                      "span": [
+                        0,
+                        698
+                      ],
+                      "line_end": 41,
+                      "line_start": 1,
+                      "source_sha256": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97"
+                    }
+                  },
+                  "query_result": {
+                    "span": [
+                      11619,
+                      11775
+                    ],
+                    "line_end": 221,
+                    "line_start": 217
+                  },
+                  "argument_mode": "omitted_options_default",
+                  "caller_result": {
+                    "span": [
+                      11786,
+                      11823
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "consumer_call": {
+                    "span": [
+                      13279,
+                      13303
+                    ],
+                    "line_end": 242,
+                    "line_start": 242
+                  },
+                  "source_sha256": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c",
+                  "input_argument": {
+                    "span": [
+                      11811,
+                      11822
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "cap_declaration": {
+                    "span": [
+                      1833,
+                      1870
+                    ],
+                    "line_end": 36,
+                    "line_start": 36
+                  },
+                  "consumer_import": {
+                    "span": [
+                      309,
+                      500
+                    ],
+                    "line_end": 5,
+                    "line_start": 5
+                  },
+                  "total_prompt_bound": "not_checked",
+                  "consumer_resolution": {
+                    "kind": "literal_config_source_candidate",
+                    "configuration": {
+                      "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json",
+                      "span": [
+                        0,
+                        698
+                      ],
+                      "line_end": 41,
+                      "line_start": 1,
+                      "source_sha256": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97"
+                    }
+                  },
+                  "database_read_bound": "not_checked",
+                  "default_declaration": {
+                    "span": [
+                      1374,
+                      1388
+                    ],
+                    "line_end": 28,
+                    "line_start": 28
+                  },
+                  "runtime_array_identity": "not_checked"
+                }
+              }
+            ],
+            "required_conditions": [
+              "A user has accumulated many facts over many conversations",
+              "No external cap on agent_context rows per user exists in the database (e.g. no trigger or application-level enforcement)"
+            ],
+            "narrative_projection": {
+              "kind": "fact_input_count_unbounded",
+              "active": {
+                "title": "Fact count is capped before rendering; database read needs separate review",
+                "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+                "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+                "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check."
+              },
+              "method": "source_bound_projection",
+              "version": 1,
+              "original": {
+                "title": "agent_context facts table fetched without a row limit — unbounded growth increases per-request token cost",
+                "fix_hint": "Verify whether `sanitizeFacts` in lib/agents/save-facts.ts applies a count limit (the file was not provided). If it does not, add `.limit(50)` to the query and/or cap the list in `sanitizeFacts` to a maximum number of facts (e.g. 50) to bound token usage per request.",
+                "producer": {
+                  "model": "claude-sonnet-4.6",
+                  "rubric": "money",
+                  "response": 3
+                },
+                "explanation": "Every agent chat request fetches all facts for the user from `agent_context` with no LIMIT clause. The `sanitizeFacts` helper applies length limits per fact but does not cap the total number of facts fetched from the database. As a user accumulates facts over time (each conversation can add up to 10 new facts via `<save_facts>` blocks), the full list is prepended to every Claude request. This increases token consumption and therefore API cost proportionally with the number of stored facts, with no ceiling.",
+                "observation": "The query at lines 217-222 selects all `content` rows for the user with no `.limit()`. The `sanitizeFacts` call at line 224 truncates individual fact strings but does not limit the count. The `buildFactBlock` function receives the full list."
+              },
+              "source_hashes": {
+                "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97",
+                "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813",
+                "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c"
+              },
+              "whole_finding": false,
+              "applied_checks": [
+                "fact_input_count_unbounded"
+              ],
+              "previous_fix_hint": "Verify whether `sanitizeFacts` in lib/agents/save-facts.ts applies a count limit (the file was not provided). If it does not, add `.limit(50)` to the query and/or cap the list in `sanitizeFacts` to a maximum number of facts (e.g. 50) to bound token usage per request."
+            },
+            "source_issue_identity": null
+          }
+        },
+        {
+          "rule_id": "llm-money",
+          "title": "Fact count is capped before rendering; database read needs separate review",
+          "severity": "low",
+          "confidence": 0.65,
+          "category": "Money & Data",
+          "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+          "line": 217,
+          "masked": "",
+          "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+          "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+          "context": null,
+          "origin_category": null,
+          "source": "llm",
+          "verification_status": "unverified",
+          "verification_method": "model_review",
+          "claim_evidence": {
+            "version": 1,
+            "producer": {
+              "model": "claude-sonnet-4.6",
+              "rubric": "money",
+              "response": 7
+            },
+            "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check.",
+            "source_check": {
+              "kind": "quote_match",
+              "line_end": 224,
+              "line_start": 215
+            },
+            "syntax_check": {
+              "kind": "unsupported",
+              "claim": "Unsupported syntax claim.",
+              "detail": "No supported, unambiguous syntax premise recognized in the title.",
+              "result": "not_checked"
+            },
+            "context_checks": [
+              {
+                "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+                "kind": "cost_context",
+                "line": 119,
+                "scope": "POST",
+                "checks": [
+                  {
+                    "kind": "imported_helper_slice_bounds",
+                    "line": 223,
+                    "detail": "This direct named import resolves to a helper with literal numeric slice bounds in its returned expression. Omitted options defaults are listed separately. Other prompt inputs, appended suffixes, transformations, runtime method bindings and the total size or cost of a model request are not verified.",
+                    "result": "observed",
+                    "slices": [
+                      {
+                        "end": 40,
+                        "line": 41,
+                        "uses_omitted_options_default": true
+                      },
+                      {
+                        "end": 500,
+                        "line": 42,
+                        "uses_omitted_options_default": true
+                      }
+                    ],
+                    "summary": "Call at line 223 links to a helper whose returned expression contains slice bounds: 0..40 at helper line 41, 0..500 at helper line 42. These are source bounds, not proof of total prompt size or cost.",
+                    "helper_file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+                    "helper_line": 32,
+                    "import_line": 5,
+                    "helper_scope": "sanitizeFacts"
+                  }
+                ],
+                "result": "observed",
+                "line_end": 458
+              },
+              {
+                "kind": "finite_clamp_rpc_argument",
+                "claim": "An immutable finite clamp result is the recorded direct RPC-syntax argument.",
+                "scope": "bounded_source_context",
+                "detail": "No bound limit observation in the supported direct source path. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+                "result": "not_checked"
+              },
+              {
+                "kind": "imported_collection_return_cap",
+                "claim": "The recorded direct imported helper call has a return-chain slice and a bound cap argument.",
+                "scope": "bounded_source_context",
+                "detail": "The bound call uses a direct return-chain slice cap; preceding query size and later consumers are not checked. Source context only; the finding, compound premises and harmful outcomes remain unverified. Only recorded bindings and direct source paths were checked; aliases, runtime builtin or module replacement, other callers, other operations and deferred effects are not resolved. A downstream collection slice does not bound the preceding database query, prove token/byte limits, or establish which data reaches a model. Missing observations do not establish missing guards.",
+                "result": "observed",
+                "source_binding": {
+                  "call": {
+                    "span": [
+                      11797,
+                      11823
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+                  "span": [
+                    6609,
+                    25315
+                  ],
+                  "slice": {
+                    "span": [
+                      1927,
+                      2026
+                    ],
+                    "line_end": 41,
+                    "line_start": 38
+                  },
+                  "upper": 40,
+                  "callee": {
+                    "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+                    "span": [
+                      1690,
+                      2097
+                    ],
+                    "line_end": 43,
+                    "line_start": 32,
+                    "source_sha256": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813"
+                  },
+                  "import": {
+                    "name": "sanitizeFacts",
+                    "span": [
+                      309,
+                      500
+                    ],
+                    "line_end": 5,
+                    "line_start": 5
+                  },
+                  "return": {
+                    "span": [
+                      1920,
+                      2095
+                    ],
+                    "line_end": 42,
+                    "line_start": 38
+                  },
+                  "line_end": 458,
+                  "override": null,
+                  "parameter": "maxFacts",
+                  "line_start": 119,
+                  "resolution": {
+                    "kind": "literal_config_source_candidate",
+                    "configuration": {
+                      "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json",
+                      "span": [
+                        0,
+                        698
+                      ],
+                      "line_end": 41,
+                      "line_start": 1,
+                      "source_sha256": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97"
+                    }
+                  },
+                  "argument_mode": "omitted_options_default",
+                  "caller_result": {
+                    "span": [
+                      11786,
+                      11823
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "source_sha256": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c",
+                  "input_argument": {
+                    "span": [
+                      11811,
+                      11822
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "cap_declaration": {
+                    "span": [
+                      1833,
+                      1870
+                    ],
+                    "line_end": 36,
+                    "line_start": 36
+                  },
+                  "default_declaration": {
+                    "span": [
+                      1374,
+                      1388
+                    ],
+                    "line_end": 28,
+                    "line_start": 28
+                  },
+                  "runtime_array_identity": "not_checked"
+                }
+              }
+            ],
+            "premise_checks": [
+              {
+                "kind": "query_limit_unbounded",
+                "claim": "The query receives the raw limit without a finite bounded clamp.",
+                "detail": "No unambiguous source counterexample found within this check's scope.",
+                "result": "not_checked",
+                "target": "facts",
+                "line_end": 222,
+                "line_start": 217,
+                "anchor_line_end": 222,
+                "anchor_line_start": 217
+              }
+            ],
+            "conditions_status": "not_checked",
+            "consequence_status": "not_checked",
+            "source_assessments": [
+              {
+                "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+                "kind": "fact_input_count_unbounded",
+                "claim": "The cited query result reaches the recorded fact-block consumer without a collection-count cap.",
+                "detail": "The cited query-result binding enters the capped helper and its unchanged returned collection is the sole array argument of the recorded direct fact-block renderer. This contradicts an uncapped fact count on that source path. The preceding database read is not capped by this downstream slice; no total prompt-size or billing conclusion follows. Only this recorded source premise is assessed; the whole finding is not dismissed. Runtime bindings, other operations and paths, data volume, token/byte totals, billing, authorization policy and harmful outcomes remain unverified.",
+                "method": "source_ast",
+                "result": "contradicted",
+                "line_end": 458,
+                "line_start": 119,
+                "source_sha256": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c",
+                "whole_finding": false,
+                "source_binding": {
+                  "call": {
+                    "span": [
+                      11797,
+                      11823
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts",
+                  "span": [
+                    6609,
+                    25315
+                  ],
+                  "slice": {
+                    "span": [
+                      1927,
+                      2026
+                    ],
+                    "line_end": 41,
+                    "line_start": 38
+                  },
+                  "upper": 40,
+                  "callee": {
+                    "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+                    "span": [
+                      1690,
+                      2097
+                    ],
+                    "line_end": 43,
+                    "line_start": 32,
+                    "source_sha256": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813"
+                  },
+                  "import": {
+                    "name": "sanitizeFacts",
+                    "span": [
+                      309,
+                      500
+                    ],
+                    "line_end": 5,
+                    "line_start": 5
+                  },
+                  "return": {
+                    "span": [
+                      1920,
+                      2095
+                    ],
+                    "line_end": 42,
+                    "line_start": 38
+                  },
+                  "consumer": {
+                    "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts",
+                    "span": [
+                      2476,
+                      2874
+                    ],
+                    "return": {
+                      "span": [
+                        2561,
+                        2872
+                      ],
+                      "line_end": 55,
+                      "line_start": 50
+                    },
+                    "line_end": 56,
+                    "line_start": 48,
+                    "mapped_input": {
+                      "span": [
+                        2816,
+                        2840
+                      ],
+                      "line_end": 54,
+                      "line_start": 54
+                    },
+                    "source_sha256": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813"
+                  },
+                  "line_end": 458,
+                  "override": null,
+                  "parameter": "maxFacts",
+                  "line_start": 119,
+                  "resolution": {
+                    "kind": "literal_config_source_candidate",
+                    "configuration": {
+                      "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json",
+                      "span": [
+                        0,
+                        698
+                      ],
+                      "line_end": 41,
+                      "line_start": 1,
+                      "source_sha256": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97"
+                    }
+                  },
+                  "query_result": {
+                    "span": [
+                      11619,
+                      11775
+                    ],
+                    "line_end": 221,
+                    "line_start": 217
+                  },
+                  "argument_mode": "omitted_options_default",
+                  "caller_result": {
+                    "span": [
+                      11786,
+                      11823
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "consumer_call": {
+                    "span": [
+                      13279,
+                      13303
+                    ],
+                    "line_end": 242,
+                    "line_start": 242
+                  },
+                  "source_sha256": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c",
+                  "input_argument": {
+                    "span": [
+                      11811,
+                      11822
+                    ],
+                    "line_end": 223,
+                    "line_start": 223
+                  },
+                  "cap_declaration": {
+                    "span": [
+                      1833,
+                      1870
+                    ],
+                    "line_end": 36,
+                    "line_start": 36
+                  },
+                  "consumer_import": {
+                    "span": [
+                      309,
+                      500
+                    ],
+                    "line_end": 5,
+                    "line_start": 5
+                  },
+                  "total_prompt_bound": "not_checked",
+                  "consumer_resolution": {
+                    "kind": "literal_config_source_candidate",
+                    "configuration": {
+                      "file": "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json",
+                      "span": [
+                        0,
+                        698
+                      ],
+                      "line_end": 41,
+                      "line_start": 1,
+                      "source_sha256": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97"
+                    }
+                  },
+                  "database_read_bound": "not_checked",
+                  "default_declaration": {
+                    "span": [
+                      1374,
+                      1388
+                    ],
+                    "line_end": 28,
+                    "line_start": 28
+                  },
+                  "runtime_array_identity": "not_checked"
+                }
+              }
+            ],
+            "required_conditions": [
+              "A user accumulates a large number of facts in agent_context over time",
+              "sanitizeFacts does not cap the total number of facts sent to Claude"
+            ],
+            "narrative_projection": {
+              "kind": "fact_input_count_unbounded",
+              "active": {
+                "title": "Fact count is capped before rendering; database read needs separate review",
+                "fix_hint": "Inspect the database query and its expected volume separately. If its read volume needs a limit or pagination, preserve the intended ordering and fact selection. Retain the existing collection cap; assess other prompt inputs and item lengths before claiming a total prompt or cost bound.",
+                "explanation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check. An uncapped fact count on this source path is contradicted. Database read volume, other prompt inputs, item lengths and actual charges remain separate questions; a downstream cap does not settle them.",
+                "observation": "The cited query result passes through a collection cap of 40 items before the recorded fact-block renderer. The preceding database read and the complete prompt have not been shown to be bounded by this check."
+              },
+              "method": "source_bound_projection",
+              "version": 1,
+              "original": {
+                "title": "agent_context facts loaded without a row limit on every agent chat request",
+                "fix_hint": "Verify whether sanitizeFacts in lib/agents/save-facts.ts caps the total number of facts. If not, add a .limit(N) to the Supabase query (e.g. the most recent 50 facts) and/or add a retention policy to agent_context.",
+                "producer": {
+                  "model": "claude-sonnet-4.6",
+                  "rubric": "money",
+                  "response": 7
+                },
+                "explanation": "Every agent chat request fetches all stored facts for the user from agent_context with no LIMIT clause. If a user accumulates many facts over time (the table is append-only with no retention policy), this query grows unboundedly and all facts are injected into the Claude prompt, increasing token cost per request.",
+                "observation": "The query at line 217 selects all rows for the user with no limit. The sanitizeFacts helper (imported at line 5) may apply a length cap per fact but does not cap the total number of facts fetched from the database."
+              },
+              "source_hashes": {
+                "aiagent2046-coder-ai-co-founder-matching-87553a7/tsconfig.json": "86c57aa7eec3e819fc7f5f7075219d9383d4ce824b751816636e581170b7cc97",
+                "aiagent2046-coder-ai-co-founder-matching-87553a7/lib/agents/save-facts.ts": "f8390f3576b1814a4750d5e59dea9bf0da559b590e7a888ed37d7f12ac214813",
+                "aiagent2046-coder-ai-co-founder-matching-87553a7/app/api/agents/chat/route.ts": "2105f473d46dffb4866eee07bf9bc834013f16815456482fbdb08dcbbb804d8c"
+              },
+              "whole_finding": false,
+              "applied_checks": [
+                "fact_input_count_unbounded"
+              ],
+              "previous_fix_hint": "Verify whether sanitizeFacts in lib/agents/save-facts.ts caps the total number of facts. If not, add a .limit(N) to the Supabase query (e.g. the most recent 50 facts) and/or add a retention policy to agent_context."
+            },
+            "source_issue_identity": null
+          }
+        }
+      ],
+      "grouped_claim_scope": {
+        "mechanism": "fact_count_projection",
+        "scope": "Same source path and corrected fact-count interpretation only.",
+        "consequences": "Original conditions and cost claims remain separate and unverified; repetition is not independent confirmation."
+      }
+    }
   }
 }
