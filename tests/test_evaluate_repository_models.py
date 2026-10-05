@@ -46,3 +46,25 @@ def test_resume_preserves_paid_failure_and_rejects_changed_snapshot():
     old['revision'] = 'b' * 40
     with pytest.raises(ValueError):
         trial.resume_results(expected, old)
+
+
+def test_small_scope_retains_line_numbers_and_refuses_oversize():
+    source = 'import os\n@decorator\ndef omitted():\n    return 1\n\ndef kept():\n    return 2\nwire()\n'
+    excerpt = trial.auth_excerpt(source, {"kept"})
+    assert excerpt.splitlines()[5:] == source.splitlines()[5:]
+    assert "omitted" not in excerpt
+    assert "@decorator" not in excerpt
+    assert "wire()" in excerpt
+
+    def make_data(extra=""):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as z:
+            for name in (*trial.AUTH_FILES, *trial.AUTH_EXCERPTS):
+                z.writestr(name, source + extra)
+        return buffer.getvalue()
+
+    report = trial.prepare_auth(make_data(), "a" * 40)
+    assert len(report["cases"]) * report["repeats"] * len(report["models"]) == 2
+    assert report["read_timeout_seconds"] == 600
+    with pytest.raises(ValueError, match="exceeds"):
+        trial.prepare_auth(make_data("#" + "x" * 180_000), "a" * 40)

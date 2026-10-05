@@ -107,12 +107,14 @@ def save(path: Path, report: dict) -> None:
 
 
 def run(report: dict, key: str, output: Path, max_tokens: int,
-        transport: httpx.BaseTransport | None = None, *, continue_invalid: bool = False) -> int:
+        transport: httpx.BaseTransport | None = None, *, continue_invalid: bool = False,
+        read_timeout: float = 180) -> int:
     # Fixed endpoint: credentials cannot be redirected by model output/configuration.
     report["state"] = "running"
     report["requested_max_tokens"] = max_tokens
     save(output, report)
-    with httpx.Client(timeout=180, transport=transport, follow_redirects=False) as client:
+    timeout = httpx.Timeout(read_timeout, connect=30)
+    with httpx.Client(timeout=timeout, transport=transport, follow_redirects=False) as client:
         jobs = [(repeat, case, model)
                 for repeat in range(1, report.get("repeats", 1) + 1)
                 for case in report["cases"]

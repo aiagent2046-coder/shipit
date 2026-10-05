@@ -6,6 +6,7 @@ Prepare-only by default. Raw responses are hypotheses, not production findings.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import io
 import json
@@ -64,6 +65,56 @@ def prepare_archive(data: bytes, revision: str) -> dict:
             "judgement": "Raw model responses and quote checks only; no production semantic filtering/dedup/scoring."}
 
 
+AUTH_FILES = (
+    "app/accounts.py", "app/routes/session.py", "app/routes/accounts.py",
+    "app/routes/_shared.py", "app/routes/dependencies.py", "app/ratelimit.py",
+)
+AUTH_EXCERPTS = {
+    "app/main.py": {"lifespan", "configure_cors", "add_security_headers",
+                    "new_request_id", "bind_request_context"},
+    "app/db.py": {"DatabaseNotConfigured", "database_url_from_env", "get_pool",
+                  "close_pool", "_row_to_account", "AccountRepository"},
+}
+
+
+def auth_excerpt(source: str, names: set[str]) -> str:
+    """Omit unrelated definitions, retaining original line numbers and wiring."""
+    lines = source.splitlines(keepends=True)
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name not in names:
+            start = min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1
+            lines[start:node.end_lineno] = ["\n"] * (node.end_lineno - start)
+    return "".join(lines)
+
+
+def prepare_auth(data: bytes, revision: str) -> dict:
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        files = {name: archive.read(name).decode("utf-8") for name in (*AUTH_FILES, *AUTH_EXCERPTS)}
+    selected = [(name, auth_excerpt(text, AUTH_EXCERPTS[name]) if name in AUTH_EXCERPTS else text)
+                for name, text in files.items()]
+    context = ("\nScope: account API-key login/logout, account routes, cookie handling, "
+               "dependencies, rate limiter, application middleware/router wiring and account storage. "
+               "main.py and db.py are excerpts: unrelated top-level definitions are omitted as blank lines; "
+               "original line numbers are retained. Other dependencies and deployment configuration are "
+               "not supplied. Do not assume omitted guards are absent. Evaluate only this scope.")
+    prompt = llm_scan.build_prompt(selected, "auth", context)
+    limit = 180_000
+    if len(prompt) + len(llm_scan.SYSTEM_PROMPT) > limit:
+        raise ValueError("Small auth prompt exceeds 180000 characters; no request sent")
+    case = {"id": "auth", "prompt": prompt,
+            "prompt_sha256": hashlib.sha256((llm_scan.SYSTEM_PROMPT + "\0" + prompt).encode()).hexdigest(),
+            "files": dict(selected), "submitted_chars": sum(len(t) for _, t in selected),
+            "submitted_files": list(files), "trimmed_files": list(AUTH_EXCERPTS)}
+    return {"version": 1, "suite": "pinned-auth-small", "revision": revision,
+            "archive_sha256": hashlib.sha256(data).hexdigest(),
+            "system_prompt": llm_scan.SYSTEM_PROMPT, "models": list(MODELS),
+            "cases": [case], "repeats": 1, "results": [], "state": "prepared",
+            "requested_max_tokens": 8192, "candidate_files": len(files),
+            "source_facts": {}, "input_character_limit": limit,
+            "read_timeout_seconds": 600,
+            "judgement": "Partial source scope; raw hypotheses require manual review. No automatic retries."}
+
+
 def resume_results(expected: dict, previous: dict) -> dict:
     for field in ("revision", "archive_sha256", "system_prompt", "models", "cases",
                   "repeats", "requested_max_tokens", "source_facts", "input_character_limit"):
@@ -73,7 +124,7 @@ def resume_results(expected: dict, previous: dict) -> dict:
     seen = set()
     for row in previous["results"]:
         key = (row["repeat"], row["case"], row["requested_model"])
-        if (key in seen or row["repeat"] not in (1, 2) or row["case"] not in hashes
+        if (key in seen or row["repeat"] not in range(1, expected["repeats"] + 1) or row["case"] not in hashes
                 or row["requested_model"] not in MODELS
                 or row["prompt_sha256"] != hashes[row["case"]]):
             raise ValueError("Invalid saved attempt")
@@ -84,6 +135,7 @@ def resume_results(expected: dict, previous: dict) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scope", choices=("full", "auth-small"), default="full")
     parser.add_argument("--repo", type=Path, default=ROOT)
     parser.add_argument("--revision", required=True, help="Full immutable commit SHA")
     parser.add_argument("--output", type=Path, required=True)
@@ -101,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Revision does not resolve to the requested commit")
     # No checkout, build, dependency installation or execution of scanned code.
     data = subprocess.check_output(["git", "-C", str(args.repo), "archive", "--format=zip", sha])
-    report = prepare_archive(data, sha)
+    report = (prepare_auth if args.scope == "auth-small" else prepare_archive)(data, sha)
     report["scanner_revision"] = subprocess.check_output(
         ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
     if args.resume:
@@ -110,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, KeyError, TypeError):
             parser.error("Saved trial does not match snapshot, prompts, budget or model selection")
         report["resumed_from"] = str(args.resume)
-    calls = len(report["cases"]) * 2 * len(MODELS) - len(report["results"])
+    calls = len(report["cases"]) * report["repeats"] * len(MODELS) - len(report["results"])
     print(f"Snapshot {sha}: {report['candidate_files']} candidate files; {calls} remaining requests", flush=True)
     for case in report["cases"]:
         print(f"{case['id']}: {len(case['submitted_files'])} files, "
@@ -124,7 +176,8 @@ def main(argv: list[str] | None = None) -> int:
         read_values(args.env).get("AITUNNEL_API_KEY") if args.env else None)
     if not key:
         parser.error("AITUNNEL_API_KEY unavailable")
-    return run(report, key, args.output, report["requested_max_tokens"], continue_invalid=True)
+    return run(report, key, args.output, report["requested_max_tokens"], continue_invalid=True,
+               read_timeout=report.get("read_timeout_seconds", 180))
 
 
 if __name__ == "__main__":
