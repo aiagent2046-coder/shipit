@@ -790,6 +790,9 @@ SYSTEM_PROMPT = (
 
 @dataclass
 class LLMScanStats:
+    # Every HTTP attempt, including billed empty replies and unknown timeouts.
+    # Existing calls/tokens retain their successful-completion semantics.
+    provider_attempts: list[dict] = field(default_factory=list)
     candidate_files: int | None = None
     submitted_files: tuple[str, ...] = ()
     selection_exclusions: dict[str, int] | None = None
@@ -1442,8 +1445,16 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   stats.submitted_files = tuple(sorted(set(stats.submitted_files) | {n for n, _ in selected}))
                   raw, usage = client.complete(SYSTEM_PROMPT, prompt,
                                                max_tokens=RUBRIC_MAX_TOKENS)
+                  stats.provider_attempts.extend(
+                      {**attempt, "rubric": rubric, "pass": _pass + 1,
+                       "request": stats.prompts}
+                      for attempt in getattr(usage, "attempts", ()))
                   break
               except LLMError as exc:
+                  stats.provider_attempts.extend(
+                      {**attempt, "rubric": rubric, "pass": _pass + 1,
+                       "request": stats.prompts}
+                      for attempt in getattr(exc, "attempts", ()))
                   # A provider refusing the request for its SIZE is a
                   # measurement, not a verdict. Our ceiling comes from
                   # converting a token window with an average characters-per-
@@ -1503,6 +1514,11 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
               stats.model_findings.append(processing)
           processing["responses"] += 1
           parsed = parse_response(raw)
+          # Syntax/array status is separate from transport completion. A valid
+          # array still does not establish finding truth or source accuracy.
+          if stats.provider_attempts and stats.provider_attempts[-1]["request"] == stats.prompts:
+              stats.provider_attempts[-1]["answer_status"] = (
+                  "invalid_json" if parsed is None else "empty_array" if not parsed else "json_array")
           if parsed is None:
               stats.invalid_responses += 1
               processing["invalid_responses"] += 1

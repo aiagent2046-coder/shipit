@@ -99,6 +99,35 @@ async def real_db(monkeypatch):
     await db_mod.close_pool()
 
 
+async def test_llm_provider_usage_roundtrip_and_legacy_null(real_db):
+    from decimal import Decimal
+    from app.db import LlmUsageRepository
+
+    repo = LlmUsageRepository()
+    common = dict(job_type="audit", job_id=None, account_id=None, model="claude-sonnet-4.6",
+                  calls=0, input_tokens=0, output_tokens=0, cost_usd=Decimal("0"))
+    metadata = {"version": 1, "known_cost_rub": "4.35", "cost_rub": None, "cost_complete": False,
+                "attempt_count": 2, "unpriced_attempts": 1,
+                "attempts": [{"cost_rub": "4.35", "finish_reason": "length", "rubric": "auth", "pass": 1},
+                             {"cost_rub": None, "error": "ReadTimeout", "rubric": "auth", "pass": 1}]}
+    inserted = []
+    try:
+        for value in (metadata, None):
+            row = await repo.create(**common, **({"provider_usage": value} if value is not None else {}))
+            assert row is not None
+            inserted.append(row["id"])
+            assert row["provider_usage"] == value
+            pool = await db_mod.get_pool()
+            async with pool.connection() as conn:
+                cur = await conn.execute("select provider_usage from llm_usage where id = %s", (row["id"],))
+                assert (await cur.fetchone())["provider_usage"] == value
+    finally:
+        pool = await db_mod.get_pool()
+        async with pool.connection() as conn:
+            for row_id in inserted:
+                await conn.execute("delete from llm_usage where id = %s", (row_id,))
+
+
 async def test_all_repository_write_paths(real_db):
     """One real call per repository write path against live Postgres. Ordered
     so foreign keys resolve (audit -> fixpack_job -> fix_outcome; account ->
