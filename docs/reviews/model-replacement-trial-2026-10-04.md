@@ -191,3 +191,46 @@ explicit prerequisite, not a proven UUID disclosure. One finding describing both
 mechanisms can count as detecting both. Additional claims require separate manual
 review. The earlier baseline is reused without another paid call. This small
 paired experiment alone does not establish general model equivalence.
+
+## Bounded three-scenario pilot
+
+The user reported the seeded auth comparison: MiMo detected both inserted
+mechanisms, with valid JSON and valid source quotes, 5.50 RUB, 86.599 s,
+56873 input / 3172 output tokens (2338 reasoning). The other pasted answer
+reported rotation only and surrounded JSON with prose/Markdown; its model and
+usage header were not supplied, so attribution to Sonnet remains provisional.
+Seeded prompt hash: 115943662481edb8db7971b1e7fa5f3e10f949cc70a5adfa45aae04516c269a5.
+
+`scripts/evaluate_pilot_models.py` prepares SQL, ZIP and payment pairs from the
+same c2328e9548bd6b7eb3b06e309386cd53be541f82 snapshot. Each pair shares scope and
+instructions; the seeded copy changes only the target file in memory. Full
+pilot: 6 cases x 2 models = 12 calls, one pass, output limit 8192, read timeout
+600 seconds, no retries/fallback, 120000 total prompt character ceiling. Actual
+prepared prompts are 42–65k characters. `--scenario sql|files|payments` can run
+one pair (4 calls); `--scenario all` runs all three. Default is prepare-only.
+`--resume` preserves attempted calls including errors and requires identical
+snapshot/prompts/settings. Missing cost after a transport error is unknown.
+
+- SQL: HTTP `token` reaches AuditRepository.get_authorized; replace bound token
+  parameter with string interpolation, retain UUID parsing and bound audit ID.
+  SQLite behavioral adapter executes generated SQL with placeholder syntax
+  translated; original rejects a crafted token and mutant discloses a row.
+  This verifies query semantics locally, not a live PostgreSQL exploit.
+- ZIP: count compressed bytes instead of uncompressed bytes in aggregate
+  validator budget. Two tiny compressed members exceed a scaled aggregate limit
+  but not the per-entry cap; original rejects, mutant accepts. Other caps remain.
+  Context contains CLI validation, stack detection, and content_digest reads;
+  no disk traversal or unlimited resource claim is warranted.
+- Payments: webhook object substitutes for authenticated provider read-back.
+  Original checks a mocked pending provider result and grants nothing; mutant
+  accepts forged succeeded state and creates a job/completes the order using
+  actual grant_fixpack with in-memory repositories. Provider credentials are
+  synthetic, HTTP mocked, notifications not run. Existing order reference and
+  an accepted source header are prerequisites; deployment reachability is unknown.
+
+Expected mechanisms and variant labels are not sent in model prompts. Comments
+explaining original defenses remain equally in both variants: these are known
+regression controls, not a blind benchmark. An unmodified control can contain
+unrelated real issues; do not label every extra finding false without review.
+Compare mechanism coverage, source accuracy, invented prerequisites, invalid
+format, timeout, actual cost and latency. Production model remains unchanged.
