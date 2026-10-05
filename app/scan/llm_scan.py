@@ -21,6 +21,8 @@ from typing import BinaryIO
 
 from app.llm import pricing
 from app.llm.client import LLMClient, LLMError
+from app.llm.response_diagnostics import response_diagnostics
+from app.scan.prompt_context import PromptExcerpt, numbered_lines, python_excerpt, related_test
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
 from app.scan.claim_narrative import project_claim_narrative
 from app.scan.syntax_claims import SyntaxVerifier
@@ -30,7 +32,7 @@ from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.issue_identity import SourceIssueResolver
 from app.scan.react_async_context import react_async_premise_checks
 from app.scan.scoring import CATEGORIES, ScoredFinding
-from app.scan.secrets import damp_for_non_production_path
+from app.scan.secrets import damp_for_non_production_path, is_non_production_path
 from app.scan.source_facts import facts_prompt
 from app.scan.rejection_diagnostics import MAX_REJECTION_ITEMS, rejected_item
 
@@ -74,19 +76,15 @@ from app.scan.rejection_diagnostics import MAX_REJECTION_ITEMS, rejected_item
 # trading a truncated file for an absent one.
 MAX_FILE_CHARS = 48_000
 
-# Per-rubric prompt budget, ~225K tokens. Adaptive by construction rather than
-# by branching: select_files spends min(matching content, this), so a repo that
-# has 50K characters of matching code selects 50K and costs exactly what it did
-# at the old 360_000 -- there is nothing for the extra room to hold. Only a
-# repository with more matching code than the old cap can reach it, which is
-# the same set of repositories the cap was hurting.
-#
-# It was 360_000, and on dubinc/dub that admitted 215 of 1263 matching files
-# (6.4M characters). No ordering closes that gap: six were measured -- ascending
-# size, relevance, relevance-per-character, distinct-keyword counts, a relevance
-# floor, and deferring presentation paths -- and 9 of 13 known-finding files was
-# the ceiling. At this budget the same selection reaches 13 of 13.
-MAX_TOTAL_CHARS = 900_000
+# The 2026-10-05 self-audit spent 1,042.62 RUB on eight empty Sonnet
+# responses. Bound context explicitly: deprioritising tests alone merely
+# refills the previous 900K ceiling with other files. This is a content
+# budget, before line numbers, wrappers and source context. fit_to_window
+# separately enforces the finished request's model limit. Coverage is
+# measured, not presumed equivalent to the larger selection.
+MAX_TOTAL_CHARS = 450_000
+SUPPORT_BUDGET_SHARE = 0.1
+_PROJECT_METADATA = frozenset({"pyproject.toml", "package.json", "tsconfig.json"})
 
 # Per-job spend ceiling for a single scan's sequential .complete() loop. When
 # the running cost estimate (summed from each call's returned usage, priced by
@@ -782,7 +780,10 @@ SYSTEM_PROMPT = (
     "saying how many lines were withheld. NEVER conclude that a check, guard, "
     "owner comparison or handler is MISSING because you cannot see it in a "
     "file marked truncated -- in that file report only what the lines you "
-    "were given prove. If nothing "
+    "were given prove. A file may also contain explicit omitted line ranges. "
+    "Line numbers in excerpts are original source line numbers. Treat omitted "
+    "ranges as unseen code, never as evidence that a guard or handler is absent. "
+    "Do not quote omission markers. If nothing "
     "is wrong, respond with []. Never invent files or lines: evidence "
     "must be copied exactly from the provided content."
 )
@@ -795,6 +796,8 @@ class LLMScanStats:
     provider_attempts: list[dict] = field(default_factory=list)
     candidate_files: int | None = None
     submitted_files: tuple[str, ...] = ()
+    partially_submitted_files: tuple[str, ...] = ()
+    selection_scope: str | None = None
     selection_exclusions: dict[str, int] | None = None
     prompts: int = 0
     raw_findings: int = 0
@@ -1095,32 +1098,9 @@ def request_limit_for(client: object) -> int:
     return client.input_char_budget()
 
 
-def select_files(files: list[tuple[str, str]], rubric: str,
-                 budget: int = MAX_TOTAL_CHARS) -> list[tuple[str, str]]:
-    """Files matching the rubric: most relevant first, then breadth.
-
-    `budget` defaults to MAX_TOTAL_CHARS, which is what every caller passed
-    before a model's context window could bind first. It is a parameter and
-    not a global read because two tiers now run different models in the same
-    worker process, and a module-level budget would be whichever tier set it
-    last.
-
-    Two passes over the same matches. The first spends RELEVANCE_BUDGET_SHARE
-    of the prompt on the files most likely to contain the rubric's subject;
-    the second spends what is left on the smallest remaining ones, so a prompt
-    is never just forty large handlers. See RELEVANCE_BUDGET_SHARE for what
-    the old size-only order did to a monorepo.
-
-    Both passes `continue` past a file that does not fit rather than stopping.
-    Under the old ascending-size sort `break` was equivalent -- nothing after
-    the first overflow could fit either -- but in any other order it would
-    throw away every remaining file because one was too big.
-
-    Ties break on size and then on name so the selection is a pure function of
-    the archive's contents. Zip member order must not change it: the audit
-    cache is keyed on a content hash, and two byte-identical repositories that
-    selected different files would produce different scores from the same key.
-    """
+def _select_ranked_files(files: list[tuple[str, str]], rubric: str,
+                         budget: int) -> list[tuple[str, str]]:
+    """Allocate a bounded bucket between relevance and breadth."""
     kw = RUBRICS[rubric]["keywords"]
     lives_in = RUBRICS[rubric].get("lives_in", BEHAVIOUR)
 
@@ -1132,10 +1112,10 @@ def select_files(files: list[tuple[str, str]], rubric: str,
     # files. On every shipped budget this collapses to MAX_FILE_CHARS and the
     # matched list is identical to the old one -- see RELEVANCE_RESERVE_FILES.
     file_cap = min(MAX_FILE_CHARS, reserve // RELEVANCE_RESERVE_FILES)
-    matched = [
-        (n, truncate_at_line(t, file_cap)) for n, t in files
-        if kw.search(n) or kw.search(t)
-    ]
+    matched = []
+    for name, text in files:
+        excerpt = python_excerpt(name, text, kw, file_cap)
+        matched.append((name, excerpt if excerpt is not None else truncate_at_line(text, file_cap)))
 
     selected: list[tuple[str, str]] = []
     taken: set[str] = set()
@@ -1161,6 +1141,40 @@ def select_files(files: list[tuple[str, str]], rubric: str,
     return selected
 
 
+def has_application_source(files: list[tuple[str, str]]) -> bool:
+    """Project metadata alone does not turn a test-only archive into an app."""
+    return any(not is_non_production_path(name)
+               and name.rsplit("/", 1)[-1] not in _PROJECT_METADATA for name, _ in files)
+
+
+def select_files(files: list[tuple[str, str]], rubric: str,
+                 budget: int = MAX_TOTAL_CHARS) -> list[tuple[str, str]]:
+    """Prioritise application code; use at most 10% for related support files.
+
+    A test-only repository still receives a bounded review. In a mixed
+    repository an unrelated test cannot manufacture production coverage.
+    Matching and selection exclusions remain measured against all candidates.
+    """
+    if budget <= 0:
+        return []
+    kw = RUBRICS[rubric]["keywords"]
+    matched = [(n, t) for n, t in files if kw.search(n) or kw.search(t)]
+    production = [(n, t) for n, t in matched if not is_non_production_path(n)]
+    support = [(n, t) for n, t in matched if is_non_production_path(n)]
+    if not has_application_source(files) and any(is_non_production_path(n) for n, _ in files):
+        return _select_ranked_files(support, rubric, budget)
+    selected = _select_ranked_files(production, rubric, budget)
+    names = [n for n, _ in selected]
+    linked = [(n, t) for n, t in support if related_test(n, names, t)]
+    if not linked:
+        return selected
+    support_budget = int(budget * SUPPORT_BUDGET_SHARE)
+    selected = _select_ranked_files(production, rubric, budget - support_budget)
+    names = [n for n, _ in selected]
+    linked = [(n, t) for n, t in linked if related_test(n, names, t)]
+    return selected + _select_ranked_files(linked, rubric, support_budget)
+
+
 def build_prompt(selected: list[tuple[str, str]], rubric: str, source_context: str = "") -> str:
     tree = "\n".join(n for n, _ in selected)
     parts = [
@@ -1168,9 +1182,7 @@ def build_prompt(selected: list[tuple[str, str]], rubric: str, source_context: s
         f"<repo_map>\n{tree}\n</repo_map>",
     ]
     for n, t in selected:
-        numbered = "\n".join(
-            f"{i}\t{line}" for i, line in enumerate(t.splitlines(), start=1)
-        )
+        numbered = numbered_lines(t)
         parts.append(f'<file path="{n}">\n{numbered}\n</file>')
     return "\n\n".join(parts) + (source_context if selected else "")
 
@@ -1404,6 +1416,9 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     ran: set[str] = set()
 
     stats.candidate_files = len(files)
+    stats.selection_scope = (
+        "production_first" if has_application_source(files) or not any(is_non_production_path(n) for n, _ in files)
+        else "nonproduction_only")
     rubric_matches = {
         rubric: {n for n, t in files
                  if RUBRICS[rubric]["keywords"].search(n) or RUBRICS[rubric]["keywords"].search(t)}
@@ -1441,18 +1456,33 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
               selected, prompt = fit_to_window(
                   selected, rubric, request_limit - len(SYSTEM_PROMPT), source_context)
               sent = len(SYSTEM_PROMPT) + len(prompt)
+              prompt_metadata = {
+                  "prompt_chars": sent,
+                  "selected_files": len(selected),
+                  "selected_content_chars": sum(len(t) for _, t in selected),
+                  "nonproduction_files": sum(is_non_production_path(n) for n, _ in selected),
+                  "nonproduction_chars": sum(len(t) for n, t in selected if is_non_production_path(n)),
+                  "excerpt_files": sum(isinstance(t, PromptExcerpt) for _, t in selected),
+                  "head_truncated_files": sum(
+                      t != files_by_name[n] and not isinstance(t, PromptExcerpt)
+                      for n, t in selected),
+                  "selection_scope": stats.selection_scope,
+              }
               try:
                   stats.submitted_files = tuple(sorted(set(stats.submitted_files) | {n for n, _ in selected}))
+                  stats.partially_submitted_files = tuple(sorted(
+                      set(stats.partially_submitted_files)
+                      | {n for n, t in selected if isinstance(t, PromptExcerpt) or t != files_by_name[n]}))
                   raw, usage = client.complete(SYSTEM_PROMPT, prompt,
                                                max_tokens=RUBRIC_MAX_TOKENS)
                   stats.provider_attempts.extend(
-                      {**attempt, "rubric": rubric, "pass": _pass + 1,
+                      {**attempt, **prompt_metadata, "rubric": rubric, "pass": _pass + 1,
                        "request": stats.prompts}
                       for attempt in getattr(usage, "attempts", ()))
                   break
               except LLMError as exc:
                   stats.provider_attempts.extend(
-                      {**attempt, "rubric": rubric, "pass": _pass + 1,
+                      {**attempt, **prompt_metadata, "rubric": rubric, "pass": _pass + 1,
                        "request": stats.prompts}
                       for attempt in getattr(exc, "attempts", ()))
                   # A provider refusing the request for its SIZE is a
@@ -1517,6 +1547,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
           # Syntax/array status is separate from transport completion. A valid
           # array still does not establish finding truth or source accuracy.
           if stats.provider_attempts and stats.provider_attempts[-1]["request"] == stats.prompts:
+              stats.provider_attempts[-1].update(response_diagnostics(raw))
               stats.provider_attempts[-1]["answer_status"] = (
                   "invalid_json" if parsed is None else "empty_array" if not parsed else "json_array")
           if parsed is None:

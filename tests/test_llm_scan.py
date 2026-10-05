@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from app.llm import client as client_mod
-from app.scan import review_counterevidence, python_sql_identity
+from app.scan import review_counterevidence, python_sql_identity, prompt_context
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan import (llm_scan, source_facts, operation_context, function_context,
                       syntax_claims, premise_context, operator_context, react_async_context,
@@ -50,7 +50,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "f79a25abfdcf2971"
+PROMPT_FINGERPRINT = "dd79b7fefe836814"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -339,7 +339,7 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
     findings, stats = run_llm_scan(buf, llm, rubrics=("auth",))
 
     assert stats == LLMScanStats(
-        candidate_files=1, submitted_files=("src/auth.ts",),
+        candidate_files=1, submitted_files=("src/auth.ts",), selection_scope="production_first",
         selection_exclusions=dict(no_rubric_match=0, rubric_not_reached=0, selection_budget=0, request_window=0),
         prompts=1, raw_findings=2, verified=1, discarded=1,
         calls=1, input_tokens=100, output_tokens=20, model="fake-model",
@@ -381,9 +381,9 @@ def _client_for(model: str) -> LLMClient:
     return LLMClient(providers=[Provider("openai_compat", "http://x", "k", model)])
 
 
-def test_prompt_budget_shrinks_to_the_models_context_window():
-    """The paid model keeps the full budget; the free tier's does not get a
-    budget its provider has to cut down to size."""
+def test_prompt_budget_shrinks_to_the_models_context_window(monkeypatch):
+    """Even when a configured ceiling is larger, the model window still binds."""
+    monkeypatch.setattr(llm_scan, "MAX_TOTAL_CHARS", 900_000)
     assert llm_scan.content_budget(_client_for("claude-sonnet-4.6")) == \
         llm_scan.MAX_TOTAL_CHARS
     assert llm_scan.content_budget(_client_for("claude-haiku-4.5")) < \
@@ -1156,6 +1156,11 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         str(llm_scan.MAX_FILE_CHARS),
         str(llm_scan.MAX_TOTAL_CHARS),
         str(llm_scan.RELEVANCE_BUDGET_SHARE),
+        str(llm_scan.SUPPORT_BUDGET_SHARE),
+        repr(sorted(llm_scan._PROJECT_METADATA)),
+        inspect.getsource(llm_scan.has_application_source),
+        inspect.getsource(prompt_context),
+        inspect.getsource(llm_scan._select_ranked_files),
         # How fine the relevance reserve is sliced per file. getsource sees
         # only the NAME inside select_files, so changing this number would
         # otherwise move no guard at all while changing every narrow-window

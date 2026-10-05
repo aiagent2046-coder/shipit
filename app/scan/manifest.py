@@ -157,6 +157,9 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         "llm_files_not_submitted": max(0, candidates - len(submitted))
         if candidates is not None and submitted is not None else None,
         "llm_selection_exclusions": stats.get("selection_exclusions"),
+        "llm_partially_submitted_files": len(stats["partially_submitted_files"])
+        if "partially_submitted_files" in stats else None,
+        "llm_selection_scope": stats.get("selection_scope"),
         "limitations": reasons,
         "runtime_verified": False,
     }

@@ -118,6 +118,10 @@ async def test_timeout_attempts_are_unknown_even_after_retry_succeeds(monkeypatc
     assert usage["cost_rub"] is None
     assert usage["attempt_count"] == 2
     assert usage["unpriced_attempts"] == 1
+    assert all(a["prompt_chars"] > 0 for a in usage["attempts"])
+    assert all(a["selected_files"] == 1 for a in usage["attempts"])
+    assert "response_envelope" not in usage["attempts"][0]
+    assert usage["attempts"][1]["response_envelope"] == "json_array"
 
 
 async def test_oversize_attempt_survives_shrinking():
