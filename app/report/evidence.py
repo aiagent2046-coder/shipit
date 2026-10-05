@@ -968,10 +968,17 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         value = manifest.get(key)
         rows.append((label, str(value) if value is not None else "Not recorded"))
     exclusions = manifest.get("llm_selection_exclusions")
+    if manifest.get("llm_partially_submitted_files") is not None:
+        rows.append(("Files sent partially in at least one request",
+                     str(manifest["llm_partially_submitted_files"])))
+    if manifest.get("llm_selection_scope") == "nonproduction_only":
+        rows.append(("Model selection scope", "No application source was identified; the model selection "
+                     "is limited to test/example/documentation files. "
+                     "This is not a review of production code."))
     labels = {
         "no_rubric_match": "No keyword match in configured review areas",
         "rubric_not_reached": "Matching review areas were not reached",
-        "selection_budget": "Outside file-selection budgets of attempted areas",
+        "selection_budget": "Outside selection budgets or related-support policy of attempted areas",
         "request_window": "Removed to fit the request window",
     }
     if isinstance(exclusions, dict):
