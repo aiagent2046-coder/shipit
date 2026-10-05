@@ -1,5 +1,6 @@
 import type { Finding, ModelAcceptance, Score, Severity, SourceAssessment, StaticCoverageRule, StaticRuleCoverage } from "./types";
 import { narrativeProjection as checkedNarrativeProjection } from "./claimNarrative";
+import { validatedFactGroup } from "./factProjectionGroup";
 import { cveRows, cveNotices } from "./cveEvidence";
 import { snapshotRows, snapshotNotices, snapshotScopeReasons, snapshotFindingRows } from "./dependencySnapshot";
 import { patternReview, patternReviewNotices, sqlEvidenceRows, deserializationEvidenceRows } from "./securityAgent";
@@ -131,6 +132,11 @@ function groupedClaimScopeRows(finding: Finding): [string, string][] {
   const grouping: unknown = evidence?.grouped_claim_scope;
   const originals = evidence?.grouped_originals;
   const identity = evidence?.source_issue_identity;
+  if (validatedFactGroup(finding, narrativeProjection)) {
+    return [["Grouped interpretation scope", "Grouped by the same source path and corrected fact-count interpretation only. "
+      + "Original conditions and cost claims remain separate and unverified; "
+      + "repetition is not independent confirmation."]];
+  }
   if (finding.source === "llm" && evidence?.version === 1 && record(grouping) && grouping.mechanism === "query_read_volume"
     && Array.isArray(originals) && originals.length > 1 && validQueryReadIdentity(identity, finding.file)) {
     return [["Grouped hypothesis scope", "Grouped by the same source SELECT operation and pagination-bound "

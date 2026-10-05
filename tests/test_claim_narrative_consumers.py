@@ -145,3 +145,46 @@ def test_query_group_scope_and_originals_survive_public_exports_without_claiming
     finding["claim_evidence"]["source_issue_identity"]["file"] = "another.ts"
     assert "Grouped hypothesis scope" not in dict(claim_evidence_rows(finding))
     assert "properties" not in build_sarif([finding], engine_version="fixture")["runs"][0]["results"][0]
+
+
+def test_fact_group_keeps_each_condition_and_model_original_in_public_exports():
+    from app.scan.fact_projection_grouping import group_fact_projections, validated_fact_group
+    from tests.test_fact_projection_grouping import pair
+
+    finding = asdict(group_fact_projections(pair())[0])
+    assert json.loads(FIXTURES.read_text())["fact_group"] == finding
+    before = deepcopy(finding)
+    assert validated_fact_group(finding)
+    rows = dict(claim_evidence_rows(finding))
+    assert "cost claims remain separate" in rows["Grouped interpretation scope"]
+    parser = VisibleText()
+    parser.feed(_finding_row(finding))
+    active, original = " ".join(parser.active), " ".join(parser.original)
+    originals = finding["claim_evidence"]["grouped_originals"]
+    for row in originals:
+        evidence = row["claim_evidence"]
+        assert evidence["narrative_projection"]["original"]["title"] in active + original
+        for condition in evidence["required_conditions"]:
+            assert condition in active + original
+    assert finding["title"] in active
+    sarif = build_sarif([finding], engine_version="fixture")
+    properties = sarif["runs"][0]["results"][0]["properties"]
+    assert properties["groupedOriginals"] == originals
+    assert properties["groupedClaimScope"] == finding["claim_evidence"]["grouped_claim_scope"]
+    assert properties["verificationStatus"] == "unverified"
+    schema = json.loads((Path(__file__).parent / "fixtures/sarif-schema-2.1.0.json").read_text())
+    jsonschema.validate(sarif, schema, format_checker=jsonschema.FormatChecker())
+    assert finding == before
+
+
+def test_invalid_fact_group_cannot_advertise_shared_source_scope():
+    from app.scan.fact_projection_grouping import group_fact_projections
+    from tests.test_fact_projection_grouping import pair
+
+    finding = asdict(group_fact_projections(pair())[0])
+    finding["claim_evidence"]["grouped_originals"][1]["verification_status"] = "verified"
+    assert "Grouped interpretation scope" not in dict(claim_evidence_rows(finding))
+    # Retained originals stay visible even when their claimed grouping is invalid.
+    assert "Grouped original 2 — not independent confirmation" in dict(claim_evidence_rows(finding))
+    properties = build_sarif([finding], engine_version="fixture")["runs"][0]["results"][0]["properties"]
+    assert "groupedClaimScope" not in properties

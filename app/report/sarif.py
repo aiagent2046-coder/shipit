@@ -23,6 +23,8 @@ TWO DECISIONS WORTH NAMING:
 """
 from __future__ import annotations
 
+from app.scan.fact_projection_grouping import validated_fact_group
+
 import hashlib
 import json
 import urllib.parse
@@ -216,6 +218,12 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                 location = _location(manifest_path, occurrence.get("line"), rule_id, archive_root)
                 if location not in results[-1]["locations"]:
                     results[-1]["locations"].append(location)
+        if validated_fact_group(finding):
+            results[-1].setdefault("properties", {}).update({
+                "groupedClaimScope": record["grouped_claim_scope"],
+                "groupedOriginals": record["grouped_originals"],
+                "verificationStatus": finding.get("verification_status"),
+            })
         grouping, originals = record.get("grouped_claim_scope"), record.get("grouped_originals")
         if (finding.get("source") == "llm" and record.get("version") == 1 and isinstance(grouping, dict)
                 and grouping.get("mechanism") == "query_read_volume"

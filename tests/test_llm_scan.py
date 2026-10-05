@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from app.llm import client as client_mod
+from app.scan import fact_projection_grouping
 from app.scan import review_counterevidence, python_sql_identity, prompt_context
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan import (llm_scan, source_facts, operation_context, function_context,
@@ -50,7 +51,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "e05990afb183fa20"
+PROMPT_FINGERPRINT = "9996a184b98d3e09"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -1208,6 +1209,7 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         inspect.getsource(syntax_claims.SyntaxVerifier),
         inspect.getsource(cross_rubric_dedup),
         inspect.getsource(claim_narrative),
+        inspect.getsource(fact_projection_grouping),
         inspect.getsource(query_read_identity),
         inspect.getsource(issue_identity),
         inspect.getsource(python_sql_identity),

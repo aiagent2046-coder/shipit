@@ -110,3 +110,68 @@ it("requires the recorded import configuration hash when validating a helper res
   delete finding.claim_evidence!.narrative_projection!.source_hashes["tsconfig.json"];
   expect(narrativeProjection(finding)).toBeNull();
 });
+
+it("explains a corrected fact-count group and preserves both complete historical claims", () => {
+  const finding = clone("fact_group"), before = JSON.stringify(finding);
+  const originals = finding.claim_evidence!.grouped_originals!;
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Grouped interpretation scope"]).toContain("same source path and corrected fact-count interpretation only");
+  expect(rows["Grouped interpretation scope"]).toContain("Original conditions and cost claims remain separate and unverified");
+  for (const [index, original] of originals.entries()) {
+    expect(JSON.parse(rows[`Grouped original ${index + 1} — not independent confirmation`])).toEqual(original);
+  }
+  const { container } = render(<FindingsList findings={[finding]} />);
+  expect(screen.getByText("Grouped interpretation scope", { selector: "dt" })).toBeTruthy();
+  expect(container.textContent).toContain("sanitizeFacts does not cap the total number of facts sent to Claude");
+  expect(container.textContent).toContain("No external cap on agent_context rows per user exists");
+  expect(JSON.stringify(finding)).toBe(before);
+});
+
+it.each([
+  ["missing identity", (f: Finding) => { delete f.claim_evidence!.source_issue_identity; }],
+  ["changed source", (f: Finding) => { f.source = "static"; }],
+  ["changed verification status", (f: Finding) => { Object.assign(f, { verification_status: "verified" }); }],
+  ["changed condition status", (f: Finding) => { Object.assign(f.claim_evidence!, { conditions_status: "observed" }); }],
+  ["changed consequence status", (f: Finding) => { Object.assign(f.claim_evidence!, { consequence_status: "observed" }); }],
+  ["invalid confidence", (f: Finding) => { f.confidence = Number.NaN; }],
+  ["out-of-range confidence", (f: Finding) => { f.confidence = 1.01; }],
+  ["malformed conditions", (f: Finding) => { Object.assign(f.claim_evidence!, { required_conditions: [null] }); }],
+  ["changed source binding", (f: Finding) => { f.claim_evidence!.source_assessments![0].source_binding.upper = 41; }],
+  ["changed source hash", (f: Finding) => { f.claim_evidence!.source_assessments![0].source_sha256 = "a".repeat(64); }],
+  ["changed model", (f: Finding) => {
+    f.claim_evidence!.producer!.model = f.claim_evidence!.narrative_projection!.original.producer.model = "another-model";
+  }],
+  ["changed active claim", (f: Finding) => { f.title = "Every cost claim is confirmed"; }],
+  ["nested grouping", (f: Finding) => { f.claim_evidence!.grouped_originals = []; }],
+  ["extra field", (f: Finding) => { Object.assign(f, { additional_cost_claim: true }); }],
+] as const)("rejects fact grouping with %s in an original even when the representative is valid", (_label, mutate) => {
+  const finding = clone("fact_group");
+  mutate(finding.claim_evidence!.grouped_originals![1] as unknown as Finding);
+  expect(narrativeProjection(finding)).not.toBeNull();
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Grouped interpretation scope"]).toBeUndefined();
+  expect(rows["Grouped original 1 — not independent confirmation"]).toBeTruthy();
+  expect(rows["Grouped original 2 — not independent confirmation"]).toBeTruthy();
+});
+
+it.each([
+  ["scope text", (f: Finding) => { f.claim_evidence!.grouped_claim_scope!.scope = "All costs verified"; }],
+  ["consequence text", (f: Finding) => { f.claim_evidence!.grouped_claim_scope!.consequences = "Confirmed"; }],
+  ["extra scope field", (f: Finding) => { Object.assign(f.claim_evidence!.grouped_claim_scope!, { verified: true }); }],
+  ["missing scope marker", (f: Finding) => { delete f.claim_evidence!.grouped_claim_scope; }],
+  ["missing original representative", (f: Finding) => { f.confidence = 0.99; }],
+  ["only one original", (f: Finding) => { f.claim_evidence!.grouped_originals!.pop(); }],
+] as const)("rejects fact grouping with %s while preserving available originals", (_label, mutate) => {
+  const finding = clone("fact_group");
+  mutate(finding);
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Grouped interpretation scope"]).toBeUndefined();
+  expect(rows["Grouped original 1 — not independent confirmation"]).toBeTruthy();
+});
+
+it("compares fact-group object keys independently of JSON property order", () => {
+  const finding = clone("fact_group");
+  finding.claim_evidence!.grouped_originals = finding.claim_evidence!.grouped_originals!
+    .map(original => Object.fromEntries(Object.entries(original).reverse()));
+  expect(Object.fromEntries(claimEvidenceRows(finding))["Grouped interpretation scope"]).toBeTruthy();
+});

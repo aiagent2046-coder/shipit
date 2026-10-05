@@ -15,6 +15,9 @@ from app.scan.claim_evidence import (
 )
 from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
 from app.scan.claim_narrative import narrative_projection
+from app.scan.fact_projection_grouping import (
+    validated_fact_group, SCOPE as FACT_SCOPE, CONSEQUENCES as FACT_CONSEQUENCES,
+)
 from app.scan.query_read_identity import valid_query_read_identity
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.manifest import SCA_LIMITATIONS
@@ -534,6 +537,8 @@ def claim_evidence_rows(finding: dict, historical: bool = False) -> list[tuple[s
         for i, hint in enumerate(superseded if isinstance(superseded, list) else [], 1):
             if isinstance(hint, str):
                 rows.append((f"Superseded intermediate recommendation {i} — do not apply without review", hint))
+    if validated_fact_group(finding):
+        rows.append(("Grouped interpretation scope", FACT_SCOPE + " " + FACT_CONSEQUENCES))
     rows.extend(_grouped_claim_rows(record, finding.get("file", ""), finding.get("source", "")))
     for i, original in enumerate(record.get("grouped_originals", []), 1):
         rows.append((f"Grouped original {i} — not independent confirmation",
