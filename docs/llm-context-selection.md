@@ -12,8 +12,18 @@ it does not claim to have established the cause of the empty replies.
   the existing final request-window check still bounds the complete prompt.
 - Application source is selected first. Rubric-matching support files receive
   at most 10% of the budget, and only when a test module name or a static import
-  links them to selected production files. Unused support capacity is not
-  refilled. The existing path classifier keeps migrations and CI in production.
+  links them to selected production files. Only the support actually selected
+  is reserved; unused capacity returns to application code before a final link
+  check. Support orphaned by the final application selection is dropped. That
+  last check may leave a small amount of capacity unused. The existing path
+  classifier keeps migrations and CI in production.
+- Exact basenames `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`
+  and `packages.lock.json` are excluded before LLM ranking, including nested
+  projects. Files ending in `.lock` were already outside the LLM reader.
+  Manifests such as `package.json` and `pyproject.toml` remain eligible.
+  Original archive bytes and source hashes remain available to other checks.
+  This does not assert that every excluded format is supported by dependency
+  scanning; consult its separate coverage record.
 - A repository containing only tests/examples/docs, plus project metadata,
   receives a bounded nonproduction review. The report explicitly labels this
   scope. Metadata alone does not count as application source for this fallback.
@@ -37,7 +47,10 @@ The report counts files sent only partially in at least one attempt, including
 both excerpts and head truncation. Engine identity is bumped to invalidate old
 cached audit results.
 
-## Offline measurement
+## Initial offline measurement (PR #622)
+
+These historical results use the selection implementation at
+`fb35b442e59d5743baee7cc5944b2ccf9c31b7e7`, before the lockfile/reserve follow-up.
 
 Archive: commit `e235ee52b2db132d1a525a6a5a7511d56afe4033`, with prefix
 `aiagent2046-coder-shipit-e235ee5/`; 1,444 eligible source files. Baseline uses
@@ -66,7 +79,7 @@ made. A subsequent explicitly authorized evaluation should compare known
 findings and actual provider charges before treating this as a quality win.
 
 To reproduce without contacting a model, create the pinned archive and run the
-following from each checkout (use the same `/tmp/shipit-context-baseline.zip`):
+following from the baseline and PR #622 checkouts (use the same `/tmp/shipit-context-baseline.zip`):
 
 ```sh
 git archive --format=zip --prefix=aiagent2046-coder-shipit-e235ee5/ \
@@ -105,3 +118,45 @@ No raw answer text or source contents are added to the ledger. Public report
 manifests expose aggregate partial-file coverage and scope, not provider rows.
 
 Provider choice, pass count, prompt caching and finding admission are unchanged.
+
+
+## Lockfile and support-reserve follow-up
+
+The archive for `aiagent2046-coder/ai-co-founder-matching` commit
+`87553a7ab6fcbd2815a2678d6887c0c00ef66829` has SHA-256
+`ce08ee771d21ba4ef87d90824cfa036c85acef1b84fff6926207bc2be979525b`, exactly
+matching audit `d8ae8860`. Both sides use the 450K default budget and the same
+archive bytes. Unlike the historical table above, these full prompt counts
+include the identical 15,717-character `facts_prompt(collect_source_facts(...))`
+supplement and final Sonnet request-window fitting. No provider is contacted.
+
+| Rubric | Before follow-up | After | Production files before / after |
+| --- | ---: | ---: | ---: |
+| auth | 472,568 | 523,500 | 72 / 75 |
+| security | 477,590 | 522,227 | 88 / 92 |
+| money | 408,021 | 353,544 | 45 / 44 |
+| web | 431,549 | 377,072 | 36 / 35 |
+| Total prompt characters | 1,789,728 | 1,776,343 | |
+
+The total falls by 0.75%, while auth/security receive more application code.
+Money/web lose only `package-lock.json`, whose truncated payload previously
+consumed 48,051 characters in each. Overall selection changes from 107 files
+(104 non-test, non-lock files; 2 test files; 1 lockfile) to 108 files
+(105 non-test, non-lock files; 3 test files). No previously selected application
+file is removed from any rubric. The newly covered application file in the
+union is `syndi-agents/orchestrator.py`; other gains restore additional thematic
+reviews of already selected files.
+
+All 53 accepted source ranges in the saved report remain covered across
+rubrics, as do all 16 records with explicit producer-rubric metadata. Auth
+recovers six recorded ranges in `app/app/avatar/page.tsx`; security recovers
+two in `syndi-agents/experiment_teams.py`. HTML contains the verified quote
+ranges, not their text, and does not expose producer metadata for every
+ungrouped card. These checks preserve known finding anchors; they do not prove
+equal recall, sufficient surrounding context or runtime correctness.
+
+The selection-exclusion ledger adds `dependency_lockfile` as an exclusive
+reason for files never submitted. Candidate counts and source hashes retain
+the original universe; exclusions still sum to candidates minus submitted
+files, including skipped rubrics and provider failures. The report labels the
+policy exclusion without claiming that the dependency scan covers that file.

@@ -50,7 +50,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "dd79b7fefe836814"
+PROMPT_FINGERPRINT = "1d027c2101242c55"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -340,7 +340,8 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
 
     assert stats == LLMScanStats(
         candidate_files=1, submitted_files=("src/auth.ts",), selection_scope="production_first",
-        selection_exclusions=dict(no_rubric_match=0, rubric_not_reached=0, selection_budget=0, request_window=0),
+        selection_exclusions=dict(dependency_lockfile=0, no_rubric_match=0, rubric_not_reached=0,
+                                  selection_budget=0, request_window=0),
         prompts=1, raw_findings=2, verified=1, discarded=1,
         calls=1, input_tokens=100, output_tokens=20, model="fake-model",
         prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]),
@@ -1158,6 +1159,8 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         str(llm_scan.RELEVANCE_BUDGET_SHARE),
         str(llm_scan.SUPPORT_BUDGET_SHARE),
         repr(sorted(llm_scan._PROJECT_METADATA)),
+        repr(sorted(llm_scan._LLM_DEPENDENCY_LOCKFILES)),
+        inspect.getsource(llm_scan.is_dependency_lockfile),
         inspect.getsource(llm_scan.has_application_source),
         inspect.getsource(prompt_context),
         inspect.getsource(llm_scan._select_ranked_files),

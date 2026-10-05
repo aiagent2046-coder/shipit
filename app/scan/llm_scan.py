@@ -85,6 +85,11 @@ MAX_FILE_CHARS = 48_000
 MAX_TOTAL_CHARS = 450_000
 SUPPORT_BUDGET_SHARE = 0.1
 _PROJECT_METADATA = frozenset({"pyproject.toml", "package.json", "tsconfig.json"})
+# Exact generated dependency inventories, including nested project roots. Keep
+# manifests/configuration and the original archive available to static checks.
+_LLM_DEPENDENCY_LOCKFILES = frozenset({
+    "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "packages.lock.json",
+})
 
 # Per-job spend ceiling for a single scan's sequential .complete() loop. When
 # the running cost estimate (summed from each call's returned usage, priced by
@@ -1141,9 +1146,14 @@ def _select_ranked_files(files: list[tuple[str, str]], rubric: str,
     return selected
 
 
+def is_dependency_lockfile(name: str) -> bool:
+    """Known inventory basenames only; never infer from a generic 'lock' token."""
+    return name.rsplit("/", 1)[-1] in _LLM_DEPENDENCY_LOCKFILES
+
+
 def has_application_source(files: list[tuple[str, str]]) -> bool:
     """Project metadata alone does not turn a test-only archive into an app."""
-    return any(not is_non_production_path(name)
+    return any(not is_non_production_path(name) and not is_dependency_lockfile(name)
                and name.rsplit("/", 1)[-1] not in _PROJECT_METADATA for name, _ in files)
 
 
@@ -1158,7 +1168,8 @@ def select_files(files: list[tuple[str, str]], rubric: str,
     if budget <= 0:
         return []
     kw = RUBRICS[rubric]["keywords"]
-    matched = [(n, t) for n, t in files if kw.search(n) or kw.search(t)]
+    matched = [(n, t) for n, t in files
+               if not is_dependency_lockfile(n) and (kw.search(n) or kw.search(t))]
     production = [(n, t) for n, t in matched if not is_non_production_path(n)]
     support = [(n, t) for n, t in matched if is_non_production_path(n)]
     if not has_application_source(files) and any(is_non_production_path(n) for n, _ in files):
@@ -1169,10 +1180,15 @@ def select_files(files: list[tuple[str, str]], rubric: str,
     if not linked:
         return selected
     support_budget = int(budget * SUPPORT_BUDGET_SHARE)
-    selected = _select_ranked_files(production, rubric, budget - support_budget)
+    selected_support = _select_ranked_files(linked, rubric, support_budget)
+    # Reserve only the support actually selected, returning unused capacity to
+    # application code. Recheck links against the final application selection;
+    # head truncation/excerpts must not erase imports used to establish a link.
+    selected = _select_ranked_files(production, rubric, budget - sum(len(t) for _, t in selected_support))
     names = [n for n, _ in selected]
-    linked = [(n, t) for n, t in linked if related_test(n, names, t)]
-    return selected + _select_ranked_files(linked, rubric, support_budget)
+    support_sources = dict(linked)
+    selected_support = [(n, t) for n, t in selected_support if related_test(n, names, support_sources[n])]
+    return selected + selected_support
 
 
 def build_prompt(selected: list[tuple[str, str]], rubric: str, source_context: str = "") -> str:
@@ -1655,8 +1671,11 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     # Exclusive counts over files never submitted in any pass or rubric.
     # A submitted file may still be excerpted or its request may have failed.
     unmatched = set(files_by_name) - set(stats.submitted_files)
+    lockfiles = {name for name in unmatched if is_dependency_lockfile(name)}
+    unmatched -= lockfiles
     matched_names = set().union(*rubric_matches.values())
     stats.selection_exclusions = {
+        "dependency_lockfile": len(lockfiles),
         "no_rubric_match": len(unmatched - matched_names),
         "rubric_not_reached": len((unmatched & matched_names) - considered_names),
         "selection_budget": len((unmatched & considered_names) - selected_names),

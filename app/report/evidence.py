@@ -976,6 +976,7 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
                      "is limited to test/example/documentation files. "
                      "This is not a review of production code."))
     labels = {
+        "dependency_lockfile": "Dependency lockfiles excluded from model context",
         "no_rubric_match": "No keyword match in configured review areas",
         "rubric_not_reached": "Matching review areas were not reached",
         "selection_budget": "Outside selection budgets or related-support policy of attempted areas",

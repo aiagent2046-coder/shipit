@@ -49,7 +49,7 @@ def test_nonmatching_and_budget_exclusions_are_unique_across_passes(monkeypatch)
     assert stats.calls == 2
     assert client.sent[0] == client.sent[1]
     assert stats.submitted_files == ('auth.py', 'large.py')
-    assert stats.selection_exclusions == dict(no_rubric_match=1, rubric_not_reached=0,
+    assert stats.selection_exclusions == dict(dependency_lockfile=0, no_rubric_match=1, rubric_not_reached=0,
                                               selection_budget=1, request_window=0)
     check_partition(stats)
     m = scan_manifest(buf.getvalue(), 'test', {}, vars(stats), None)
