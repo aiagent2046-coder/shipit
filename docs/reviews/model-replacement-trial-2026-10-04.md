@@ -234,3 +234,40 @@ regression controls, not a blind benchmark. An unmodified control can contain
 unrelated real issues; do not label every extra finding false without review.
 Compare mechanism coverage, source accuracy, invented prerequisites, invalid
 format, timeout, actual cost and latency. Production model remains unchanged.
+
+## Offline pilot diagnostics (2026-10-05)
+
+Use the standard-library-only diagnostic tool on an existing result file:
+
+```bash
+python3 scripts/diagnose_model_trial.py /path/to/results-pilot.json \
+  --output /path/to/pilot-diagnostics.json
+```
+
+This command makes no provider requests, loads no credentials and does not import
+the application or trial runner. It refuses to overwrite either the source or an
+existing output. The diagnostic output records the source SHA-256; original raw
+answers, usage and trial status remain in the source file. Keep both files locally;
+do not commit trial inputs or extracted model answers.
+
+Completion and answer format are independent: `output_limit`, `empty_answer`,
+`invalid_json`, `wrong_top_level`, `non_text_answer`, request errors and non-stop
+completion can coexist. Counts overlap. Original error/strict-array fields remain
+visible beside the new diagnosis. Token counters are copied as reported, without
+adding or subtracting reasoning tokens; inconsistent counters are flagged.
+
+A single closed JSON/plain backtick block may be extracted from a completed
+(`stop`) answer for separate review. Multiple blocks, incomplete responses,
+request errors, invalid JSON and non-array roots are not recovered. No missing
+brackets or quotes are invented. Extraction checks syntax and array shape only;
+it does not perform schema/source validation, establish finding truth, change
+the original failed status or modify production parsing.
+
+The saved 12-call pilot contains three MiMo `length` completions at the 8192-token
+limit: one truncated answer and two null answers. Sonnet has one `stop` answer
+with prose plus a complete fenced array (three findings), which is extractable
+for review. The remaining eight answers are raw JSON arrays. MiMo's SQL control
+reports 172 reasoning tokens but 152 completion tokens, so derived visible-token
+counts would be unreliable. Measured totals: Sonnet 73.37 RUB / 60.276 s; MiMo
+13.74 RUB / 616.415 s. Sonnet's seeded archive response is an empty array: valid
+format is not successful mechanism detection. Production model is unchanged.
