@@ -163,7 +163,7 @@ def test_the_rubric_forbids_timing_as_a_ground_for_a_double_submit_finding():
     instructions = RUBRICS["web"]["instructions"]
 
     assert "TIMING IS NOT A GROUND" in instructions
-    assert "There is exactly ONE ground for this finding" in instructions
+    assert "not sufficient evidence of duplicate submission" in instructions
 
     for banned in ("too late", "before the re-render", "has not propagated"):
         assert banned in instructions, banned

@@ -53,7 +53,7 @@ def _normalize(text, names, response_names):
 
 
 def project_network_claim(text, *, component, handler, state, setter, response_names=(),
-                          has_button=False, has_visible_state=False, condition=False):
+                          has_button=False, has_visible_state=False, condition=False, request_labels=()):
     """Consume atomic relations and return roles, or None for any residual.
 
     A source-bound JSON call can describe successful sequencing. A JSON failure
@@ -70,7 +70,10 @@ def project_network_claim(text, *, component, handler, state, setter, response_n
     if not text:
         return ()
     handler_ref = _ART + r"boundhandler(?:\(\))?(?:\s+(?:function|handler))?"
-    request = _ART + _FETCH + r"(?:\s+in\s+boundhandler)?" + _LINE
+    request = _ART + r"(?:" + _FETCH + r"|this\s+(?:fetch|request)|boundhandler\s+request"
+    for label in request_labels:
+        request += "|" + re.escape(label.casefold())
+    request += r")(?:\s+in\s+boundhandler)?" + _LINE
     reset = r"boundsetter\(false\)" + _LINE
     raise_call = r"boundsetter\(true\)"
     prefix = r"(?:in\s+boundcomponent,?\s+)?"
@@ -78,6 +81,15 @@ def project_network_claim(text, *, component, handler, state, setter, response_n
     # These productions describe one relation each. The parser below composes
     # them without matching whole sentences or ignoring unrecognized words.
     rules = [
+        ("raise", handler_ref + r"\s+sets\s+boundstate(?:\s+to\s+true)?"),
+        ("await", r"before\s+awaiting\s+" + request),
+        ("await", r"awaits\s+" + request),
+        ("success_reset", r"(?:resets\s+it|clears\s+boundstate)\s+(?:only\s+)?afterward"),
+        ("cleanup_absent", r"(?:there\s+is\s+|with\s+)?" + _NO_CLEANUP + r"\s+in\s+the\s+(?:shown\s+)?handler"),
+        ("skipped_reset", r"execution\s+skips\s+(?:the\s+later\s+" + reset
+         + r"|the\s+lines\s+that\s+clear\s+boundstate)"),
+        ("untested", r"(?:i\s+have\s+not\s+checked\s+live\s+network\s+behavior|"
+         r"network\s+behavior\s+has\s+not\s+been\s+tested)"),
         ("raise", prefix + r"(?:" + handler_ref + r"\s+(?:calls|sets)\s+" + raise_call + _LINE
          + r"|line [0-9]{1,6}\s+sets\s+" + raise_call
          + r"|" + raise_call + r"\s+is\s+(?:called|set)" + _LINE + r")" + before),
@@ -90,6 +102,8 @@ def project_network_claim(text, *, component, handler, state, setter, response_n
         ("skipped_reset", reset + r"\s+is\s+(?:never|not)\s+reached"),
         ("skipped_reset", _ART + _FAILURE + r"\s+skips\s+it(?:\s+entirely)?"),
         ("propagation", _ART + r"rejection\s+propagates(?:\s+out\s+of\s+the\s+async\s+function)?"),
+        ("network_condition", request + r"\s+rejects(?:\s+(?:at\s+the\s+network\s+level|before\s+resolving))?"
+         r"(?:,\s*for\s+example\s+because\s+(?:the\s+network\s+request\s+fails|of\s+a\s+network\s+failure))?"),
         ("network_condition", request + r"\s+(?:throws(?:\s+" + _FAILURE
          + r")?|rejects(?:\s+with\s+" + _FAILURE + r")?)"
          + r"(?:\s*\(" + _QUALIFIER + r"\)|\s+rather than returning an http error response)?"),
@@ -110,7 +124,7 @@ def project_network_claim(text, *, component, handler, state, setter, response_n
     if condition:
         rules = [rule for rule in rules if rule[0] == "network_condition"] + [
             ("page_present", r"the\s+user\s+(?:has\s+not\s+navigated\s+away(?:\s+from\s+the\s+page)?"
-             r"|remains\s+on\s+the\s+(?:chat\s+page|test\s+conversation\s+tab))"),
+             r"|remains\s+on\s+the\s+(?:chat\s+page|test\s+conversation\s+tab|page\s+after\s+the\s+rejection))"),
         ]
     compiled = [(role, re.compile(pattern + r"(?=$|[\s.,;!?])")) for role, pattern in rules]
     roles = []

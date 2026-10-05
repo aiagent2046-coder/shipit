@@ -26,6 +26,10 @@ from app.scan.query_read_identity import (
     query_read_premise_target, query_read_related_title,
 )
 
+from app.scan.repeated_operation_identity import (
+    HOST, TIMER, repeated_operation_claim, retry_timer_candidates, authorized_fetch, host_target_matches,
+)
+
 MAX_FILE_BYTES = 256_000
 MAX_TOTAL_BYTES = 2_000_000
 MAX_FILES = 64
@@ -152,6 +156,7 @@ class SourceIssueResolver:
         self.remaining_nodes = MAX_WORK_NODES
         self._cache = {}
         self._python_sql = None
+        self._sql_policy = None
 
     def _document(self, path):
         if path in self._cache:
@@ -189,6 +194,14 @@ class SourceIssueResolver:
     def identity(self, finding):
         if self.checks >= MAX_CHECKS:
             return None
+        if isinstance(finding.get("file"), str) and finding["file"].endswith(".sql"):
+            from app.scan.sql_policy_identity import SQLPolicyResolver, sql_policy_claim
+            if not sql_policy_claim(finding):
+                return None
+            if self._sql_policy is None:
+                self._sql_policy = SQLPolicyResolver(self.archive)
+            self.checks += 1
+            return self._sql_policy.identity(finding)
         if isinstance(finding.get("file"), str) and finding["file"].endswith(".py"):
             from app.scan.python_sql_identity import PythonSQLResolver, sql_table_claim
             if not sql_table_claim(finding):
@@ -198,7 +211,7 @@ class SourceIssueResolver:
             self.checks += 1
             return self._python_sql.identity(finding)
         from app.scan.react_network_identity import network_cleanup_identity
-        network = network_cleanup_identity(finding, self.source_facts)
+        network = network_cleanup_identity(finding, self.source_facts, document_loader=self._document)
         if network is not None:
             self.checks += 1
             # Facts belong to this audit's archive. A stale/reused inventory
@@ -209,14 +222,18 @@ class SourceIssueResolver:
             except (UnicodeError, ValueError, TypeError, RecursionError, RuntimeError,
                     OSError, zipfile.BadZipFile):
                 return None
+        from app.scan.projected_read_identity import projected_read_identity, projected_read_related_title
+        if projected_read_related_title(finding.get("title")):
+            return projected_read_identity(finding, self)
         metadata_claim = model_metadata_claim(finding)
         if metadata_claim is None and model_metadata_title(finding.get("title", "")):
             return None  # A rejected mixed metadata claim cannot select another cause.
         query_claim = query_read_claim(finding)
         if query_claim is None and query_read_related_title(finding.get("title", "")):
             return None  # A compound read-volume claim cannot fall back to another mechanism.
+        repeated = repeated_operation_claim(finding)
         kind = (MODEL_METADATA if metadata_claim else QUERY_READ if query_claim
-                else _mechanism(finding.get("title", "")))
+                else repeated["mechanism"] if repeated else _mechanism(finding.get("title", "")))
         if kind == MODEL_METADATA and metadata_claim is None:
             return None  # One metadata operation can underlie different claims.
         path = finding.get("file")
@@ -237,6 +254,10 @@ class SourceIssueResolver:
             if end > _lines(root)[1]:
                 return None
             scope = _owning_scope(root, nodes, start)
+            if (kind == TIMER and scope.type == "arrow_function" and scope.parent
+                    and scope.parent.type == "arguments"
+                    and _call_name(scope.parent.parent) == "setTimeout"):
+                scope = _enclosing(scope.parent, g._FUNCTIONS) or root
             if scope == root or end > _lines(scope)[1]:
                 return None
             # A citation may span a whole enclosing function, but cannot select
@@ -251,6 +272,8 @@ class SourceIssueResolver:
             self.remaining_nodes -= work
             candidates = (query_read_candidates(own, query_claim) if kind == QUERY_READ
                           else self._candidates(kind, scope, own))
+            if kind == HOST:
+                candidates = [n for n in candidates if host_target_matches(finding, n, scope)]
             if kind == "query_row_bound":
                 # A title can select an actual table, just as coordinates can
                 # select a statement. It cannot invent the source identity.
@@ -262,7 +285,7 @@ class SourceIssueResolver:
                     for call in g._walk(node))]
                 if named:
                     candidates = named
-            if kind == QUERY_READ:
+            if kind in {QUERY_READ, HOST, TIMER}:
                 # A nearby count/write citation must not be redirected to the
                 # only eligible SELECT elsewhere in the same function.
                 candidates = [n for n in candidates if _lines(n)[0] <= end and start <= _lines(n)[1]]
@@ -273,7 +296,8 @@ class SourceIssueResolver:
                 return None
             operation_scope = _enclosing(operation.parent, g._FUNCTIONS) or scope
             identity = {"version": MODEL_METADATA_VERSION if kind == MODEL_METADATA else 1,
-                    **(metadata_claim if kind == MODEL_METADATA else query_claim if kind == QUERY_READ else {}),
+                    **(metadata_claim if kind == MODEL_METADATA else query_claim if kind == QUERY_READ
+                       else repeated if kind in {HOST, TIMER} else {}),
                     "method": "source_ast", "file": path,
                     "source_sha256": digest, "mechanism": kind,
                     "function_span": _span(operation_scope), "operation_span": _span(operation),
@@ -290,6 +314,10 @@ class SourceIssueResolver:
             return None
 
     def _candidates(self, kind, scope, own):
+        if kind == TIMER:
+            return retry_timer_candidates(scope, own)
+        if kind == HOST:
+            return [n for n in self._candidates("forwarded_host_ssrf", scope, own) if authorized_fetch(n)]
         if kind == "derived_password":
             return [n for n in own if _call_name(n) == "createHmac"]
         if kind == "service_role_access":

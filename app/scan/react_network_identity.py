@@ -8,10 +8,12 @@ semantic similarity. Original premise checks are retained in every finding.
 from __future__ import annotations
 
 import re
+import zipfile
 from pathlib import PurePosixPath
 
 from app.scan.react_async_context import _NETWORK_CLAIM, react_async_finding_context
 from app.scan.react_network_claims import project_network_claim
+from app.scan import guard_context as g
 
 MECHANISM = "react_network_rejection_cleanup"
 CLAIM_SCOPE = "single_network_rejection"
@@ -55,7 +57,90 @@ def _qualified_source_reference(finding, component, handler):
             and re.search(r"(?<![\w$])" + re.escape(handler) + r"(?![\w$])", text))
 
 
-def network_cleanup_identity(finding, source_facts):
+def _request_labels(context, binding, document_loader):
+    """A display endpoint/method label must select the recorded fetch AST."""
+    if document_loader is None:
+        return ()
+    try:
+        document = document_loader(context["file"])
+    except (UnicodeError, ValueError, TypeError, RecursionError, RuntimeError, OSError, zipfile.BadZipFile):
+        return ()
+    if not document or document[2] != context.get("source_sha256"):
+        return ()
+    calls = [node for node in document[1] if node.type == "call_expression"
+             and [node.start_byte, node.end_byte] == binding["operation_span"]
+             and g._name(node.child_by_field_name("function")) == "fetch"]
+    if len(calls) != 1:
+        return ()
+    args = g._children(calls[0].child_by_field_name("arguments"))
+    if len(args) != 2 or args[1].type != "object":
+        return ()
+    endpoint = g._literal(args[0])
+    if not isinstance(endpoint, str) or not re.fullmatch(r"/(?:[A-Za-z0-9_]+/)*[A-Za-z][A-Za-z0-9_]*", endpoint):
+        return ()
+    methods = []
+    for prop in g._children(args[1]):
+        if prop.type != "pair":
+            return ()  # A spread/computed override can replace the method.
+        key = prop.child_by_field_name("key")
+        if key.type not in {"property_identifier", "string"}:
+            return ()
+        if (g._literal(key) if key.type == "string" else g._text(key)) == "method":
+            methods.append(g._literal(prop.child_by_field_name("value")))
+    if len(methods) != 1 or methods[0] not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        return ()
+    return (endpoint.rsplit("/", 1)[1] + " " + methods[0],)
+
+
+def _context(finding, facts):
+    contexts = react_async_finding_context(finding, facts)
+    if contexts:
+        return contexts
+    start, end = finding.get("line_start"), finding.get("line_end")
+    if type(start) is not int or type(end) is not int or not 1 <= start <= end <= start + 80:
+        return []
+    # A small excerpt can include a comment or closing brace around a handler.
+    # Any other handler interior makes scope selection ambiguous; the first or
+    # last line alone can be a neighbouring declaration or closing brace.
+    overlapping = [rec for rec in (facts.get("react_async") or {}).get("records", [])
+                   if rec["file"] == finding.get("file") and rec["line"] < end and start < rec["line_end"]]
+    if len(overlapping) == 1 and start <= overlapping[0]["line"] <= overlapping[0]["line_end"] <= end:
+        return overlapping
+    return []
+
+
+def _ancillary_annotations(text, source_paths):
+    """Keep an exact path-set claim, never silently discard extra file scope."""
+    if not isinstance(text, str) or len(text) > 16000:
+        return None
+    pattern = re.compile(
+        r"The same (?:uncaught-rejection pattern affects other loading controls in |"
+        r"pattern also appears in (?P<count>[1-9][0-9]?) other supplied files: )"
+        r"(?P<paths>`[^`]+`(?:, `[^`]+`)*(?:,? and `[^`]+`)?)[.;]")
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return text, ()
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    paths = re.findall(r"`([^`]+)`", match["paths"])
+    if len(paths) > 16 or (match["count"] and int(match["count"]) != len(paths)):
+        return None
+    normalized = []
+    for item in paths:
+        if (len(item) > 512 or PurePosixPath(item).is_absolute() or ".." in PurePosixPath(item).parts
+                or not re.fullmatch(r"[A-Za-z0-9_./\[\]-]+\.(?:tsx|jsx)", item)):
+            return None
+        candidates = [known for known in source_paths if known == item or known.endswith("/" + item)]
+        if len(candidates) != 1:
+            return None
+        normalized.append(candidates[0])
+    if len(set(normalized)) != len(normalized):
+        return None
+    return text[:match.start()] + text[match.end():], tuple(sorted(normalized))
+
+
+def network_cleanup_identity(finding, source_facts, *, document_loader=None):
     """Return a scanner-bound single-mechanism identity, or stay unresolved."""
     path = finding.get("file")
     if (not isinstance(path, str) or len(path) > 512 or PurePosixPath(path).is_absolute()
@@ -65,24 +150,30 @@ def network_cleanup_identity(finding, source_facts):
     if title is None:
         return None
     matches = list(_NETWORK_CLAIM.finditer(title))
-    contexts = react_async_finding_context(finding, source_facts or {})
-    if len(matches) != 1 or len(contexts) != 1:
+    contexts = _context(finding, source_facts or {})
+    if len(contexts) != 1:
         return None
-    match, context = matches[0], contexts[0]
+    context = contexts[0]
     component, handler = context["scope"].rsplit(".", 1)
-    source_label = match["handler"] in {handler, handler[:1].upper() + handler[1:]}
-    prefix = title[:match.start()].strip()
-    known_prefix = _prefix_matches(prefix, component)
-    # Route labels describe a UI area, not another asserted mechanism. A wrong
-    # handler label only qualifies with explicit source names in the narrative;
-    # it remains a disagreement in group metadata, never a verified title.
-    route_label = prefix.casefold() in {part.casefold() for part in PurePosixPath(path).parts[:-1]}
-    if (title[match.end():].strip() not in {"", "."}
-            or not (known_prefix or (not source_label and route_label))
-            or (not source_label and not _qualified_source_reference(finding, component, handler))):
+    if len(matches) == 1:
+        match = matches[0]
+        source_label = match["handler"] in {handler, handler[:1].upper() + handler[1:]}
+        prefix = title[:match.start()].strip()
+        known_prefix = _prefix_matches(prefix, component)
+        route_label = prefix.casefold() in {part.casefold() for part in PurePosixPath(path).parts[:-1]}
+        if (title[match.end():].strip() not in {"", "."}
+                or not (known_prefix or (not source_label and route_label))
+                or (not source_label and not _qualified_source_reference(finding, component, handler))):
+            return None
+        candidates = [item for item in context.get("network_cleanup_bindings", [])
+                      if item["state"] == match["state"]]
+    elif not matches and re.fullmatch(
+            r"(?:A rejected " + re.escape(handler) + r" request can leave the " + re.escape(handler)
+            + r" control stuck|" + re.escape(handler[:1].upper() + handler[1:])
+            + r" can remain stuck after a network rejection)", title):
+        candidates = context.get("network_cleanup_bindings", [])
+    else:
         return None
-    candidates = [item for item in context.get("network_cleanup_bindings", [])
-                  if item["state"] == match["state"]]
     if len(candidates) != 1:
         return None
     binding = candidates[0]
@@ -92,14 +183,22 @@ def network_cleanup_identity(finding, source_facts):
                       and item["span"][1] < binding["reset_span"][0]}
     kwargs = {"component": component, "handler": handler, "state": binding["state"],
               "setter": binding["setter"], "response_names": response_names,
+              "request_labels": _request_labels(context, binding, document_loader),
               "has_button": any((item.get("state") == binding["state"] and item.get("disabled") == "state_truthy")
                                 or binding["state"] in item.get("truthy_disabled_states", [])
                                 for item in context.get("controls", [])),
               "has_visible_state": any(item["state"] == binding["state"]
                                        for item in projection.get("visible_states", []))}
+    ancillary = []
+    source_paths = {rec["file"] for rec in ((source_facts or {}).get("react_async") or {}).get("records", [])}
     for key in ("explanation", "observation"):
         value = finding.get(key)
-        if project_network_claim("" if value is None else value, **kwargs) is None:
+        annotation = _ancillary_annotations("" if value is None else value, source_paths)
+        if annotation is None:
+            return None
+        value, paths = annotation
+        ancillary.extend(paths)
+        if project_network_claim(value, **kwargs) is None:
             return None
     conditions = finding.get("required_conditions")
     if conditions is None:
@@ -132,7 +231,8 @@ def network_cleanup_identity(finding, source_facts):
             "claim_scope": CLAIM_SCOPE, "file": context["file"], "source_sha256": digest,
             "component": component, "handler": handler,
             "component_span": context["component_span"], "function_span": context["function_span"],
-            "handler_line_start": context["line"], "handler_line_end": context["line_end"], **binding}
+            "handler_line_start": context["line"], "handler_line_end": context["line_end"],
+            **({"ancillary_network_files": sorted(set(ancillary))} if ancillary else {}), **binding}
 
 
 def network_premise_projection(checks, identity):
@@ -169,6 +269,12 @@ def valid_network_identity(identity, path):
             or identity.get("claim_scope") != CLAIM_SCOPE or identity.get("file") != path
             or not isinstance(identity.get("source_sha256"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", identity["source_sha256"])):
+        return False
+    ancillary = identity.get("ancillary_network_files", [])
+    if (not isinstance(ancillary, list) or len(ancillary) > 16
+            or any(not isinstance(item, str) or len(item) > 512 or PurePosixPath(item).is_absolute()
+                   or ".." in PurePosixPath(item).parts for item in ancillary)
+            or ancillary != sorted(set(ancillary))):
         return False
     for key in ("component", "handler", "state", "setter"):
         if not isinstance(identity.get(key), str) or not re.fullmatch(r"[A-Za-z_$][\w$]{0,127}", identity[key]):
