@@ -58,14 +58,43 @@ it("does not invent a correction for legacy findings and escapes retained origin
   expect(container.querySelector("script")).toBeNull();
 });
 
-it("explains only the source-bound query grouping while retaining each original hypothesis", () => {
+it.each([1, 2])("explains the v%s source-bound query grouping while retaining each original hypothesis", version => {
   const finding = clone("query_group");
+  const identity = finding.claim_evidence!.source_issue_identity!;
+  identity.version = version;
+  if (version === 1) delete identity.binding;
   const rows = Object.fromEntries(claimEvidenceRows(finding));
   expect(rows["Grouped hypothesis scope"]).toContain("claimed costs remain separate and unverified");
   expect(rows["Grouped original 1 — not independent confirmation"]).toContain("GET /api/messages");
   expect(rows["Grouped original 2 — not independent confirmation"]).toContain("Messages GET endpoint");
   finding.claim_evidence!.source_issue_identity!.file = "another.ts";
   expect(Object.fromEntries(claimEvidenceRows(finding))["Grouped hypothesis scope"]).toBeUndefined();
+});
+
+it.each([
+  ["missing binding", (identity: Record<string, unknown>) => { delete identity.binding; }],
+  ["unknown version", (identity: Record<string, unknown>) => { identity.version = 3; }],
+  ["additional identity field", (identity: Record<string, unknown>) => { identity.extra = true; }],
+  ["null binding", (identity: Record<string, unknown>) => { identity.binding = null; }],
+  ["missing hash", (identity: Record<string, unknown>) => { identity.binding = { span: [61, 66] }; }],
+  ["invalid hash", (identity: Record<string, unknown>) => { identity.binding = { name_sha256: "z".repeat(64), span: [61, 66] }; }],
+  ["hash trailing newline", (identity: Record<string, unknown>) => { identity.binding = { name_sha256: "a".repeat(64) + "\n", span: [61, 66] }; }],
+  ["additional binding field", (identity: Record<string, unknown>) => { Object.assign(identity.binding!, { extra: true }); }],
+  ["fractional span", (identity: Record<string, unknown>) => { (identity.binding as Record<string, unknown>).span = [61.5, 66]; }],
+  ["empty span", (identity: Record<string, unknown>) => { (identity.binding as Record<string, unknown>).span = [61, 61]; }],
+  ["outside function", (identity: Record<string, unknown>) => { identity.function_span = [62, 256]; }],
+  ["overlapping operation", (identity: Record<string, unknown>) => { (identity.binding as Record<string, unknown>).span = [61, 69]; }],
+  ["oversized binding", (identity: Record<string, unknown>) => {
+    (identity.binding as Record<string, unknown>).span = [1, 130];
+    identity.operation_span = [131, 175];
+  }],
+] as const)("does not claim grouped scope for v2 with %s", (_label, mutate) => {
+  const finding = clone("query_group");
+  mutate(finding.claim_evidence!.source_issue_identity!);
+  const rows = Object.fromEntries(claimEvidenceRows(finding));
+  expect(rows["Grouped hypothesis scope"]).toBeUndefined();
+  expect(rows["Grouped original 1 — not independent confirmation"]).toContain("GET /api/messages");
+  expect(rows["Grouped original 2 — not independent confirmation"]).toContain("Messages GET endpoint");
 });
 
 it.each(["facts", "retry"] as const)("refuses %s when the saved check no longer matches its source scope", kind => {
