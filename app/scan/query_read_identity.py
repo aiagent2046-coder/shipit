@@ -74,7 +74,8 @@ def query_read_claim(finding):
         return None
     for premise in premises:
         if (not isinstance(premise, dict) or premise.get("kind") != "query_limit_unbounded"
-                or premise.get("target") != table
+                or not isinstance(premise.get("target"), str)
+                or not re.fullmatch(r"[A-Za-z_$][\w$]{0,127}", premise["target"])
                 or type(premise.get("line_start")) is not int
                 or type(premise.get("line_end")) is not int
                 or not start <= premise["line_start"] <= premise["line_end"] <= end):
@@ -119,12 +120,132 @@ def query_read_candidates(nodes, claim):
     return result
 
 
-def valid_query_read_identity(identity, path):
-    if not isinstance(identity, dict) or set(identity) != {
-            "version", "method", "mechanism", "claim_scope", "table_sha256", "file", "source_sha256",
-            "function_span", "operation_span", "operation_line_start", "operation_line_end"}:
+def query_read_binding(operation, scope):
+    """Identify a direct local SELECT binding, allowing only simple filters.
+
+    This bounded syntax proof is independent of the model's target spelling.
+    Escapes, shadowing and unknown writes abstain, including in nested scopes.
+    It says nothing about runtime SDK behavior or effective database limits.
+    """
+    from app.scan import guard_context as g
+
+    declaration = operation.parent
+    if (declaration is None or declaration.type != "variable_declarator"
+            or declaration.child_by_field_name("value") != operation
+            or any(n.type == "optional_chain" or any(c.type == "?." for c in n.children)
+                   for n in g._walk(operation))):
+        return None
+    identifier = declaration.child_by_field_name("name")
+    name = g._name(identifier)
+    statement = declaration.parent
+    if (not name or statement.type != "lexical_declaration"
+            or statement.parent != scope.child_by_field_name("body")):
+        return None
+    nodes = list(g._walk(scope))
+    # JavaScript permits escaped spellings of the same identifier. This
+    # resolver compares literal names, so abstain rather than miss a write or
+    # shadowing declaration such as qu\\u0065ry = other.
+    if any("identifier" in n.type and "\\" in g._text(n) for n in nodes):
+        return None
+    allowed = {identifier.id}
+    updates = []
+    awaits = []
+
+    def own_function(node):
+        while node is not None and node.type not in g._FUNCTIONS:
+            node = node.parent
+        return node == scope
+
+    for node in nodes:
+        if node.type == "assignment_expression" and g._name(node.child_by_field_name("left")) == name:
+            left, value = node.child_by_field_name("left"), node.child_by_field_name("right")
+            if (not own_function(node) or node.start_byte <= declaration.end_byte
+                    or node.parent.type != "expression_statement"):
+                return None
+            root = value
+            while root is not None and root.type == "call_expression":
+                function = root.child_by_field_name("function")
+                if (function is None or function.type != "member_expression"
+                        or any(n.type == "optional_chain" or any(c.type == "?." for c in n.children)
+                               for n in g._walk(root))):
+                    return None
+                method = g._text(function.child_by_field_name("property"))
+                args = g._children(root.child_by_field_name("arguments"))
+                if (method not in {"eq", "neq", "gt", "gte", "lt", "lte", "order"}
+                        or len(args) != 2 or not isinstance(g._literal(args[0]), str)):
+                    return None
+                root = function.child_by_field_name("object")
+            if root == value or g._name(root) != name:
+                return None
+            allowed.update((left.id, root.id))
+            updates.append(node)
+        if node.type == "await_expression":
+            children = g._children(node)
+            if len(children) == 1 and g._name(children[0]) == name:
+                if not own_function(node) or node.start_byte <= declaration.end_byte:
+                    return None
+                allowed.add(children[0].id)
+                awaits.append(node)
+    # A second consumption or any update after consumption names another use.
+    if len(awaits) != 1 or any(n.end_byte >= awaits[0].start_byte for n in updates):
+        return None
+    for node in nodes:
+        if (node.type in {"identifier", "shorthand_property_identifier", "shorthand_property_identifier_pattern"}
+                and g._text(node) == name and node.id not in allowed):
+            return None
+        # A direct eval can introduce bindings and change lexical references.
+        if (node.type == "with_statement" or node.type == "call_expression"
+                and g._name(node.child_by_field_name("function")) == "eval"):
+            return None
+    return {"name_sha256": sha256(name.encode()).hexdigest(),
+            "span": [identifier.start_byte, identifier.end_byte]}
+
+
+def _premise_overlaps_operation(premise, identity):
+    start, end = premise.get("line_start"), premise.get("line_end")
+    return (type(start) is int and type(end) is int and 1 <= start <= end
+            and start <= identity["operation_line_end"] and identity["operation_line_start"] <= end)
+
+
+def query_read_premise_target(premise, identity):
+    """Whether this cited premise selects the table or its proven binding."""
+    if (not isinstance(premise, dict) or premise.get("kind") != "query_limit_unbounded"
+            or not isinstance(premise.get("target"), str)):
         return False
-    if (type(identity["version"]) is not int or identity["version"] != 1
+    digest = sha256(premise["target"].encode()).hexdigest()
+    if digest == identity["table_sha256"]:
+        return True
+    if identity.get("version") != 2 or digest != identity["binding"]["name_sha256"]:
+        return False
+    return _premise_overlaps_operation(premise, identity)
+
+
+def query_read_premise_projection(checks, identity):
+    """Normalize only a pending selector; retain every original check verbatim.
+
+    An observed or contradicted result about a variable is not interchangeable
+    with a result about a table. All other check statuses also remain distinct.
+    """
+    if (not valid_query_read_identity(identity, identity.get("file") if isinstance(identity, dict) else None)
+            or identity["version"] != 2 or not isinstance(checks, list)):
+        return checks
+    return [{**p, "target": identity["table_sha256"]}
+            if isinstance(p, dict) and p.get("result") == "not_checked"
+            and query_read_premise_target(p, identity)
+            and _premise_overlaps_operation(p, identity) else p for p in checks]
+
+
+def valid_query_read_identity(identity, path):
+    if not isinstance(identity, dict):
+        return False
+    keys = {
+            "version", "method", "mechanism", "claim_scope", "table_sha256", "file", "source_sha256",
+            "function_span", "operation_span", "operation_line_start", "operation_line_end"}
+    if identity.get("version") == 2:
+        keys.add("binding")
+    if set(identity) != keys:
+        return False
+    if (type(identity["version"]) is not int or identity["version"] not in {1, 2}
             or identity["method"] != "source_ast" or identity["mechanism"] != MECHANISM
             or identity["claim_scope"] != CLAIM_SCOPE or identity["file"] != path
             or not isinstance(path, str) or not 0 < len(path) <= 512 or "\\" in path
@@ -139,6 +260,16 @@ def valid_query_read_identity(identity, path):
                 or not 0 <= span[0] < span[1] <= 256000):
             return False
     function, operation = identity["function_span"], identity["operation_span"]
+    if identity["version"] == 2:
+        binding = identity["binding"]
+        if (not isinstance(binding, dict) or set(binding) != {"name_sha256", "span"}
+                or not isinstance(binding["name_sha256"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", binding["name_sha256"])):
+            return False
+        span = binding["span"]
+        if (not isinstance(span, list) or len(span) != 2 or any(type(n) is not int for n in span)
+                or not function[0] <= span[0] < span[1] < operation[0] or span[1] - span[0] > 128):
+            return False
     start, end = identity["operation_line_start"], identity["operation_line_end"]
     return (function[0] <= operation[0] < operation[1] <= function[1]
             and type(start) is int and type(end) is int and 1 <= start <= end <= 256000)
@@ -178,10 +309,23 @@ def compatible_query_read_claims(left, right, identity):
         if premises is None:
             premises = []
         if not isinstance(premises, list) or any(
-                not isinstance(p, dict) or p.get("kind") != "query_limit_unbounded"
-                or not isinstance(p.get("target"), str)
-                or sha256(p["target"].encode()).hexdigest() != identity["table_sha256"] for p in premises):
+                not query_read_premise_target(p, identity)
+                or (sha256(p["target"].encode()).hexdigest() != identity["table_sha256"]
+                    and p.get("result") != "not_checked") for p in premises):
             return False
+        for p in premises:
+            if sha256(p["target"].encode()).hexdigest() == identity["table_sha256"]:
+                continue
+            # Saved alias requests must still fit the quote that selected this
+            # operation. Optional original anchors cannot select another scope.
+            for a, b in (("line_start", "line_end"), ("anchor_line_start", "anchor_line_end")):
+                if a not in p and b not in p:
+                    continue
+                if (type(p.get(a)) is not int or type(p.get(b)) is not int
+                        or not start <= p[a] <= p[b] <= end
+                        or not p[a] <= identity["operation_line_end"]
+                        or not identity["operation_line_start"] <= p[b]):
+                    return False
     # Cross-rubric dedup additionally compares all scanner dispositions. The
     # hypotheses may describe different read-volume conditions; grouping must
     # never promote those conditions or consequences to verified facts.

@@ -97,25 +97,42 @@ export function evidenceLabel(finding: Finding, historical = false): string {
   return "Legacy finding — verification not recorded";
 }
 
+function validQueryReadIdentity(identity: unknown, path: unknown): boolean {
+  if (!record(identity)) return false;
+  const keys = ["version", "method", "mechanism", "claim_scope", "table_sha256", "file", "source_sha256",
+    "function_span", "operation_span", "operation_line_start", "operation_line_end"];
+  if (identity.version === 2) keys.push("binding");
+  if (Object.keys(identity).length !== keys.length || !keys.every(key => Object.hasOwn(identity, key))
+    || ![1, 2].includes(identity.version as number) || identity.method !== "source_ast"
+    || identity.mechanism !== "query_read_volume" || identity.claim_scope !== "select_pagination_bound"
+    || identity.file !== path || typeof path !== "string" || path.length === 0 || path.length > 512
+    || path.includes("\\") || path.split("/").some(part => ["", ".", ".."].includes(part))
+    || ![identity.table_sha256, identity.source_sha256].every(value => typeof value === "string" && value.length === 64 && /^[a-f0-9]{64}$/.test(value))
+    || ![identity.function_span, identity.operation_span].every(span => Array.isArray(span) && span.length === 2
+      && count(span[0]) && count(span[1]) && span[0] < span[1] && span[1] <= 256000)) return false;
+  const scope = identity.function_span as number[], operation = identity.operation_span as number[];
+  if (identity.version === 2) {
+    const binding = identity.binding;
+    if (!record(binding) || Object.keys(binding).length !== 2
+      || typeof binding.name_sha256 !== "string" || binding.name_sha256.length !== 64 || !/^[a-f0-9]{64}$/.test(binding.name_sha256)
+      || !Array.isArray(binding.span) || binding.span.length !== 2
+      || !count(binding.span[0]) || !count(binding.span[1])
+      || !(scope[0] <= binding.span[0] && binding.span[0] < binding.span[1] && binding.span[1] < operation[0])
+      || binding.span[1] - binding.span[0] > 128) return false;
+  }
+  return scope[0] <= operation[0] && operation[1] <= scope[1]
+    && count(identity.operation_line_start) && count(identity.operation_line_end)
+    && identity.operation_line_start > 0 && identity.operation_line_start <= identity.operation_line_end
+    && identity.operation_line_end <= 256000;
+}
+
 function groupedClaimScopeRows(finding: Finding): [string, string][] {
   const evidence = finding.claim_evidence;
   const grouping: unknown = evidence?.grouped_claim_scope;
   const originals = evidence?.grouped_originals;
   const identity = evidence?.source_issue_identity;
   if (finding.source === "llm" && evidence?.version === 1 && record(grouping) && grouping.mechanism === "query_read_volume"
-    && Array.isArray(originals) && originals.length > 1 && record(identity)
-    && Object.keys(identity).length === 11 && identity.version === 1 && identity.method === "source_ast"
-    && identity.mechanism === "query_read_volume" && identity.claim_scope === "select_pagination_bound"
-    && identity.file === finding.file && typeof finding.file === "string" && finding.file.length > 0 && finding.file.length <= 512
-    && !finding.file.includes("\\") && finding.file.split("/").every(p => !["", ".", ".."].includes(p))
-    && [identity.table_sha256, identity.source_sha256].every(v => typeof v === "string" && /^[a-f0-9]{64}$/.test(v))
-    && [identity.function_span, identity.operation_span].every(v => Array.isArray(v) && v.length === 2
-      && count(v[0]) && count(v[1]) && v[0] < v[1] && v[1] <= 256000)
-    && (identity.function_span as number[])[0] <= (identity.operation_span as number[])[0]
-    && (identity.operation_span as number[])[1] <= (identity.function_span as number[])[1]
-    && count(identity.operation_line_start) && count(identity.operation_line_end)
-    && identity.operation_line_start > 0 && identity.operation_line_start <= identity.operation_line_end
-    && identity.operation_line_end <= 256000) {
+    && Array.isArray(originals) && originals.length > 1 && validQueryReadIdentity(identity, finding.file)) {
     return [["Grouped hypothesis scope", "Grouped by the same source SELECT operation and pagination-bound "
       + "hypothesis only. Original conditions, retention assumptions and claimed costs remain "
       + "separate and unverified; repetition is not independent confirmation."]];

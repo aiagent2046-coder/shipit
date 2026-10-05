@@ -22,7 +22,8 @@ from app.scan.model_metadata_identity import (
     model_metadata_title,
 )
 from app.scan.query_read_identity import (
-    MECHANISM as QUERY_READ, query_read_candidates, query_read_claim, query_read_related_title,
+    MECHANISM as QUERY_READ, query_read_binding, query_read_candidates, query_read_claim,
+    query_read_premise_target, query_read_related_title,
 )
 
 MAX_FILE_BYTES = 256_000
@@ -271,12 +272,19 @@ class SourceIssueResolver:
             if operation is None:
                 return None
             operation_scope = _enclosing(operation.parent, g._FUNCTIONS) or scope
-            return {"version": MODEL_METADATA_VERSION if kind == MODEL_METADATA else 1,
+            identity = {"version": MODEL_METADATA_VERSION if kind == MODEL_METADATA else 1,
                     **(metadata_claim if kind == MODEL_METADATA else query_claim if kind == QUERY_READ else {}),
                     "method": "source_ast", "file": path,
                     "source_sha256": digest, "mechanism": kind,
                     "function_span": _span(operation_scope), "operation_span": _span(operation),
                     "operation_line_start": _lines(operation)[0], "operation_line_end": _lines(operation)[1]}
+            if kind == QUERY_READ:
+                binding = query_read_binding(operation, operation_scope)
+                if binding is not None:
+                    identity.update(version=2, binding=binding)
+                if any(not query_read_premise_target(p, identity) for p in finding.get("premises") or []):
+                    return None
+            return identity
         except (UnicodeError, ValueError, TypeError, RecursionError, RuntimeError, ImportError,
                 OSError, zipfile.BadZipFile):
             return None

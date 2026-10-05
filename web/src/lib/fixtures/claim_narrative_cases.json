@@ -671,7 +671,7 @@
     "claim_evidence": {
       "version": 1,
       "source_issue_identity": {
-        "version": 1,
+        "version": 2,
         "claim_scope": "select_pagination_bound",
         "table_sha256": "f5cccfb737512bedd4f2e39e7d72425ae8d3ebf8aa8ab6f966bef1fc916f5011",
         "method": "source_ast",
@@ -687,7 +687,14 @@
           175
         ],
         "operation_line_start": 3,
-        "operation_line_end": 5
+        "operation_line_end": 5,
+        "binding": {
+          "name_sha256": "a8b771920b8319e47251d1360f5e880bc18e8d329b0f0d003ea3c7e615558947",
+          "span": [
+            61,
+            66
+          ]
+        }
       },
       "source_check": {
         "kind": "quote_match",
@@ -731,7 +738,7 @@
           "claim_evidence": {
             "version": 1,
             "source_issue_identity": {
-              "version": 1,
+              "version": 2,
               "claim_scope": "select_pagination_bound",
               "table_sha256": "f5cccfb737512bedd4f2e39e7d72425ae8d3ebf8aa8ab6f966bef1fc916f5011",
               "method": "source_ast",
@@ -747,7 +754,14 @@
                 175
               ],
               "operation_line_start": 3,
-              "operation_line_end": 5
+              "operation_line_end": 5,
+              "binding": {
+                "name_sha256": "a8b771920b8319e47251d1360f5e880bc18e8d329b0f0d003ea3c7e615558947",
+                "span": [
+                  61,
+                  66
+                ]
+              }
             },
             "source_check": {
               "kind": "quote_match",
@@ -805,7 +819,7 @@
           "claim_evidence": {
             "version": 1,
             "source_issue_identity": {
-              "version": 1,
+              "version": 2,
               "claim_scope": "select_pagination_bound",
               "table_sha256": "f5cccfb737512bedd4f2e39e7d72425ae8d3ebf8aa8ab6f966bef1fc916f5011",
               "method": "source_ast",
@@ -821,7 +835,14 @@
                 175
               ],
               "operation_line_start": 3,
-              "operation_line_end": 5
+              "operation_line_end": 5,
+              "binding": {
+                "name_sha256": "a8b771920b8319e47251d1360f5e880bc18e8d329b0f0d003ea3c7e615558947",
+                "span": [
+                  61,
+                  66
+                ]
+              }
             },
             "source_check": {
               "kind": "quote_match",
