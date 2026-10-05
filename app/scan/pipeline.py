@@ -661,7 +661,9 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             llm_summary = f"failed: {exc}"
         else:
             findings = findings + [vars(f) for f in llm_findings]
-            llm_summary = vars(stats)
+            # Billing metadata belongs only in the private usage journal, not
+            # the public scan response or the operator's full-summary alert.
+            llm_summary = {key: value for key, value in vars(stats).items() if key != "provider_attempts"}
 
     findings = collapse_repeats(findings)
 

@@ -1678,6 +1678,7 @@ class LlmUsageRepository:
         account_id: str | None, model: str, calls: int,
         input_tokens: int, output_tokens: int, cost_usd: Any,
         audit_job_id: str | None = None,
+        provider_usage: dict | None = None,
     ) -> dict[str, Any] | None:
         try:
             pool = await get_pool()
@@ -1701,15 +1702,16 @@ class LlmUsageRepository:
                 """
                 insert into llm_usage
                     (job_type, job_id, account_id, model, calls,
-                     input_tokens, output_tokens, cost_usd, audit_job_id)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     input_tokens, output_tokens, cost_usd, audit_job_id, provider_usage)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 returning id, job_type, job_id, account_id, model, calls,
                           input_tokens, output_tokens, cost_usd, created_at,
-                          audit_job_id
+                          audit_job_id, provider_usage
                 """,
                 (job_type, parsed_job_id, parsed_account_id, model,
                  int(calls), int(input_tokens), int(output_tokens), cost_usd,
-                 parsed_audit_job_id),
+                 parsed_audit_job_id,
+                 json.dumps(provider_usage, allow_nan=False) if provider_usage is not None else None),
             )
             row = await cur.fetchone()
         return dict(row) if row else None

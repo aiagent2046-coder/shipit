@@ -375,14 +375,15 @@ async def _record_llm_usage(
     job_id: str | None, account_id: str | None, llm_stats: object,
     audit_job_id: str | None = None,
 ) -> None:
-    """Write ONE llm_usage row per ATTEMPT that actually bought tokens.
+    """Write ONE llm_usage row per job attempt that contacted a provider.
 
     `llm_stats` is run_scan()["llm_usage"] -- the accounting key, not the `llm`
     diagnostic key. The distinction is the whole point: `llm` degrades to the
     string "failed: ..." when a provider dies mid-scan, and reading spend off it
     silently discarded every token the calls before that failure had already
-    paid for. `llm_usage` always carries the real totals, so calls>0 is now the
-    single condition, and it means what it says.
+    paid for. `llm_usage` carries successful-completion totals and provider
+    attempts. The latter includes billed empty answers and timeouts with
+    unknown charges, even when no .complete() call succeeded.
 
     Callers must invoke this on the FAILURE path too, passing job_id=None when
     no audits row exists to point at. Spend is a fact about the provider's
@@ -403,22 +404,27 @@ async def _record_llm_usage(
     and any unexpected write failure is logged, not raised."""
     if not isinstance(llm_stats, dict):
         return
-    calls = int(llm_stats.get("calls") or 0)
-    if calls <= 0:
-        return
-    input_tokens = int(llm_stats.get("input_tokens") or 0)
-    output_tokens = int(llm_stats.get("output_tokens") or 0)
-    # model is NOT NULL in the table; a job with calls>0 always set it, but fall
-    # back to a sentinel that prices at DEFAULT_PRICE (fail-safe high) rather
-    # than write a null or crash if a provider ever omitted it.
-    model = llm_stats.get("model") or "unknown"
-    cost = pricing.cost_usd(model, input_tokens, output_tokens)
     try:
+        from app.llm.accounting import provider_usage_summary
+
+        calls = int(llm_stats.get("calls") or 0)
+        try:
+            provider_usage = provider_usage_summary(llm_stats.get("provider_attempts") or [])
+        except Exception:  # noqa: BLE001 -- additive metadata must not discard legacy spend
+            logger.warning("Invalid provider usage metadata for %s job %s", job_type, job_id)
+            provider_usage = None
+        if calls <= 0 and provider_usage is None:
+            return
+        input_tokens = int(llm_stats.get("input_tokens") or 0)
+        output_tokens = int(llm_stats.get("output_tokens") or 0)
+        model = llm_stats.get("model") or "unknown"
+        cost = pricing.cost_usd(model, input_tokens, output_tokens)
         await llm_usage_repo.create(
             job_type=job_type, job_id=job_id, account_id=account_id,
             model=model, calls=calls, input_tokens=input_tokens,
             output_tokens=output_tokens, cost_usd=cost,
             audit_job_id=audit_job_id,
+            **({"provider_usage": provider_usage} if provider_usage is not None else {}),
         )
     except Exception:  # noqa: BLE001 -- accounting must never fail the audit
         logger.warning("llm_usage recording failed for %s job %s",

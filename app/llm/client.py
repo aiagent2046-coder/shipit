@@ -12,8 +12,10 @@ import copy
 from collections.abc import Mapping
 import math
 import os
+import re
 import time
 from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -195,19 +197,25 @@ RETRY_BACKOFF_S = 2.0      # linear: 2s, then 4s
 class LLMError(Exception):
     """All providers failed."""
 
+    def __init__(self, message: str, *, attempts: tuple[dict, ...] = ()):
+        super().__init__(message)
+        self.attempts = attempts
+
 
 @dataclass(frozen=True)
 class LLMUsage:
     """Token counts for one .complete() call, read from the provider's
     response `usage` block, plus the model the provider says it actually
-    served. This is the raw material for cost accounting (app/llm/pricing.py);
-    the provider returns tokens but never a price. A response missing `usage`
+    served. This is the raw material for cost accounting (app/llm/pricing.py).
+    `attempts` also retains reported prices and usage from failed requests;
+    absent prices remain unknown, never an invented zero. Missing `usage`
     yields zeros rather than an error — a scan must not fail because a provider
     omitted a bookkeeping field."""
 
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
+    attempts: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -381,11 +389,18 @@ class LLMClient:
         if not self.providers:
             raise LLMError("no providers configured (check .env)")
         errors: list[str] = []
+        attempts: list[dict] = []
         for p in self.providers:
             for attempt in range(1 + TRANSIENT_RETRIES):
+                started = time.monotonic()
                 try:
-                    return self._call(p, system, user, max_tokens)
+                    text, usage = self._call(p, system, user, max_tokens)
+                    attempts.extend(usage.attempts or (
+                        _attempt_record(p, {}, started),))
+                    return text, replace(usage, attempts=tuple(attempts))
                 except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
+                    attempts.extend(getattr(exc, "attempts", ()) or (
+                        _attempt_record(p, {}, started, exc),))
                     # 5xx and transport/timeout errors are transient:
                     # retry the SAME provider with backoff (a single
                     # provider-side 500 killed a whole audit stage in a
@@ -401,7 +416,7 @@ class LLMClient:
                         continue
                     errors.append(f"{p.kind}@{p.base_url}: {_detail(exc)}")
                     break
-        raise LLMError("; ".join(errors))
+        raise LLMError("; ".join(errors), attempts=tuple(attempts))
 
     @staticmethod
     def _payload_anthropic(p: Provider, system: str, user: str,
@@ -451,10 +466,61 @@ class LLMClient:
         }
         if supports_sampling_params(p.model):
             body["temperature"] = 0
+        if (os.environ.get("AITUNNEL_PROMPT_CACHE") == "1"
+                and p.kind == "openai_compat"
+                and p.base_url == "https://api.aitunnel.ru/v1"
+                and p.model in {"claude-sonnet-4.6", "claude-sonnet-4-6"}):
+            # Explicit markers use the provider's default five-minute TTL.
+            # Preserve every prompt byte; only the content envelope changes.
+            for message in body["messages"]:
+                message["content"] = [{
+                    "type": "text", "text": message["content"],
+                    "cache_control": {"type": "ephemeral"},
+                }]
         return body
 
     def _call(self, p: Provider, system: str, user: str,
               max_tokens: int) -> tuple[str, LLMUsage]:
+        started = time.monotonic()
+        data: dict = {}
+        try:
+            data = self._request(p, system, user, max_tokens)
+            if not isinstance(data, dict):
+                data = {}
+                raise ValueError("invalid_response_shape")
+            if p.kind == "anthropic":
+                text = "".join(
+                    b["text"] for b in data["content"] if b.get("type") == "text"
+                )
+                text = _answer_or_raise(text, p, data, data.get("usage"))
+                usage = _usage_anthropic(data, p.model)
+            else:
+                choice = data["choices"][0]
+                text = _answer_or_raise(choice["message"].get("content"),
+                                        p, choice, data.get("usage"))
+                usage = _usage_openai(data, p.model)
+        except (httpx.HTTPError, KeyError, IndexError, ValueError,
+                TypeError, AttributeError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                try:
+                    error_data = exc.response.json()
+                    if isinstance(error_data, dict):
+                        data = error_data
+                except (ValueError, httpx.HTTPError):
+                    pass
+            record = _attempt_record(p, data, started, exc)
+            # Malformed response shapes should follow the same non-transient
+            # fallback as missing fields, without losing received billing.
+            if isinstance(exc, (TypeError, AttributeError)):
+                converted = ValueError("invalid_response_shape")
+                converted.attempts = (record,)
+                raise converted from exc
+            exc.attempts = (record,)
+            raise
+        return text, replace(usage, attempts=(_attempt_record(p, data, started),))
+
+    def _request(self, p: Provider, system: str, user: str,
+                 max_tokens: int) -> dict:
         with httpx.Client(timeout=TIMEOUT, transport=self._transport) as client:
             if p.kind == "anthropic":
                 resp = client.post(
@@ -467,12 +533,7 @@ class LLMClient:
                     json=self._payload_anthropic(p, system, user, max_tokens),
                 )
                 resp.raise_for_status()
-                data = resp.json()
-                text = "".join(
-                    b["text"] for b in data["content"] if b.get("type") == "text"
-                )
-                return (_answer_or_raise(text, p, data, data.get("usage")),
-                        _usage_anthropic(data, p.model))
+                return resp.json()
 
             # openai_compat
             resp = client.post(
@@ -482,11 +543,7 @@ class LLMClient:
                 json=self._payload_openai(p, system, user, max_tokens),
             )
             resp.raise_for_status()
-            data = resp.json()
-            choice = data["choices"][0]
-            text = _answer_or_raise(choice["message"].get("content"),
-                                    p, choice, data.get("usage"))
-            return text, _usage_openai(data, p.model)
+            return resp.json()
 
 
 # How much of a provider's error body to keep. Enough for the sentence that
@@ -517,20 +574,106 @@ def _detail(exc: Exception) -> str:
     return f"{exc}: {body[:_DETAIL_CHARS]}" if body else str(exc)
 
 
-def _usage_int(usage: dict, key: str) -> int:
+def _mapping(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _nonnegative_decimal(value: object) -> Decimal | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str, Decimal)):
+        return None
+    try:
+        # Bookkeeping must not allocate an unbounded integer or decimal string
+        # because a provider accidentally returned an extreme exponent.
+        raw = str(value)
+        if len(raw) > 128:
+            return None
+        number = Decimal(raw)
+        if not number.is_finite() or number < 0 or abs(number.adjusted()) > 100:
+            return None
+        return number
+    except (ValueError, InvalidOperation):
+        return None
+
+
+def _token_count(value: object) -> int | None:
+    number = _nonnegative_decimal(value)
+    if number is None or number != number.to_integral_value() or number > 2**63 - 1:
+        return None
+    return int(number)
+
+
+def _reported_cost(value: object) -> str | None:
+    number = _nonnegative_decimal(value)
+    if number is None:
+        return None
+    if not number:
+        return "0"
+    text = format(number, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _metadata_name(value: object) -> str | None:
+    # Identifiers only: never carry arbitrary response text into the ledger.
+    if isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}", value):
+        return value
+    return None
+
+
+def _attempt_record(p: Provider, data: dict, started: float,
+                    exc: Exception | None = None) -> dict:
+    usage = _mapping(data.get("usage"))
+    # Some compatible providers place the billed amount at response level.
+    # Only an absent/null nested value falls back; explicit zero is a price,
+    # and a malformed nested value must remain unknown rather than be hidden.
+    cost = usage.get("cost_rub")
+    if cost is None:
+        cost = data.get("cost_rub")
+    prompt_details = _mapping(usage.get("prompt_tokens_details"))
+    completion_details = _mapping(usage.get("completion_tokens_details"))
+    if p.kind == "anthropic":
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        cached = usage.get("cache_read_input_tokens")
+        written = usage.get("cache_creation_input_tokens")
+        finish = data.get("stop_reason")
+    else:
+        input_tokens = usage.get("prompt_tokens")
+        output_tokens = usage.get("completion_tokens")
+        cached = prompt_details.get("cached_tokens")
+        written = prompt_details.get("cache_write_tokens")
+        choices = data.get("choices")
+        choice = _mapping(choices[0]) if isinstance(choices, list) and choices else {}
+        finish = choice.get("finish_reason")
+    return {
+        "provider_kind": _metadata_name(p.kind),
+        "requested_model": _metadata_name(p.model),
+        "model": _metadata_name(data.get("model")),
+        "input_tokens": _token_count(input_tokens),
+        "output_tokens": _token_count(output_tokens),
+        "cached_tokens": _token_count(cached),
+        "cache_write_tokens": _token_count(written),
+        "reasoning_tokens": _token_count(completion_details.get("reasoning_tokens")),
+        "cost_rub": _reported_cost(cost),
+        "finish_reason": _metadata_name(finish),
+        "error": (f"http_{exc.response.status_code}"
+                  if isinstance(exc, httpx.HTTPStatusError)
+                  else type(exc).__name__ if exc is not None else None),
+        "seconds": round(max(0.0, time.monotonic() - started), 6),
+    }
+
+
+def _usage_int(usage: object, key: str) -> int:
     """A token count from a provider `usage` block, coerced to a non-negative
     int. A missing key or a non-numeric value degrades to 0 — usage is
     bookkeeping the scan must never fail on."""
-    try:
-        return max(0, int(usage.get(key, 0) or 0))
-    except (TypeError, ValueError):
-        return 0
+    return _token_count(_mapping(usage).get(key)) or 0
 
 
 def _usage_anthropic(data: dict, requested_model: str) -> LLMUsage:
     usage = data.get("usage") or {}
     return LLMUsage(
-        model=data.get("model") or requested_model,
+        model=(data["model"] if isinstance(data.get("model"), str)
+               and data["model"] else requested_model),
         input_tokens=_usage_int(usage, "input_tokens"),
         output_tokens=_usage_int(usage, "output_tokens"),
     )
@@ -539,7 +682,8 @@ def _usage_anthropic(data: dict, requested_model: str) -> LLMUsage:
 def _usage_openai(data: dict, requested_model: str) -> LLMUsage:
     usage = data.get("usage") or {}
     return LLMUsage(
-        model=data.get("model") or requested_model,
+        model=(data["model"] if isinstance(data.get("model"), str)
+               and data["model"] else requested_model),
         input_tokens=_usage_int(usage, "prompt_tokens"),
         output_tokens=_usage_int(usage, "completion_tokens"),
     )
