@@ -190,3 +190,66 @@ mode and makes no requests. Two cases for two models mean four prospective new
 answers; historical money-rubric answers cannot serve as results for these new
 prompts. A later bounded execution requires its own cost review and user
 authorization. Preparing this comparison does not launch it or change production.
+
+## Bounded execution of the corrected pair
+
+`scripts/evaluate_payment_model_review.py` uses that same preparation directly
+from the original baseline. Default mode remains offline, with no credential
+read. Its explicit `--run` option makes at most four sequential requests:
+control Luna, control Sonnet, seeded Luna, seeded Sonnet. This fixed order and
+single attempt per case/model do not measure run-to-run variance.
+
+Both models receive identical plain-string messages for a given case, including
+the original scope footer. Luna uses `reasoning_effort: medium` and
+`max_completion_tokens: 8192`; Sonnet uses its historical `max_tokens: 8192`
+and `temperature: 0`. No tools, structured-output mode or explicit cache hints
+are added. These are model-specific configurations, not equal reasoning effort.
+Provider automatic caching can still differ. Both use a 180-second HTTPX
+operation timeout (connect: 30), not a total wall-clock deadline.
+
+The admission budget is 160 RUB; `--budget-rub` can lower but not raise it.
+Before each request, known spend plus that request's conservative reservation
+must fit the budget. Reservation uses UTF-8 bytes plus 1024 envelope tokens and
+the full output allowance. Luna rates are 25/100 RUB and Sonnet rates 750/3300
+RUB per million input/output tokens. On the saved baseline the sum of all four
+reservations is **152.733275 RUB**. This is not an expected bill: byte count
+overestimates input tokens and reserves maximum output. It is not a provider-
+enforced ceiling either; changed prices or unknown charges can exceed it.
+Rates were checked on 2026-10-05 against:
+
+- https://aitunnel.ru/models/gpt-6-luna
+- https://aitunnel.ru/models/claude-sonnet-4-6
+- https://aitunnel.ru/docs/parameters
+
+From the pinned experimental checkout, prepare into a new file:
+
+```bash
+/srv/shipit/current/.venv/bin/python scripts/evaluate_payment_model_review.py \
+  --baseline /root/drydock-model-trial.LtVA8n/results-pilot-20261005-093207.json \
+  --output prepared-payment-pilot.json
+```
+
+Run the four-request comparison into a different new file:
+
+```bash
+/srv/shipit/current/.venv/bin/python scripts/evaluate_payment_model_review.py \
+  --baseline /root/drydock-model-trial.LtVA8n/results-pilot-20261005-093207.json \
+  --env /opt/shipit/.env --budget-rub 160 \
+  --output results-payment-pilot.json --run
+```
+
+Every attempted dispatch is checkpointed before HTTP. Raw responses, usage,
+actual cost, response lengths, finish reason and timing are retained in a
+private output; logs omit credentials, error bodies and account balances.
+Unknown cost, timeout, HTTP failure, model mismatch or budget exhaustion stops
+further requests. A complete but malformed or length-limited answer with known
+cost is preserved and allows the next scheduled request. No automatic retry,
+fallback or resume is available; do not launch another file to retry an
+uncertain charge. Semantic review fields remain unreviewed after completion,
+while response presence and JSON/quote checks reflect the received answers.
+
+Validation: 60 targeted offline tests passed, including mock transports for
+both models, billing stops, pre-dispatch checkpoints, source/hash integrity,
+no retries, exclusive private outputs and offline credential isolation. Ruff
+and `git diff --check` passed. Preparing the actual baseline reproduced the
+four reservations above without provider calls. Production remains unchanged.
