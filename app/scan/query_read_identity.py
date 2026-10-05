@@ -12,10 +12,11 @@ import re
 
 MECHANISM = "query_read_volume"
 CLAIM_SCOPE = "select_pagination_bound"
+_SUBJECT = r"(?:GET /[\w/{}-]+|[a-z][\w-]* GET(?: endpoint)?|GET [a-z][\w-]* endpoint|[a-z][\w-]* query)"
 _TITLE = re.compile(
-    r"(?:GET /[\w/{}-]+|[a-z][\w-]* GET endpoint|[a-z][\w-]* query) "
+    _SUBJECT + r" "
     r"fetches all (?P<table>[a-z][a-z0-9_]*)"
-    r"(?: for (?:a|each) (?:match|conversation|user))? with no (?:pagination )?limit", re.I)
+    r"(?: for (?:a|each) (?:match|conversation|user))? with no (?:(?:pagination|row) )?limit", re.I)
 _OTHER = re.compile(
     r"\b(?:auth(?:entication|orization)?|unauthenticated|ownership|owner|RLS|race|concurren\w*|"
     r"atomic|idempot\w*|duplicate|LLM|Claude|Anthropic|prompt|tokens?|reasoning|injection|"
@@ -40,8 +41,7 @@ def query_read_title(title):
 def query_read_related_title(title):
     """Rejection routing only; an unsupported suffix cannot invoke legacy grouping."""
     text = _text(title[:2000], 2000) if isinstance(title, str) else None
-    return text is not None and re.match(
-        r"(?:GET /[\w/{}-]+|[a-z][\w-]* GET endpoint|[a-z][\w-]* query) fetches all\b", text, re.I) is not None
+    return text is not None and re.match(_SUBJECT + r" fetches all\b", text, re.I) is not None
 
 
 def query_read_claim(finding):

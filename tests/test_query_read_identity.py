@@ -23,7 +23,9 @@ SOURCE = """async function GET(req) {
 }
 """
 TITLES = ("GET /api/messages fetches all messages for a match with no LIMIT",
-          "Messages GET endpoint fetches all messages for a match with no pagination limit")
+          "Messages GET endpoint fetches all messages for a match with no pagination limit",
+          "Messages GET fetches all messages for a match with no row limit",
+          "GET messages endpoint fetches all messages for a match with no pagination limit")
 
 
 def _resolver(source=SOURCE):
@@ -68,9 +70,10 @@ def _fingerprints(rows):
     return Counter(json.dumps(row, sort_keys=True) for row in rows)
 
 
-def test_two_pass_paraphrases_group_only_common_scope_preserving_conditions_and_score():
+@pytest.mark.parametrize("title", TITLES[1:])
+def test_two_pass_paraphrases_group_only_common_scope_preserving_conditions_and_score(title):
     first = _finding()
-    second = _finding(_raw(TITLES[1],
+    second = _finding(_raw(title,
         observation="The query returns all messages. The after filter helps polling but not initial loading.",
         explanation="The messages table has no retention policy, so old conversations keep growing.",
         required_conditions=["A match accumulates many messages", "Users frequently reload the chat"],
@@ -87,6 +90,42 @@ def test_two_pass_paraphrases_group_only_common_scope_preserving_conditions_and_
     assert compute_scores(grouped) == compute_scores([first])
     assert dedup_cross_rubric(grouped) == grouped
     assert dedup_cross_rubric([*grouped, first, second]) == grouped
+
+
+def test_report_word_order_variants_share_one_operation_without_losing_originals():
+    first = _finding(_raw(TITLES[2]), response=3)
+    second = replace(_finding(_raw(TITLES[3]), response=7), severity="medium", confidence=0.8)
+    grouped = dedup_cross_rubric([first, second])
+    assert len(grouped) == 1
+    assert grouped[0].severity == "medium"
+    assert grouped[0].confidence == 0.8
+    assert _fingerprints(grouped[0].claim_evidence["grouped_originals"]) == _fingerprints(
+        [asdict(first), asdict(second)])
+    reversed_group = dedup_cross_rubric([second, first])
+    assert reversed_group[0].title == grouped[0].title
+    assert _fingerprints(reversed_group[0].claim_evidence["grouped_originals"]) == _fingerprints(
+        grouped[0].claim_evidence["grouped_originals"])
+    assert dedup_cross_rubric(grouped) == grouped
+
+
+@pytest.mark.parametrize("title", TITLES[2:])
+@pytest.mark.parametrize("suffix", [
+    " and an unbounded query exposes other users' messages",
+    " and a service-role client bypasses RLS",
+    " and a polling loop retries paid requests",
+])
+def test_new_subjects_route_rejected_compounds_away_from_legacy_mechanisms(title, suffix):
+    assert _resolver().identity(_raw(title + suffix)) is None
+
+
+@pytest.mark.parametrize("title", TITLES[2:])
+@pytest.mark.parametrize("source", [
+    SOURCE.replace(".select('*')", ".select('*', {count: 'exact', head: true})"),
+    SOURCE.replace(".select('*')", ".select('*').limit(100)"),
+    SOURCE.replace("  return await query;", "  const other = db.from('messages').select('*');\n  return await query;"),
+])
+def test_new_subjects_still_require_one_supported_select(title, source):
+    assert _resolver(source).identity(_raw(title, line_end=8, premises=[])) is None
 
 
 def test_scanner_uses_source_operation_not_injected_model_metadata():
