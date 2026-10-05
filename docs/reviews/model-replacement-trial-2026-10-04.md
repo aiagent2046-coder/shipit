@@ -271,3 +271,25 @@ reports 172 reasoning tokens but 152 completion tokens, so derived visible-token
 counts would be unreliable. Measured totals: Sonnet 73.37 RUB / 60.276 s; MiMo
 13.74 RUB / 616.415 s. Sonnet's seeded archive response is an empty array: valid
 format is not successful mechanism detection. Production model is unchanged.
+
+### MiMo-only output-budget follow-up
+
+To repeat only the three MiMo cases that reached the output limit, use a fresh
+output file (not `--resume` from the 8192-token pilot):
+
+```bash
+python3 scripts/evaluate_pilot_models.py \
+  --models mimo-v2.6-pro \
+  --cases files-seeded payments-control payments-seeded \
+  --max-tokens 16384 \
+  --output /path/to/results-mimo-16384.json
+```
+
+Default remains prepare-only. Add `--run --env /opt/shipit/.env` to authorize
+provider calls at execution time. The selected cases retain the original pinned
+snapshot and prompt hashes. There are at most three calls, all to MiMo, with
+no retries or Sonnet fallback. HTTP/transport errors stop the run; malformed or
+length-limited responses are saved and the next selected case proceeds. Timeout
+remains 600 seconds per read. A larger requested output budget does not guarantee
+completion or cap total monetary cost. Existing defaults remain 6 cases x 2 models
+and 8192 tokens. Resume requires matching models, cases, prompts and token budget.

@@ -95,3 +95,66 @@ def test_sql_seed_changes_query_semantics_not_just_format():
     assert (trial.ROOT / name).read_text() == original[name]
     with pytest.raises(ValueError):
         trial.mutate(seeded, 'sql')
+
+
+def test_mimo_only_larger_budget_sends_exactly_selected_prompts(tmp_path, monkeypatch):
+    archive = source_archive()
+    monkeypatch.setattr(trial.subprocess, 'check_output', lambda *a, **kw: archive)
+    monkeypatch.setenv('AITUNNEL_API_KEY', 'synthetic')
+    selected = ['files-seeded', 'payments-control', 'payments-seeded']
+    baseline = trial.prepare(archive, list(trial.SCOPES))
+    calls = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        calls.append(payload)
+        assert payload['model'] == 'mimo-v2.6-pro'
+        assert payload['max_tokens'] == 16384
+        return httpx.Response(200, json={'model': payload['model'], 'choices': [
+            {'finish_reason': 'stop', 'message': {'content': '[]'}}]})
+
+    def mocked_run(report, key, output, max_tokens, **kwargs):
+        return run(report, key, output, max_tokens, httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr(trial, 'run', mocked_run)
+    output = tmp_path / 'mimo.json'
+    flags = ['--models', 'mimo-v2.6-pro', '--cases', *selected, '--max-tokens', '16384']
+    prepared = tmp_path / 'prepared.json'
+    assert trial.main([*flags, '--output', str(prepared)]) == 0
+    assert calls == []
+    assert trial.main([*flags, '--output', str(output), '--run']) == 0
+    saved = json.loads(output.read_text())
+    assert len(calls) == 3
+    assert saved['cases'] == [c for c in baseline['cases'] if c['id'] in selected]
+    assert [p['messages'][1]['content'] for p in calls] == [c['prompt'] for c in saved['cases']]
+    assert saved['models'] == ['mimo-v2.6-pro']
+    assert saved['requested_max_tokens'] == 16384
+    assert saved['state'] == 'completed_needs_review'
+    assert trial.main([*flags, '--resume', str(output), '--output', str(tmp_path / 'resumed.json'), '--run']) == 0
+    assert len(calls) == 3  # Saved attempts, including errors, must not be repeated.
+    for changed in (['--max-tokens', '8192'], ['--models', 'claude-sonnet-4.6'],
+                    ['--cases', 'payments-seeded']):
+        with pytest.raises(SystemExit):
+            trial.main([*flags, *changed, '--resume', str(output),
+                        '--output', str(tmp_path / 'changed-settings.json'), '--run'])
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize('flags', [
+    ['--max-tokens', '0'], ['--max-tokens', '16385'],
+    ['--models', 'mimo-v2.6-pro', 'mimo-v2.6-pro'],
+    ['--cases', 'files-seeded', 'files-seeded'],
+    ['--scenario', 'sql', '--cases', 'payments-control'],
+])
+def test_invalid_pilot_selection_never_runs(tmp_path, monkeypatch, flags):
+    archive = source_archive()
+    monkeypatch.setattr(trial.subprocess, 'check_output', lambda *a, **kw: archive)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Provider must not run')
+
+    monkeypatch.setattr(trial, 'run', forbidden)
+    output = tmp_path / 'invalid.json'
+    with pytest.raises(SystemExit):
+        trial.main([*flags, '--output', str(output), '--run'])
+    assert not output.exists()

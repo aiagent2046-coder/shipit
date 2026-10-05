@@ -139,15 +139,34 @@ def prepare(data: bytes, scenarios: list[str]) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scenario', choices=(*SCOPES, 'all'), default='all')
+    parser.add_argument('--models', nargs='+', choices=MODELS, default=list(MODELS))
+    parser.add_argument('--cases', nargs='+',
+                        choices=[s + '-' + v for s in SCOPES for v in ('control', 'seeded')],
+                        help='Run only these cases within the selected scenario')
+    parser.add_argument('--max-tokens', type=int, default=8192,
+                        help='Requested output limit (1..16384), not a spending guarantee')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--env', type=Path)
     parser.add_argument('--resume', type=Path)
     parser.add_argument('--run', action='store_true')
     args = parser.parse_args(argv)
+    if not 1 <= args.max_tokens <= 16384:
+        parser.error('max-tokens must be between 1 and 16384')
+    if len(set(args.models)) != len(args.models):
+        parser.error('Duplicate models are not allowed')
+    if args.cases and len(set(args.cases)) != len(args.cases):
+        parser.error('Duplicate cases are not allowed')
     if args.output.exists() or args.output.with_suffix(args.output.suffix + '.partial').exists():
         parser.error('Use a new output path')
     data = subprocess.check_output(['git', '-C', str(ROOT), 'archive', '--format=zip', REVISION])
     report = prepare(data, list(SCOPES) if args.scenario == 'all' else [args.scenario])
+    report['models'] = args.models
+    report['requested_max_tokens'] = args.max_tokens
+    if args.cases:
+        available = {case['id'] for case in report['cases']}
+        if not set(args.cases) <= available:
+            parser.error('Selected cases are outside the selected scenario')
+        report['cases'] = [case for case in report['cases'] if case['id'] in args.cases]
     if args.resume:
         previous = json.loads(args.resume.read_text())
         for key, value in report.items():
@@ -159,11 +178,11 @@ def main(argv=None) -> int:
         for row in saved:
             identity = (row.get('repeat'), row.get('case'), row.get('requested_model'))
             if (identity in seen or identity[0] != 1 or identity[1] not in hashes
-                    or identity[2] not in MODELS or row.get('prompt_sha256') != hashes[identity[1]]):
+                    or identity[2] not in report['models'] or row.get('prompt_sha256') != hashes[identity[1]]):
                 parser.error('Invalid saved attempt')
             seen.add(identity)
         report['results'] = saved
-    print(f"Remaining requests: {len(report['cases']) * len(MODELS) - len(report['results'])}", flush=True)
+    print(f"Remaining requests: {len(report['cases']) * len(report['models']) - len(report['results'])}", flush=True)
     for case in report['cases']:
         print(f"{case['id']}: {case['submitted_chars']} total prompt characters", flush=True)
     if not args.run:
@@ -173,7 +192,7 @@ def main(argv=None) -> int:
     key = os.environ.get('AITUNNEL_API_KEY') or (read_values(args.env).get('AITUNNEL_API_KEY') if args.env else None)
     if not key:
         parser.error('AITUNNEL_API_KEY unavailable')
-    status = run(report, key, args.output, 8192, continue_invalid=True, read_timeout=600)
+    status = run(report, key, args.output, args.max_tokens, continue_invalid=True, read_timeout=600)
     print("\nState:", report['state'])
     for row in report['results']:
         findings = json.loads(row['answer']) if row.get('strict_json_array') else None
