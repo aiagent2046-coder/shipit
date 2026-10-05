@@ -1,4 +1,4 @@
 """Analysis identity shared by server and offline browser entry points."""
 
-# Add opt-in Luna with separate server cache identity and model-aware accounting.
-AUDIT_ENGINE_VERSION = "2026-10-05-6"
+# Bind repeated review claims to source operations and calibrate duplicate-submit severity.
+AUDIT_ENGINE_VERSION = "2026-10-06-1"

@@ -149,6 +149,113 @@ def test_actual_native_button_clear_is_source_context_only():
     assert 'same-tick' in proof['detail'] and 'New typing' in proof['detail']
 
 
+def pending_message(source=REACT):
+    """Saved Luna request 8's claim, anchored to a minimized source example."""
+    return raw(source, 'return <button', 'Chat sending control has no in-flight guard',
+               "The button's disabled condition depends on whether the input has text, "
+               "not whether a send is in progress. If the user types another message "
+               "while the first request is pending, the button can enable and send a "
+               "second request. I have not checked server-side handling or whether "
+               "concurrent sends are intended.", file='source.tsx', severity='critical',
+               observation='The send handler clears the input before awaiting the request.')
+
+
+def test_saved_pending_message_claim_gets_bound_context_without_severity_rewrite():
+    finding = pending_message()
+    original = json.loads(json.dumps(finding))
+    proof = result(check(REACT, finding), CLICK)
+    assert proof['result'] == 'observed'
+    binding = proof['source_binding']
+    assert binding['state'] == 'draft'
+    assert binding['setter'] == 'changeDraft'
+    assert binding['guard_line'] < binding['clear_line'] < binding['first_await_line']
+    assert binding['disabled_button_lines'] == [10]
+    assert finding == original
+    assert 'does not settle' in proof['detail']
+    assert 'request idempotency remain unverified' in proof['detail']
+    assert 'severity' not in proof and 'narrative_review' not in proof
+
+
+@pytest.mark.parametrize('before,after', [
+    ("  changeDraft('');", "  await delay(); changeDraft('');"),
+    ("  changeDraft('');", "  changeOther('');"),
+    ('disabled={!draft.trim()}', 'disabled={sending}'),
+])
+def test_pending_message_context_requires_the_actual_same_state_source_chain(before, after):
+    source = REACT.replace(before, after)
+    # The very same saved narrative must not invent the observed binding when
+    # a mutation removes clear-before-await, the same setter or empty binding.
+    proof = result(check(source, pending_message(source)), CLICK)
+    assert proof['result'] == 'not_checked'
+    assert 'source_binding' not in proof
+
+
+@pytest.mark.parametrize('title,explanation', [
+    ('Chat sending control has no in-flight guard', 'A request is pending while input has text.'),
+    ('Another message may be sent', 'The user types new input while a second request runs.'),
+    ('No in-flight guard', 'Another request may run.'),
+])
+def test_pending_message_selector_does_not_expand_to_unrelated_topics(title, explanation):
+    finding = raw(REACT, 'return <button', title, explanation, file='source.tsx')
+    assert check(REACT, finding) == []
+
+
+WIDE_REACT = REACT.replace(
+    ' return <button',
+    " return <>\n <input value={draft} onChange={e => changeDraft(e.target.value)} />\n <button",
+).replace('</button>;', '</button></>;')
+
+
+def wide_pending_message(source=WIDE_REACT, **overrides):
+    finding = pending_message()
+    lines = source.splitlines()
+    start = next(i + 1 for i, line in enumerate(lines) if '<input' in line)
+    end = next(i + 1 for i, line in enumerate(lines) if '<button' in line)
+    return {**finding, 'line_start': start, 'line_end': end,
+            'evidence': '<button onClick={submit} disabled={!draft.trim()}>', **overrides}
+
+
+def test_wide_saved_style_range_uses_only_its_unique_literal_quote_for_context():
+    import hashlib
+
+    finding = wide_pending_message()
+    original = json.loads(json.dumps(finding))
+    proof = result(check(WIDE_REACT, finding), CLICK)
+    assert proof['result'] == 'observed'
+    binding = proof['source_binding']
+    assert binding['source_sha256'] == hashlib.sha256(WIDE_REACT.encode()).hexdigest()
+    assert binding['quote_anchor'] == {'line_start': 12, 'line_end': 12,
+                                       'original_line_start': 11, 'original_line_end': 12}
+    assert binding['disabled_button_lines'] == [12]
+    assert finding == original
+    assert finding['evidence'] not in json.dumps(proof)
+
+
+@pytest.mark.parametrize('evidence', [None, '', '   ', 'btn', 'x' * 121,
+                                      '<button\nonClick={submit}', '<button\n',
+                                      '<button onClick={different}', 'changeDraft(\'\');'])
+def test_wide_anchor_rejects_invalid_unmatched_or_outside_range_evidence(evidence):
+    proof = result(check(WIDE_REACT, wide_pending_message(evidence=evidence)), CLICK)
+    assert proof['result'] == 'not_checked'
+    assert 'source_binding' not in proof
+
+
+def test_wide_anchor_rejects_duplicate_quotes_inside_the_supplied_range():
+    source = WIDE_REACT.replace(' <button',
+                               ' <button onClick={other}>Other</button>\n <button')
+    finding = wide_pending_message(source, evidence='<button', line_end=13)
+    proof = result(check(source, finding), CLICK)
+    assert proof['result'] == 'not_checked'
+    assert 'source_binding' not in proof
+
+
+def test_wide_anchor_rejects_a_quote_repeated_on_the_same_line():
+    source = WIDE_REACT.replace('>Send</button>', '>Send Send</button>')
+    proof = result(check(source, wide_pending_message(source, evidence='Send')), CLICK)
+    assert proof['result'] == 'not_checked'
+    assert 'source_binding' not in proof
+
+
 @pytest.mark.parametrize('before,after', [
     ("from 'react'", "from './my-hooks'"),
     ('import {useState}', 'import type {useState}'),

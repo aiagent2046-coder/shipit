@@ -31,6 +31,19 @@ from app.scan.python_sql_identity import (
     MECHANISM as PYTHON_SQL, compatible_sql_claims, valid_sql_identity,
 )
 
+from app.scan.repeated_operation_identity import (
+    HOST, MECHANISMS as REPEATED_OPERATIONS, SCOPES as REPEATED_SCOPES,
+    compatible_repeated_claims, valid_repeated_identity,
+)
+from app.scan.projected_read_identity import (
+    MECHANISM as PROJECTED_READ, CLAIM_SCOPE as PROJECTED_READ_SCOPE,
+    compatible_projected_read_claims, valid_projected_read_identity,
+)
+from app.scan.sql_policy_identity import (
+    POLICY as SQL_POLICY, MECHANISMS as SQL_POLICIES,
+    compatible_sql_policy_claims, valid_sql_policy_identity,
+)
+
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 # rule_id -> plain-language rubric name, for the provenance note (the
@@ -142,10 +155,27 @@ def _same_issue(anchor: ScoredFinding, f: ScoredFinding) -> bool:
     sql = isinstance(identity_a, dict) and identity_a.get("mechanism") == PYTHON_SQL
     if sql and not compatible_sql_claims(anchor, f, identity_a):
         return False
+    sql_policy = any(isinstance(identity, dict) and (
+        isinstance(identity.get("mechanism"), str) and identity["mechanism"] in SQL_POLICIES
+        or identity.get("claim_scope") in ("insert_relation_membership", "two_hop_delete_cascade")
+        or "binding_sha256" in identity) for identity in (identity_a, identity_b))
+    if sql_policy and not compatible_sql_policy_claims(anchor, f, identity_a):
+        return False
     external = (isinstance(identity_a, dict) and isinstance(identity_a.get("mechanism"), str)
                 and identity_a["mechanism"] in EXTERNAL_OPERATIONS)
     if external and (not valid_external_identity(identity_a, anchor.file)
                      or not compatible_external_claims(anchor, f, identity_a)):
+        return False
+    repeated = any(isinstance(identity, dict) and (
+        isinstance(identity.get("mechanism"), str) and identity["mechanism"] in REPEATED_OPERATIONS
+        or identity.get("claim_scope") in tuple(REPEATED_SCOPES.values()))
+        for identity in (identity_a, identity_b))
+    if repeated and not compatible_repeated_claims(anchor, f, identity_a):
+        return False
+    projected_read = any(isinstance(identity, dict) and (
+        identity.get("mechanism") == PROJECTED_READ or identity.get("claim_scope") == PROJECTED_READ_SCOPE
+        or "relation_sha256" in identity) for identity in (identity_a, identity_b))
+    if projected_read and not compatible_projected_read_claims(anchor, f, identity_a):
         return False
     query_read = any(isinstance(identity, dict) and (
         identity.get("mechanism") == QUERY_READ or identity.get("claim_scope") == QUERY_READ_SCOPE
@@ -322,6 +352,33 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
             rep = replace(rep, claim_evidence={"version": 1, **(rep.claim_evidence or {}),
                                               "grouped_originals": [_original(item) for item in origins]})
             identity = (rep.claim_evidence or {}).get("source_issue_identity")
+            if valid_repeated_identity(identity, rep.file):
+                label = ("Request destination comes from a forwarded host" if identity["mechanism"] == HOST
+                         else "Scheduled retry timer cleanup requires review")
+                rep = replace(rep, title=label, explanation=(
+                    "Multiple model responses flag the same source operation and bounded hypothesis. "
+                    "Original conditions, deployment assumptions and consequences remain separate and "
+                    "unverified; repetition is not independent confirmation."),
+                    fix_hint="Review the original conditions and verify the operation in its runtime context.",
+                    claim_evidence={**rep.claim_evidence, "grouped_claim_scope": {
+                        "mechanism": identity["mechanism"], "scope": identity["claim_scope"],
+                        "consequences": "Original conditions and consequences remain separate and unverified.",
+                    }})
+            if valid_sql_policy_identity(identity, rep.file):
+                policy = identity["mechanism"] == SQL_POLICY
+                rep = replace(rep, title=("Membership check in the insertion policy requires review" if policy else
+                                         "Cascading deletion through related tables requires review"),
+                    explanation=(
+                        "Multiple model responses flag the same source policy and membership hypothesis. "
+                        if policy else
+                        "Multiple model responses flag the same two-hop foreign-key cascade path. ") + (
+                        "Original conditions remain separate and unverified. Applied migrations, grants, "
+                        "runtime behavior and recovery have not been checked."),
+                    fix_hint=("Review the original conditions against the applied database schema and access policy."),
+                    claim_evidence={**rep.claim_evidence, "grouped_claim_scope": {
+                        "mechanism": identity["mechanism"], "scope": identity["claim_scope"],
+                        "consequences": "Original conditions and consequences remain separate and unverified.",
+                    }})
             if valid_sql_identity(identity, rep.file):
                 rep = replace(rep, title="SQL table-name interpolation requires review", explanation=(
                     "Multiple model responses flag the same table-name interpolation in one source call. "
@@ -332,6 +389,17 @@ def dedup_cross_rubric(findings: list[ScoredFinding]) -> list[ScoredFinding]:
                     claim_evidence={**rep.claim_evidence, "grouped_claim_scope": {
                         "mechanism": PYTHON_SQL,
                         "scope": "Same source call and single table-identifier interpolation hypothesis only.",
+                        "consequences": "Original conditions and consequences remain separate and unverified.",
+                    }})
+            if valid_projected_read_identity(identity, rep.file):
+                rep = replace(rep, title="Database read volume requires review", explanation=(
+                    "Multiple model responses flag the row bound of the same projected SELECT. "
+                    "A later cap on facts does not establish a database read limit. Original conditions, "
+                    "runtime caps and claimed costs remain separate and unverified."), fix_hint=(
+                    "Check the effective database/API row cap and expected volume for this query. "
+                    "Preserve ordering and the existing downstream fact cap when considering pagination."),
+                    claim_evidence={**rep.claim_evidence, "grouped_claim_scope": {
+                        "mechanism": PROJECTED_READ, "scope": PROJECTED_READ_SCOPE,
                         "consequences": "Original conditions and consequences remain separate and unverified.",
                     }})
             if valid_query_read_identity(identity, rep.file):

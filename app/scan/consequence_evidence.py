@@ -56,8 +56,15 @@ def _selected(finding):
     if (re.search(r"\b(?:oauth|access[ _-]?token)\b", text, re.I)
             and re.search(r"\b(?:stor\w*|writ\w*|persist\w*|upsert\w*)\b", text, re.I)):
         kinds.append("token_write_return_guard")
-    if (re.search(r"\b(?:click|tap|press)\w*\b", text, re.I)
-            and re.search(r"\b(?:twice|double[ -]?(?:send|click|submit)|second click|duplicate)\b", text, re.I)
+    repeated_click = (re.search(r"\b(?:click|tap|press)\w*\b", text, re.I)
+                      and re.search(r"\b(?:twice|double[ -]?(?:send|click|submit)|second click|duplicate)\b",
+                                    text, re.I))
+    concurrent_input = (re.search(r"\bin[ -]flight\s+(?:guard|flag|state)\b", text, re.I)
+                        and re.search(r"\b(?:another|second)\s+(?:request|message|submission)\b", text, re.I))
+    # A claim about new input while a request is pending needs the same local
+    # context as a double-click claim. The prose only selects a check; the AST
+    # still has to bind the empty guard, clear and native disabled attribute.
+    if ((repeated_click or concurrent_input)
             and re.search(r"\b(?:input|text|message)\b", text, re.I)):
         kinds.append("react_empty_input_entry_binding")
     if re.search(r"\b[A-Za-z_$][\w$]*\s*\.\s*json\s*\(\s*\)", text):
@@ -240,11 +247,37 @@ def _discarded_json(root, fn):
     return {"fetch": _loc(call), "handler": _loc(fn), "handler_name": name, "response_binding": "discarded"}
 
 
-def _separate_click(root, fn, finding):
+def _unique_quote_anchor(data, finding):
+    """Locate one literal source quote inside its original range, without copying it."""
+    quote = finding.get("evidence")
+    if (not isinstance(quote, str) or not 4 <= len(quote) <= 120
+            or quote.splitlines() != [quote] or not quote.strip()):
+        return None
+    start, end = finding["line_start"], finding["line_end"]
+    lines = data.decode("utf-8", errors="strict").splitlines()
+    matches = [(start + offset, line.count(quote))
+               for offset, line in enumerate(lines[start - 1:end]) if quote in line]
+    if len(matches) != 1 or matches[0][1] != 1:
+        return None
+    line = matches[0][0]
+    return {"line_start": line, "line_end": line,
+            "original_line_start": start, "original_line_end": end}
+
+
+def _separate_click(root, fn, finding, data):
     # Reuse the collector's strict imports, no-shadow state and native-control
     # binding rules, then strengthen the observed clear with ordering checks.
     records = list(react._file_records(root, finding["file"], list(g._walk(root)), set()))
     contexts = react.react_async_finding_context(finding, {"react_async": {"records": records}})
+    anchor = None
+    if len(contexts) != 1:
+        # A broad range may include an input callback and its neighboring send
+        # button. Only an unambiguous literal quote within that same range may
+        # select the source context. This never changes the original finding.
+        anchor = _unique_quote_anchor(data, finding)
+        if anchor:
+            anchored = {**finding, "line_start": anchor["line_start"], "line_end": anchor["line_end"]}
+            contexts = react.react_async_finding_context(anchored, {"react_async": {"records": records}})
     if len(contexts) != 1:
         return None
     context = contexts[0]
@@ -315,7 +348,8 @@ def _separate_click(root, fn, finding):
         candidates.append({"handler": _loc(fn), "state": clear["state"], "setter": setter,
                            "guard_line": guards[0]["line"], "clear_line": clear["clear_line"],
                            "disabled_button_lines": clear["disabled_button_lines"],
-                           "first_await_line": min(context["await_lines"])})
+                           "first_await_line": min(context["await_lines"]),
+                           **({"quote_anchor": anchor} if anchor else {})})
     return candidates[0] if len(candidates) == 1 else None
 
 
@@ -555,7 +589,7 @@ class ConsequenceVerifier:
                               "establish HTTP success validation or safe navigation and does not dismiss "
                               "the finding's HTTP/UI issue.")
                 elif kind == "react_empty_input_entry_binding":
-                    proof = _separate_click(root, fn, finding)
+                    proof = _separate_click(root, fn, finding, data)
                     detail = ("The direct React state binding has an empty-input entry return, an immediate "
                               "empty-string setter before the first await, and the same native button is "
                               "disabled by that empty state. No restoration of that state occurs in this handler. "
