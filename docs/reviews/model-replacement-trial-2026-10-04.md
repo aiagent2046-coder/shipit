@@ -98,3 +98,22 @@ retried. Prompts, cases, models and token budget must match. Invalid completions
 are recorded and the experiment continues; transport/HTTP errors still stop.
 Completion with recorded errors is labelled completed_with_errors_needs_review.
 An empty valid answer and an exhausted reasoning budget remain distinct.
+
+## MiMo and GLM comparison (2026-10-05)
+
+AITunnel model pages identify `mimo-v2.6-pro` and `glm-5.3`:
+https://aitunnel.ru/models/mimo-v2-6-pro and https://aitunnel.ru/models/glm-5-3.
+Use a fresh run, preserving the same context suite, three repetitions, 4096
+requested output tokens and production payload defaults. Sonnet runs alongside
+both candidates. Unknown-model sampling parameters remain omitted; this tests
+current client compatibility, not each model's optimally tuned reasoning mode.
+
+```bash
+python scripts/evaluate_audit_models.py --models claude-sonnet-4.6 mimo-v2.6-pro glm-5.3 --suite context --repeats 3 --continue-invalid --run --env /opt/shipit/.env --output /tmp/drydock-mimo-glm-results.json
+```
+
+Up to 90 paid requests. Prompts and fixture coverage are identical to round 2.
+No production model or provider configuration changes. When resuming, the saved
+model selection is retained; an explicit different selection/order is rejected.
+A length-limited response is a failure under this budget, not proof that the
+model can never solve the example. Comparison is conditional on this setup.

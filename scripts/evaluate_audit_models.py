@@ -24,6 +24,7 @@ from app.scan.llm_scan import SYSTEM_PROMPT, build_prompt, rejection_reason  # n
 from scripts.env_file import read_values  # noqa: E402
 
 MODELS = ("claude-sonnet-4.6", "deepseek-v4-pro-0813", "minimax-m3")
+AVAILABLE_MODELS = MODELS + ("mimo-v2.6-pro", "glm-5.3")
 CASES = (
     ("sql-risk", "sql-injection-string-built-query/positive/concatenated-query", "app/queries.py",
      "SQL construction is unsafe if arguments are attacker-controlled; caller provenance is absent."),
@@ -40,7 +41,9 @@ CASES = (
 )
 
 
-def prepare(suite: str = "baseline", repeats: int = 1) -> dict:
+def prepare(suite: str = "baseline", repeats: int = 1, models: tuple[str, ...] = MODELS) -> dict:
+    if not models or len(set(models)) != len(models) or any(m not in AVAILABLE_MODELS for m in models):
+        raise ValueError("Unknown, empty or duplicate model selection")
     rows = []
     for case_id, fixture, name, expectation in CASES:
         source = (ROOT / "tests/detectors" / fixture / (name + ".fixture")).read_text()
@@ -81,7 +84,7 @@ def prepare(suite: str = "baseline", repeats: int = 1) -> dict:
                          "review_expectation": original["review_expectation"] +
                          " HTTP caller supplies user_id/data; deployed reachability is still not established.",
                          "paired_case": original["id"]})
-    return {"version": 2, "suite": suite, "repeats": repeats, "system_prompt": SYSTEM_PROMPT, "models": list(MODELS),
+    return {"version": 2, "suite": suite, "repeats": repeats, "system_prompt": SYSTEM_PROMPT, "models": list(models),
             "cases": rows, "results": [], "state": "prepared",
             "judgement": "Manual review required. Valid quotes are not proof of a true finding."}
 
@@ -113,7 +116,8 @@ def run(report: dict, key: str, output: Path, max_tokens: int,
         jobs = [(repeat, case, model)
                 for repeat in range(1, report.get("repeats", 1) + 1)
                 for case in report["cases"]
-                for model in (report["models"][repeat - 1:] + report["models"][:repeat - 1])]
+                for model in (report["models"][(repeat - 1) % len(report["models"]):]
+                              + report["models"][:(repeat - 1) % len(report["models"])])]
         attempted = {(r["repeat"], r["case"], r["requested_model"]) for r in report["results"]}
         for repeat, case, model in jobs:
             if (repeat, case["id"], model) in attempted:
@@ -172,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--continue-invalid", action="store_true",
                         help="Record invalid answers and continue; HTTP/network errors still stop")
     parser.add_argument("--run", action="store_true", help="Execute the prepared suite (billable API calls)")
+    parser.add_argument("--models", nargs="+", choices=AVAILABLE_MODELS,
+                        help="Models in trial order; default preserves original comparison")
     parser.add_argument("--suite", choices=("baseline", "context"), default="baseline")
     parser.add_argument("--repeats", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--env", type=Path, help="Read AITUNNEL_API_KEY only; never shell-source this file")
@@ -182,10 +188,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Output already exists; use a new filename to preserve previous results")
     if not 1 <= args.max_tokens <= 16384:
         parser.error("max-tokens must be between 1 and 16384")
-    report = prepare(args.suite, args.repeats)
+    if args.models and len(set(args.models)) != len(args.models):
+        parser.error("Duplicate models are not allowed")
+    report = prepare(args.suite, args.repeats, tuple(args.models or MODELS))
     if args.resume:
         report = json.loads(args.resume.read_text())
-        expected = prepare(report["suite"], report["repeats"])
+        if args.models is not None and args.models != report["models"]:
+            parser.error("Resume must preserve model selection and order")
+        expected = prepare(report["suite"], report["repeats"], tuple(report["models"]))
         for field in ("system_prompt", "models", "cases"):
             if report[field] != expected[field]:
                 parser.error("Saved trial does not match current prompts/cases/models")
@@ -197,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             identity = (row["repeat"], row["case"], row["requested_model"])
             if (identity in seen or row["case"] not in known
                     or row["prompt_sha256"] != known[row["case"]]
-                    or row["requested_model"] not in MODELS
+                    or row["requested_model"] not in report["models"]
                     or row["repeat"] not in range(1, report["repeats"] + 1)):
                 parser.error("Invalid or duplicate saved attempt")
             seen.add(identity)
@@ -205,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     report["continue_invalid"] = args.continue_invalid
     if not args.run:
         save(args.output, report)
-        remaining = len(report["cases"]) * len(MODELS) * report["repeats"] - len(report["results"])
+        remaining = len(report["cases"]) * len(report["models"]) * report["repeats"] - len(report["results"])
         print(f"Prepared {remaining} remaining calls. No API requests made.")
         return 0
     key = os.environ.get("AITUNNEL_API_KEY")

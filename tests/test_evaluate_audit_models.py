@@ -121,3 +121,39 @@ def test_resume_rejects_changed_budget_before_calls(tmp_path):
         trial.main(['--resume', str(source), '--output', str(tmp_path / 'next.json'),
                     '--max-tokens', '8192'])
     assert not (tmp_path / 'next.json').exists()
+
+
+def test_new_candidates_preserve_prompts_and_resume_selection(tmp_path):
+    models = ('claude-sonnet-4.6', 'mimo-v2.6-pro', 'glm-5.3')
+    report = trial.prepare('context', 3, models)
+    assert report['cases'] == trial.prepare('context', 3)['cases']
+    report['requested_max_tokens'] = 4096
+    source = tmp_path / 'original.json'
+    trial.save(source, report)
+    output = tmp_path / 'resumed.json'
+    assert trial.main(['--resume', str(source), '--output', str(output)]) == 0
+    assert json.loads(output.read_text())['models'] == list(models)
+    import pytest
+    with pytest.raises(SystemExit):
+        trial.main(['--resume', str(source), '--output', str(tmp_path / 'wrong.json'),
+                    '--models', 'claude-sonnet-4.6', 'deepseek-v4-pro-0813'])
+
+
+def test_selected_models_only_and_rotation_for_two_models(tmp_path):
+    models = ('mimo-v2.6-pro', 'glm-5.3')
+    report = trial.prepare('baseline', 3, models)
+    calls = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        calls.append(body['model'])
+        return httpx.Response(200, json={'model': body['model'], 'usage': {}, 'choices': [
+            {'finish_reason': 'stop', 'message': {'content': '[]'}}]})
+
+    assert trial.run(report, 'synthetic', tmp_path / 'run.json', 4096,
+                     httpx.MockTransport(respond)) == 0
+    assert len(calls) == 36
+    assert calls[:2] == list(models)
+    assert calls[12:14] == list(reversed(models))
+    assert calls[24:26] == list(models)
+    assert all(r['cost_rub'] is None for r in report['results'])
