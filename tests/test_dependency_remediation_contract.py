@@ -11,7 +11,7 @@ from scripts import verify_dependency_remediation as contract
 
 @pytest.fixture(scope='module')
 def catalog():
-    return json.loads((contract.ROOT / 'app/data/cve-catalog.json').read_bytes())
+    return contract.read_catalog('historical-fixture')[2]
 
 
 def manifest_files(case, version, *, nested_old=False):
@@ -247,11 +247,231 @@ def test_missing_package_manager_is_unavailable(tmp_path):
 @pytest.mark.parametrize('status,expected', [('passed', 0), ('failed', 1), ('unavailable', 2)])
 def test_main_persists_failure_and_never_turns_unavailable_into_skip(monkeypatch, tmp_path, status, expected):
     result = {'contract_id': 'dependency-remediation-npm', 'status': status,
-              'fixture_verified': status == 'passed', 'reason': 'test-observation'}
-    monkeypatch.setattr(contract, 'run', lambda case, output: result)
+              'fixture_verified': status == 'passed', 'reason': 'test-observation',
+              'catalog_scope': 'shipped', 'current_candidate_verified': status == 'passed'}
+
+    def fake_run(case, output, *, catalog_scope):
+        assert catalog_scope == 'shipped'
+        return result
+
+    monkeypatch.setattr(contract, 'run', fake_run)
     output = tmp_path / 'evidence'
     assert contract.main(['--case', 'npm', '--output-dir', str(output)]) == expected
     assert json.loads((output / 'result.json').read_text()) == result
+
+
+def test_historical_catalog_requires_exact_reviewed_bytes(monkeypatch, tmp_path):
+    _, raw, catalog = contract.read_catalog('historical-fixture')
+    assert catalog['fixture_provenance']['shipit_revision'] == 'b1e0d50d235b0fb6963504e65e459be5b5e9295e'
+    assert catalog['fixture_provenance']['source_sha256'] == (
+        'df1d847b192c8d9de21331a0dd103a6ea3c971815c1b8ee4964f2bab96bf49df')
+    (tmp_path / 'historical-catalog.json').write_bytes(raw + b' ')
+    monkeypatch.setattr(contract, 'FIXTURES', tmp_path)
+    with pytest.raises(contract.ContractError, match='historical_catalog_digest_mismatch'):
+        contract.read_catalog('historical-fixture')
+
+
+@pytest.mark.parametrize('scope', ['shipped', 'historical-fixture'])
+def test_cli_scope_is_explicit_in_summary_and_report(monkeypatch, tmp_path, capsys, scope):
+    result = {'version': 2, 'contract_id': 'dependency-remediation-npm', 'status': 'passed',
+              'fixture_verified': True, 'catalog_scope': scope, 'current_candidate_verified': False}
+
+    def fake_run(case, output, *, catalog_scope):
+        assert catalog_scope == scope
+        return result
+
+    monkeypatch.setattr(contract, 'run', fake_run)
+    output = tmp_path / 'evidence'
+    assert contract.main(['--case', 'npm', '--catalog-scope', scope, '--output-dir', str(output)]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary['catalog_scope'] == scope
+    assert summary['current_candidate_verified'] is False
+    assert json.loads((output / 'result.json').read_text()) == result
+
+
+@pytest.fixture(params=[
+    ('npm', 'CVE-2026-112366', '4.0.7'), ('pypi', 'CVE-2026-112307', '0.6.0'),
+])
+def unknown_catalog(request, catalog):
+    key, advisory_id, bound = request.param
+    case = contract.CASES[key]
+    # Exact matching fields compiled from CVE List 1c63dfb4e7f9626e401fa1c10d625cdb55037216.
+    # Keep these regression inputs fixed if the shipped advisory snapshot changes.
+    entry = {'id': advisory_id, 'url': 'https://www.cve.org/CVERecord?id=' + advisory_id,
+             'default_status': 'unaffected', 'unsupported_applicability': True,
+             'versions': [{'version': '0', 'lessThanOrEqual': bound,
+                           'status': 'affected', 'versionType': 'semver'}]}
+    regression = deepcopy(catalog)
+    regression['packages'][case.ecosystem + ':' + case.package].append(entry)
+    return case, advisory_id, regression
+
+
+def test_unknown_applicability_cannot_become_historical_success(unknown_catalog):
+    case, advisory_id, regression = unknown_catalog
+    for name in ('before', 'after', 'restore'):
+        stage = make_stage(case, name, regression)
+        unknown = next(a for a in target_row(case, stage)['assessments'] if advisory_id in a['advisory_ids'])
+        assert unknown['status'] == 'unknown'
+        assert unknown['reported'] is False
+        with pytest.raises(contract.ContractError, match='target_assessment_unknown'):
+            contract.verify_stage(case, stage)
+
+
+def test_historical_after_keeps_full_current_catalog_rejection(catalog, unknown_catalog, monkeypatch, tmp_path):
+    case, _, shipped = unknown_catalog
+    raw = json.dumps(shipped).encode()
+    path = tmp_path / 'shipped.json'
+    path.write_bytes(raw)
+
+    def read_current(scope):
+        assert scope == 'shipped'
+        return path, raw, shipped
+
+    monkeypatch.setattr(contract, 'read_catalog', read_current)
+    stage = make_stage(case, 'after', catalog)
+    contract.verify_stage(case, stage)
+    result = contract.current_candidate_assessment(case, stage, manifest_files(case, case.after))
+    assert result['candidate_verified'] is False
+    assert result['status'] == 'blocked'
+    assert result['reason'] == 'target_assessment_unknown'
+    assert result['catalog_sha256'] == contract.digest(raw)
+    assert result['stage']['scan']['coverage']['advisory_evaluations'] == (
+        contract.scan(manifest_files(case, case.after), case, shipped)['coverage']['advisory_evaluations'])
+    assert result['stage']['scan']['coverage']['unknown_reason_counts']['unsupported_applicability'] > 0
+
+
+def test_current_candidate_diagnostic_rejects_baseline_stage(cycles):
+    result = contract.current_candidate_assessment(contract.CASES['npm'], cycles['npm'][0], {})
+    assert result['candidate_verified'] is False
+    assert result['reason'] == 'current_candidate_stage_mismatch'
+
+
+def mock_npm_commands(monkeypatch, catalog, *, on_restore=lambda: None, restore_valid=True):
+    """Keep orchestration and matcher real, substituting only registry/process I/O."""
+    case = contract.CASES['npm']
+
+    def command(args, cwd, env, log, **kwargs):
+        if args[-1] == '--version':
+            return 'test-manager-version'
+        if args[:2] == ['npm', 'install']:
+            path = cwd / 'package-lock.json'
+            lock = json.loads(path.read_bytes())
+            lock['packages']['node_modules/picomatch']['version'] = case.after
+            path.write_text(json.dumps(lock))
+        if args[0] == 'node':
+            installed = cwd / 'installed.js'
+            installed.write_text('fixture')
+            probe = make_stage(case, cwd.name, catalog)['consumer']
+            probe['installed_path'] = str(installed)
+            if cwd.name == 'restore':
+                on_restore()
+                probe['functional_passed'] = restore_valid
+            return json.dumps(probe)
+        return ''
+
+    monkeypatch.setattr(contract, 'command', command)
+
+
+@pytest.mark.parametrize('fault,expected_status,expected_current,reason', [
+    (None, 'passed', True, None),
+    ('restore', 'failed', False, 'consumer_checks_failed'),
+    ('historical_changed', 'failed', False, 'catalog_changed_during_run'),
+    ('current_changed', 'passed', False, 'current_catalog_changed_during_run'),
+    ('current_unavailable', 'passed', False, 'current_catalog_unavailable'),
+    ('evidence_write', 'unavailable', False, 'execution_unavailable'),
+])
+def test_current_success_requires_complete_cycle_and_stable_catalog(
+        monkeypatch, tmp_path, catalog, fault, expected_status, expected_current, reason):
+    raw = json.dumps(catalog).encode()
+    paths = {scope: tmp_path / (scope + '.json') for scope in ('shipped', 'historical-fixture')}
+    for path in paths.values():
+        path.write_bytes(raw)
+
+    current_reads = 0
+
+    def read_catalog(scope):
+        nonlocal current_reads
+        if scope == 'shipped':
+            current_reads += 1
+            if current_reads == 2:
+                if fault == 'current_changed':
+                    paths[scope].write_bytes(raw + b' ')
+                elif fault == 'current_unavailable':
+                    paths[scope].unlink()
+        current_raw = paths[scope].read_bytes()
+        return paths[scope], current_raw, json.loads(current_raw)
+
+    def on_restore():
+        if fault == 'historical_changed':
+            paths['historical-fixture'].write_bytes(raw + b' ')
+
+    original_save = contract.save
+
+    def save(path, value):
+        original_save(path, value)
+        if fault == 'evidence_write' and value.get('candidate_verified'):
+            raise OSError('write failed')
+
+    monkeypatch.setattr(contract, 'read_catalog', read_catalog)
+    monkeypatch.setattr(contract, 'save', save)
+    mock_npm_commands(monkeypatch, catalog, on_restore=on_restore, restore_valid=fault != 'restore')
+    result = contract.run('npm', tmp_path, catalog_scope='historical-fixture')
+    assert result['status'] == expected_status
+    assert result['fixture_verified'] is (expected_status == 'passed')
+    assert result['current_candidate_verified'] is expected_current
+    if reason:
+        evidence = result if expected_status != 'passed' else result['current_catalog']
+        assert evidence['reason'] == reason
+    if fault in {'restore', 'historical_changed'}:
+        assert 'current_catalog' not in result
+        assert not (tmp_path / 'current-catalog-evidence.json').exists()
+        assert current_reads == 0
+    else:
+        assert json.loads((tmp_path / 'current-catalog-evidence.json').read_text()) == result['current_catalog']
+        assert result['current_catalog']['candidate_verified'] is expected_current
+
+
+def test_default_run_fails_closed_on_current_unknown(monkeypatch, tmp_path, unknown_catalog):
+    case, _, catalog = unknown_catalog
+    raw = json.dumps(catalog).encode()
+    path = tmp_path / 'shipped.json'
+    path.write_bytes(raw)
+
+    def read_current(scope):
+        assert scope == 'shipped'
+        return path, raw, catalog
+
+    monkeypatch.setattr(contract, 'read_catalog', read_current)
+    if case.ecosystem == 'npm':
+        mock_npm_commands(monkeypatch, catalog)
+    else:
+        def command(args, cwd, env, log, **kwargs):
+            if args[-1] == '--version':
+                return 'test-manager-version'
+            if args[-1] == 'freeze':
+                return manifest_files(case, case.before)['requirements.txt'].decode()
+            if args[-1].endswith('consumer.py'):
+                installed = cwd / 'installed.py'
+                installed.write_text('fixture')
+                return json.dumps({**make_stage(case, cwd.name, catalog)['consumer'],
+                                   'installed_path': str(installed)})
+            return ''
+
+        monkeypatch.setattr(contract, 'command', command)
+    result = contract.run('npm' if case.ecosystem == 'npm' else 'pypi', tmp_path)
+    assert result['status'] == 'failed'
+    assert result['reason'] == 'target_assessment_unknown'
+    assert result['fixture_verified'] is False
+    assert result['current_candidate_verified'] is False
+    assert result['catalog_scope'] == 'shipped'
+
+
+def test_shipped_scope_reads_full_catalog():
+    path, raw, catalog = contract.read_catalog('shipped')
+    assert path == contract.ROOT / 'app/data/cve-catalog.json'
+    assert raw == path.read_bytes()
+    assert catalog == json.loads(raw)
+    assert 'fixture_provenance' not in catalog
 
 
 def test_existing_evidence_is_rejected_before_any_execution(monkeypatch, tmp_path):

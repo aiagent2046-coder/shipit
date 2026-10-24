@@ -127,14 +127,25 @@ Each output directory must be new. The commands download public registry
 packages into disposable environments and preserve JSON evidence, resolved
 manifests and command logs. They do not take a customer project, arbitrary
 package, command, or version as input. Exit codes are `0` passed, `1` failed,
-and `2` unavailable; unavailable is not a successful or skipped check.
+and `2` unavailable; unavailable is not a successful or skipped check. These
+commands use the full shipped catalog by default and continue to fail on unknown
+target assessments. The October 2026 catalog added unsupported-applicability
+records covering both old candidate versions, so they currently fail closed.
+
+To reproduce the original positive regression explicitly against its pinned
+historical test snapshot, add `--catalog-scope historical-fixture`. This does not
+change the shipped catalog or relax any target-assessment check. Report version 2
+records the selected scope, digest, and historical source revision. Historical
+mode also records a separate verdict for the same installed candidate against
+the full current catalog; a blocked or unavailable verdict leaves
+`current_candidate_verified: false`.
 
 | Fixture | Before → candidate → restored | Independent consumer |
 | --- | --- | --- |
 | npm picomatch | 2.3.0 → 2.3.2 → 2.3.0 | Nine Rollup pluginutils filter assertions |
 | PyPI sqlparse | 0.5.5 → 0.6.0 → 0.5.5 | Four Django/SQL assertions and a Python-snippet escaping regression |
 
-The current planner must offer the selected candidate. npm regenerates its
+The planner using the selected catalog must offer the candidate. npm regenerates its
 lockfile and installs it with lifecycle scripts disabled. pip installs exact,
 hashed wheels into a fresh environment for every stage, checks dependencies,
 and generates resolved requirements from that actual installation. Each probe
@@ -144,12 +155,15 @@ unknown or unresolved target advisory, and requires every recorded target entry
 to be unaffected after the update. The original manifests, findings and inventory
 must return in the last stage; other package versions cannot silently change.
 
-The `dependency-remediation-contract` workflow runs both fixtures on pull
-requests, main pushes and manual dispatch, and uploads evidence even on failure.
+The `dependency-remediation-contract` workflow explicitly runs both historical
+fixtures on pull requests, main pushes and manual dispatch, and preserves available
+evidence even on failure. Current-catalog evidence is created only after the full
+historical cycle and its catalog-integrity check succeed.
 The normal offline pytest suite checks false-success boundaries without registry
 access. Branch-protection settings are not changed by this workflow.
 
-`fixture_verified` is limited to these fixtures. `runtime_verified`,
+`fixture_verified` is limited to these fixtures and their selected catalog scope;
+historical success does not establish current remediation approval. `runtime_verified`,
 `customer_project_verified` and `automatic_patch` remain false; ordinary cards
 are not promoted to runtime evidence. The npm probe does not reproduce ReDoS.
 The PyPI probe verifies one escaping fix without executing generated code; it

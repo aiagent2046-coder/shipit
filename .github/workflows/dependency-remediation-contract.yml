@@ -37,11 +37,12 @@ jobs:
         run: npm install --global npm@11.9.0 --ignore-scripts --no-audit --no-fund
       - name: Install locked scanner dependencies
         run: python -m pip install --require-hashes -r requirements.txt
-      - name: Install, scan and check before, after and restored dependencies
+      - name: Verify historical fixture cycle and record the current catalog verdict
         env:
           CONTRACT_CASE: ${{ matrix.case }}
         run: >-
           python scripts/verify_dependency_remediation.py --case "$CONTRACT_CASE"
+          --catalog-scope historical-fixture
           --output-dir "$RUNNER_TEMP/dependency-contract-$CONTRACT_CASE"
       - name: Preserve evidence including unsuccessful runs
         if: always()
