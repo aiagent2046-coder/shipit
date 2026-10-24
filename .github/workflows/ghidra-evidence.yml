@@ -1,0 +1,76 @@
+name: Optional Ghidra static evidence
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/inspect_binary_ghidra.py'
+      - 'scripts/ghidra/**'
+      - 'tests/test_ghidra_evidence.py'
+      - 'tests/fixtures/ghidra/**'
+      - '.github/workflows/ghidra-evidence.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/inspect_binary_ghidra.py'
+      - 'scripts/ghidra/**'
+      - 'tests/test_ghidra_evidence.py'
+      - 'tests/fixtures/ghidra/**'
+      - '.github/workflows/ghidra-evidence.yml'
+permissions:
+  contents: read
+jobs:
+  native-static-facts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Failure-contract tests
+        run: |
+          python -m pip install pytest==8.4.2
+          python -m pytest -q tests/test_ghidra_evidence.py
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ghidra-12.2.zip
+          key: ghidra-12.2-2c2cd776db3c1f6a097ba418922378ac3649cadd5e844a6f5f088ae628a7be67
+      - name: Download and verify pinned distribution
+        env:
+          ARCHIVE: ${{ runner.temp }}/ghidra-12.2.zip
+        run: |
+          if [ ! -f "$ARCHIVE" ]; then
+            curl --fail --location --retry 3 --output "$ARCHIVE" https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.2_build/ghidra_12.2_PUBLIC_20261016.zip
+          fi
+          echo "2c2cd776db3c1f6a097ba418922378ac3649cadd5e844a6f5f088ae628a7be67  $ARCHIVE" | sha256sum --check --strict
+      - name: Compile fixture without executing it
+        run: |
+          mkdir -p artifacts
+          gcc -O0 -g0 -fno-pie -no-pie -Wl,--build-id=none tests/fixtures/ghidra/static_sample.c -o artifacts/static_sample.elf
+      - name: Analyze twice in independent temporary projects
+        env:
+          ARCHIVE: ${{ runner.temp }}/ghidra-12.2.zip
+        run: |
+          python scripts/inspect_binary_ghidra.py artifacts/static_sample.elf --ghidra-archive "$ARCHIVE" --java-home "$JAVA_HOME" --output artifacts/first.json --diagnostic-log artifacts/first.log
+          python scripts/inspect_binary_ghidra.py artifacts/static_sample.elf --ghidra-archive "$ARCHIVE" --java-home "$JAVA_HOME" --output artifacts/second.json --diagnostic-log artifacts/second.log
+          cmp artifacts/first.json artifacts/second.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('artifacts/first.json').read_text())
+          assert result['status'] == 'completed'
+          assert result['runtime_verified'] is False
+          assert result['automatic_patch'] is False
+          assert any(row['name'] == 'drydock_add' for row in result['facts']['functions'])
+          assert any(row['name'] == 'puts' for row in result['facts']['imports'])
+          print('Real Ghidra: function/import facts and two-project byte-identical reports passed.')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ghidra-static-evidence
+          path: artifacts/
