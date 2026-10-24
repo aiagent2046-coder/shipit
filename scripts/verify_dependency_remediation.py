@@ -24,6 +24,7 @@ from app.scan.cve_match import evaluate_advisory, match_archive  # noqa: E402
 from app.scan.remediation_catalog import remediation_record  # noqa: E402
 
 FIXTURES = ROOT / 'tests/fixtures/dependency-remediation'
+HISTORICAL_CATALOG_SHA256 = '3afd1dfc0ffba54ba0ade1ce89bde17d760816384d4a49aa48d9741474f6a005'
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,46 @@ def digest(raw: bytes) -> str:
 
 def save(path: Path, value):
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
+
+
+def read_catalog(scope: str) -> tuple[Path, bytes, dict]:
+    require(scope in {'shipped', 'historical-fixture'}, 'invalid_catalog_scope')
+    path = (FIXTURES / 'historical-catalog.json' if scope == 'historical-fixture'
+            else ROOT / 'app/data/cve-catalog.json')
+    raw = path.read_bytes()
+    if scope == 'historical-fixture':
+        require(digest(raw) == HISTORICAL_CATALOG_SHA256, 'historical_catalog_digest_mismatch')
+    return path, raw, json.loads(raw)
+
+
+def current_candidate_assessment(case: Case, stage: dict, files: dict[str, bytes]) -> dict:
+    """Retain the full shipped-catalog verdict alongside historical evidence."""
+    result = {'status': 'unavailable', 'candidate_verified': False, 'catalog_scope': 'shipped'}
+    try:
+        require(stage['name'] == 'after', 'current_candidate_stage_mismatch')
+        _, raw, catalog = read_catalog('shipped')
+        result.update(catalog_sha256=digest(raw), catalog_sources=catalog.get('sources'))
+        current_stage = {**stage, 'scan': scan(files, case, catalog)}
+        result['stage'] = current_stage
+        verify_stage(case, current_stage)
+        result.update(status='passed', candidate_verified=True)
+    except ContractError as exc:
+        result.update(status='blocked', reason=exc.reason)
+    except (OSError, ValueError, KeyError, TypeError):
+        result.update(reason='current_catalog_unavailable')
+    return result
+
+
+def finalize_current_assessment(current: dict):
+    """Do not publish a successful current verdict after its catalog changed."""
+    try:
+        _, raw, _ = read_catalog('shipped')
+        if digest(raw) != current.get('catalog_sha256'):
+            current.update(status='unavailable', candidate_verified=False,
+                           reason='current_catalog_changed_during_run')
+    except (ContractError, OSError, ValueError, KeyError, TypeError):
+        current.update(status='unavailable', candidate_verified=False,
+                       reason='current_catalog_unavailable')
 
 
 def command(args, cwd, env, log, *, install=False, timeout=120):
@@ -188,23 +229,30 @@ def verify_cycle(case: Case, stages: list[dict]):
     require(before['scan']['inventory'] == restore['scan']['inventory'], 'restore_inventory_mismatch')
 
 
-def run(case_name: str, output: Path) -> dict:
+def run(case_name: str, output: Path, *, catalog_scope: str = 'shipped') -> dict:
     case = CASES[case_name]
-    result = {'version': 1, 'contract_id': 'dependency-remediation-' + case_name,
-              'scope': 'trusted_dependency_fixture', 'status': 'unavailable', 'fixture_verified': False,
+    result = {'version': 2, 'contract_id': 'dependency-remediation-' + case_name,
+              'scope': ('historical_trusted_dependency_fixture' if catalog_scope == 'historical-fixture'
+                        else 'trusted_dependency_fixture'),
+              'catalog_scope': catalog_scope, 'status': 'unavailable', 'fixture_verified': False,
+              'current_candidate_verified': False,
               'runtime_verified': False, 'customer_project_verified': False, 'automatic_patch': False,
               'package': case.package, 'ecosystem': case.ecosystem, 'candidate': case.after, 'stages': [],
               'limits': ['Only the bundled fixture is verified; no customer application or full build is executed.',
                          'npm has consumer checks but no ReDoS runtime oracle.',
                          'PyPI tests one escaping regression; other advisories use version matching.']}
+    if catalog_scope == 'historical-fixture':
+        result['limits'].append('Historical fixture evidence only: a passing cycle does not verify the '
+                                'candidate against the current shipped advisory catalog.')
     logs = output / 'logs'
     logs.mkdir()
     try:
         require(sys.platform == 'linux' and sys.version_info[:2] == (3, 12), 'unsupported_runtime')
-        raw_catalog = (ROOT / 'app/data/cve-catalog.json').read_bytes()
-        catalog = json.loads(raw_catalog)
+        catalog_path, raw_catalog, catalog = read_catalog(catalog_scope)
         result['catalog_sha256'] = digest(raw_catalog)
         result['catalog_sources'] = catalog.get('sources')
+        if catalog_scope == 'historical-fixture':
+            result['catalog_provenance'] = catalog['fixture_provenance']
         fixture = FIXTURES / case_name
         result['fixture_sha256'] = {p.name: digest(p.read_bytes()) for p in sorted(fixture.iterdir()) if p.is_file()}
         with tempfile.TemporaryDirectory(prefix='drydock-dependency-contract-') as tmp:
@@ -260,26 +308,44 @@ def run(case_name: str, output: Path) -> dict:
                     (output/(name+'-'+file)).write_bytes(raw)
                 save(output/(name+'-evidence.json'), stage)
                 verify_stage(case, stage)
+                if name == 'after' and catalog_scope == 'historical-fixture':
+                    after_files = files
             verify_cycle(case, result['stages'])
-            require(digest((ROOT/'app/data/cve-catalog.json').read_bytes()) == result['catalog_sha256'],
+            require(digest(catalog_path.read_bytes()) == result['catalog_sha256'],
                     'catalog_changed_during_run')
+            if catalog_scope == 'historical-fixture':
+                result['current_catalog'] = current_candidate_assessment(case, result['stages'][1], after_files)
+                finalize_current_assessment(result['current_catalog'])
+                save(output/'current-catalog-evidence.json', result['current_catalog'])
         result.update(status='passed', fixture_verified=True)
+        result['current_candidate_verified'] = (catalog_scope == 'shipped'
+                                                or result['current_catalog']['candidate_verified'])
     except ContractError as exc:
         result.update(status=exc.status, reason=exc.reason)
     except (OSError, ValueError, KeyError, TypeError):
         result.update(status='unavailable', reason='execution_unavailable')
+    if result['status'] != 'passed' and 'current_catalog' in result:
+        result['current_catalog'].update(status='unavailable', candidate_verified=False,
+                                         reason='fixture_cycle_incomplete')
+        try:
+            save(output/'current-catalog-evidence.json', result['current_catalog'])
+        except OSError:
+            pass  # The failed result already reports that evidence could not be completed.
     return result
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case', choices=sorted(CASES), required=True)
+    parser.add_argument('--catalog-scope', choices=['shipped', 'historical-fixture'], default='shipped',
+                        help='Default: full shipped catalog. Historical scope verifies only the pinned test snapshot.')
     parser.add_argument('--output-dir', type=Path, required=True, help='New evidence directory; never overwritten')
     args = parser.parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=False)
-    result = run(args.case, args.output_dir)
+    result = run(args.case, args.output_dir, catalog_scope=args.catalog_scope)
     save(args.output_dir/'result.json', result)
-    print(json.dumps({k: result[k] for k in ('contract_id', 'status', 'fixture_verified')}
+    print(json.dumps({k: result[k] for k in ('contract_id', 'status', 'fixture_verified',
+                                          'catalog_scope', 'current_candidate_verified')}
                      | {'reason': result.get('reason'), 'output': str(args.output_dir)}))
     return {'passed': 0, 'failed': 1}.get(result['status'], 2)
 

@@ -7,6 +7,36 @@ copy the external applications or repeat their builds, HTTP checks, or full scan
 A passing contract establishes only the checks listed below; it does not establish
 that every application using these packages is secure or compatible.
 
+## Catalog scope
+
+The CLI defaults to the full shipped `app/data/cve-catalog.json`. Unknown target
+assessments still fail with exit code 1. The October 23, 2026 snapshot contains
+`CVE-2026-112366` for picomatch through 4.0.7 and `CVE-2026-112307` for sqlparse
+through 0.6.0. Their CPE applicability is unsupported, so even the older candidate
+versions below cannot currently receive a successful current-catalog verdict.
+
+CI explicitly uses `--catalog-scope historical-fixture` to preserve the original
+positive before / candidate / restored regression. `historical-catalog.json`
+contains every advisory for the fixture's indexed packages (picomatch, sqlparse,
+and Django) from Shipit revision
+`b1e0d50d235b0fb6963504e65e459be5b5e9295e`. Its provenance records the original
+full catalog SHA-256, upstream CVE/GHSA commits, and packages absent from that
+snapshot. The runner checks the fixture file's pinned SHA-256 before any install.
+This historical file is test data; production and browser scanners continue to
+use the full shipped catalog.
+
+Report version 2 identifies `catalog_scope`, the selected catalog digest, and
+historical provenance. In historical mode `fixture_verified: true` applies only
+to that historical cycle. A separate `current-catalog-evidence.json` checks the
+same installed candidate against the full shipped catalog and records its verdict.
+`current_candidate_verified: false` remains explicit when that check is blocked
+or unavailable; historical success is not current remediation approval.
+
+The offline tests pin the two October 2026 unknown-applicability records as
+negative regression inputs. They also keep the existing missing-inventory,
+stale-install, unresolved-range, truncation, and restore controls. The runner does
+not require a particular CVE to remain unknown in future catalog snapshots.
+
 Run the probes from a disposable fixture directory, using its installed packages.
 The probes may remain in this repository and be invoked by absolute path. Each
 prints one JSON object. Functional failures exit nonzero. The sqlparse regression

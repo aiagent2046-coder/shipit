@@ -26,6 +26,7 @@ from app.report.sarif import build_sarif
 from app.sca.cache import needs_dependency_scan
 from app.scan import pipeline
 from app.scan.browser import scan_archive
+from app.scan.cve_match import match_archive
 from app.scan.pipeline import AUDIT_ENGINE_VERSION, BASIS_FULL, BASIS_PREVIEW, run_scan
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM
@@ -107,7 +108,12 @@ def test_bun_workspace_and_path_limit_match_across_scan_surfaces(case):
     assert coverage['incomplete_manifests'] == ({} if workspace else {'project/bun.lock': 'parser_limit'})
     findings = dependency_findings(online['findings'])
     assert findings == dependency_findings(browser['findings']) == dependency_findings(local['findings'])
-    assert {finding['claim_evidence']['advisory_id'] for finding in findings} == FAST_URI_ADVISORIES
+    # Compare Bun resolution with an independent npm lock containing only the
+    # retained fast-uri pin. New catalog advisories must appear on every surface.
+    reference = match_archive(project('npm', 'fast-uri', '3.1.6'), CATALOG)
+    expected = {finding['claim_evidence']['advisory_id'] for finding in reference['findings']}
+    assert FAST_URI_ADVISORIES <= expected
+    assert {finding['claim_evidence']['advisory_id'] for finding in findings} == expected
 
 
 @pytest.fixture
