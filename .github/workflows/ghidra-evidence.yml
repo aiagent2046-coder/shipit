@@ -69,6 +69,16 @@ jobs:
           assert any(row['name'] == 'puts' for row in result['facts']['imports'])
           print('Real Ghidra: function/import facts and two-project byte-identical reports passed.')
           PY
+      - name: Malformed ELF never becomes completed
+        env:
+          ARCHIVE: ${{ runner.temp }}/ghidra-12.2.zip
+        run: |
+          # Valid ELF64 x86-64 header followed by garbage: Ghidra 12.2 exits 0 with no functions.
+          python -c "import sys; d=open(sys.argv[1],'rb').read(64); open(sys.argv[2],'wb').write(d+b'\xff'*4096)" artifacts/static_sample.elf artifacts/malformed.elf
+          status=0
+          python scripts/inspect_binary_ghidra.py artifacts/malformed.elf --ghidra-archive "$ARCHIVE" --java-home "$JAVA_HOME" --output artifacts/malformed.json --diagnostic-log artifacts/malformed.log || status=$?
+          test "$status" -eq 2
+          python -c "import json; r=json.load(open('artifacts/malformed.json')); assert r['status'] != 'completed', r['reason']; print('Malformed ELF:', r['status'], r['reason'])"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

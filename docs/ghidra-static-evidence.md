@@ -44,7 +44,9 @@ are rejected. Hash validation checks consistency, not authenticity of an edited 
 ## Limits
 
 Input 10 MiB, 1000 function records and 1000 import records, names 256 characters, accepted JSON
-1 MiB, combined native log 2 MiB. Analysis timeout or record truncation yields `partial`.
+1 MiB, combined native log 2 MiB. Analysis timeout or record truncation yields `partial`. Zero
+recovered functions yields `partial` (`no_functions_recovered`): Ghidra exits 0 on an ELF whose
+valid header precedes unloadable content, and an empty export is not evidence.
 The child receives a clean environment, one analysis CPU and a 1 GiB **Java heap** limit. This is
 not a total process-memory limit or a security sandbox for the native parser. A service rollout
 would require a separate isolated worker with network and total-memory controls; this pilot is
@@ -58,5 +60,6 @@ limits and failed process exit. It does not pretend to run Ghidra.
 
 The dedicated `Optional Ghidra static evidence` CI job downloads the verified archive, installs
 JDK 25, compiles a harmless tiny C fixture without executing it, runs two fresh projects and
-requires byte-identical JSON plus known function/import facts. The native run is a distinct gate;
-it cannot be replaced by mocked/unit-only success. JSON and bounded logs are retained as artifacts.
+requires byte-identical JSON plus known function/import facts. A header-plus-garbage ELF must
+end as `partial`/`unavailable`, never `completed`. The native run is a distinct gate; it cannot
+be replaced by mocked/unit-only success. JSON and bounded logs are retained as artifacts.
