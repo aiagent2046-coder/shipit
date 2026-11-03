@@ -17,6 +17,21 @@ An absent KEV entry does not establish safety or prove that exploitation has nev
 CISA's required action and due date are labelled source context; the due date is not
 automatically assigned as the project's deadline.
 
+## Read the result
+
+Run the ordinary offline command; no additional provider key or upload is needed:
+
+```bash
+drydock-local scan /path/to/project --json > project-report.json
+```
+
+Read `project_checks.threat_context` in the local/browser JSON, or
+`score.scan_manifest.project_checks.threat_context` in a hosted result. A match has
+`priority: "expedited"` and references the existing dependency findings. The normal
+CLI exit-code policy is unchanged; KEV availability and age are shown separately.
+To reproduce correlation for a recorded date, the shared Python browser entry point
+accepts `threat_as_of="YYYY-MM-DD"`; the default is the current UTC date.
+
 ## Provenance and deterministic rebuilding
 
 The official input is [`cisagov/kev-data`](https://github.com/cisagov/kev-data), CISA's
