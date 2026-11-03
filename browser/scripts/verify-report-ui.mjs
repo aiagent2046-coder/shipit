@@ -11,6 +11,7 @@ const source = resolve(root, 'src');
 const base = 'http://scanner.test';
 const fileReports = JSON.parse(await readFile(resolve(root, '../tests/fixtures/deserialization-file-agent.json'), 'utf8'));
 const fileReport = fileReports.find(item => item.name === 'completed').report;
+const threatCases = JSON.parse(await readFile(resolve(root, '../web/src/lib/fixtures/threat_context_cases.json'), 'utf8'));
 const fileSarif = { version: '2.1.0', runs: [{ results: fileReport.findings.map(f => ({
   ruleId: f.rule_id, message: { text: f.title },
   ...(f.file && f.line > 0 ? { locations: [{ physicalLocation: {
@@ -444,6 +445,62 @@ try {
   await scanControlled({ findings: [], project_checks: importedChecks });
   assert.match(await projectPanel.innerText(), /completed · 1 binary artifacts · operator-supplied static evidence/);
   assert.match(await page.locator('#findings-summary').innerText(), /No findings from the checks that ran/);
+  const threatContext = {
+    schema: 1, status: 'completed', as_of: '2026-11-03', runtime_verified: false,
+    fingerprint: 'e'.repeat(64), matched_cves: 1, eligible_findings: 1, unmapped_findings: 0,
+    source: { repository: 'https://github.com/cisagov/kev-data', commit: 'a'.repeat(40),
+      source_committed_at: '2026-11-02T12:00:00Z', upstream_sha256: 'b'.repeat(64),
+      catalog_sha256: 'c'.repeat(64), catalog_version: '2026.11.02', date_released: '2026-11-02T11:00:00.000Z' },
+    matches: [{ cve_id: 'CVE-2026-12345', priority: 'expedited', reason: 'known_exploitation',
+      date_added: '2026-11-02', cisa_due_date: '2026-11-23', known_ransomware_campaign_use: 'Unknown',
+      required_action: '<img src=x onerror=alert(4)> Apply vendor update.',
+      finding_refs: [{ rule_id: 'dependency-cve-match', file: 'package-lock.json', line: 4,
+        package: '<img src=x onerror=alert(5)>', ecosystem: 'npm', installed_version: '1.0.0' }] }],
+    limitations: ['project_compromise_not_assessed'],
+  };
+  const threatReport = { findings: [], project_checks: { ...projectChecks, threat_context: threatContext } };
+  await scanControlled(threatReport);
+  assert.match(await projectPanel.innerText(), /CISA KEV threat context[\s\S]*completed; as of 2026-11-03; CVEs for expedited review: 1/);
+  await projectPanel.locator('details').evaluate(element => { element.open = true; });
+  assert.match(await projectPanel.innerText(), /Known exploitation concerns this CVE in the wild; compromise of this project is not established/);
+  assert.match(await projectPanel.innerText(), /KEV CVE-2026-12345/);
+  assert.ok((await projectPanel.innerText()).includes('<img src=x onerror=alert(4)>'));
+  assert.ok((await projectPanel.innerText()).includes('<img src=x onerror=alert(5)>'));
+  assert.equal(await projectPanel.locator('img').count(), 0, 'KEV text must never become HTML');
+  assert.equal((await projectPanel.innerText()).includes('2026-11-23'), false, 'CISA deadline must not appear as project obligation');
+  assert.match(await page.locator('#findings-summary').innerText(), /No findings from the checks that ran/);
+  const threatDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export JSON' }).click();
+  const threatStream = await (await threatDownload).createReadStream();
+  const threatChunks = [];
+  for await (const chunk of threatStream) threatChunks.push(chunk);
+  assert.deepEqual(JSON.parse(Buffer.concat(threatChunks).toString()), threatReport,
+    'KEV presentation must preserve raw report exports');
+  for (const state of ['stale', 'partial']) {
+    await scanControlled({ findings: [], project_checks: { ...projectChecks, threat_context: { ...threatContext, status: state } } });
+    assert.ok((await projectPanel.innerText()).includes(`${state}; as of 2026-11-03`));
+  }
+  const unavailableThreat = { ...threatContext, status: 'unavailable', source: null, matches: [], matched_cves: 0 };
+  await scanControlled({ findings: [], project_checks: { ...projectChecks, threat_context: unavailableThreat } });
+  assert.match(await projectPanel.innerText(), /CISA KEV threat context[\s\S]*unavailable; as of/);
+  for (const badThreat of [null, { ...threatContext, as_of: '2026-02-30' },
+    { ...threatContext, matched_cves: 2 }, { ...threatContext, runtime_verified: true },
+    { ...threatContext, source: { ...threatContext.source, repository: 'https://untrusted.example/feed' } },
+    { ...threatContext, matches: [...threatContext.matches, ...threatContext.matches] }]) {
+    await scanControlled({ findings: [], project_checks: { ...projectChecks, threat_context: badThreat } });
+    assert.match(await projectPanel.innerText(), /CISA KEV threat context[\s\S]*Unavailable: invalid recorded threat context/);
+    assert.match(await projectPanel.innerText(), /Source[\s\S]*partial · 3 checks run/);
+    assert.match(await projectPanel.innerText(), /Vulnerability databases[\s\S]*completed · offline catalog/);
+  }
+  for (const fixture of threatCases) {
+    await scanControlled({ findings: [], project_checks: { ...projectChecks, threat_context: fixture.value } });
+    const summary = projectPanel.locator('#project-checks-overview .coverage-definition')
+      .filter({ has: page.getByText('CISA KEV threat context', { exact: true }) }).locator('dd');
+    assert.equal(await summary.innerText(), fixture.rows[0][1], `Shared KEV presentation: ${fixture.name}`);
+    assert.match(await projectPanel.innerText(), /Source[\s\S]*partial · 3 checks run/,
+      `Independent source coverage remains visible: ${fixture.name}`);
+    assert.equal(await projectPanel.locator('img, svg').count(), 0, `Escaped KEV fixture: ${fixture.name}`);
+  }
   importedChecks.binary_static.archive_sha256 = 'f'.repeat(64);
   await scanControlled({ findings: [], project_checks: importedChecks });
   assert.match(await projectPanel.innerText(), /Ghidra[\s\S]*unavailable · Invalid or incompatible/);

@@ -24,8 +24,10 @@ try {
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(e.message));
   await page.goto(base + '/harness.html');
+  // Each independent archive verifies the pinned KEV snapshot as well as source
+  // evidence. Keep a finite budget for the full corpus on slower CI runners.
   await page.waitForFunction(() => ['PASSED', 'FAILED'].includes(document.querySelector('#status').textContent), null,
-    { timeout: 120_000 });
+    { timeout: 240_000 });
   const cases = JSON.parse(await readFile(resolve(root, 'test-dist/cases.json')));
   assert.ok(cases.length > 0, 'Need a nonempty corpus');
   const expectedChecks = cases[0].native.report.checks_run;
@@ -89,6 +91,30 @@ try {
     delete actual.runtime;
     assert.deepEqual(actual, expected);
   }
+
+  const kevCase = cases.find(c => c.id === 'threat-context/pillow-affected');
+  assert.ok(kevCase, 'Need a real KEV correlation regression');
+  const kevInput = { name: 'known-exploitation-project.zip', mimeType: 'application/zip',
+    buffer: Buffer.from(kevCase.archive, 'base64') };
+  await page.getByLabel('Project ZIP', { exact: true }).setInputFiles(kevInput);
+  await page.getByRole('button', { name: 'Scan locally', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('#scan-button').disabled &&
+    document.querySelector('#project-checks-evidence').textContent.includes('CVE-2023-4863'),
+  null, { timeout: 120_000 });
+  assert.match(await page.locator('#project-checks-overview').innerText(), /CISA KEV/);
+  for (const [label, name] of [['Export JSON', 'kev.json'], ['Export SARIF', 'kev.sarif']]) {
+    const ready = page.waitForEvent('download');
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await (await ready).saveAs(resolve(output, name));
+  }
+  const kevReport = JSON.parse(await readFile(resolve(output, 'kev.json')));
+  const kevContext = kevReport.project_checks.threat_context;
+  assert.equal(kevContext.matches.filter(row => row.cve_id === 'CVE-2023-4863').length, 1);
+  assert.equal(kevContext.matches.find(row => row.cve_id === 'CVE-2023-4863').priority, 'expedited');
+  assert.equal(kevContext.runtime_verified, false);
+  assert.deepEqual(kevReport.findings, kevCase.native.report.findings);
+  const kevSarif = JSON.parse(await readFile(resolve(output, 'kev.sarif')));
+  assert.equal(kevSarif.runs[0].results.length, kevReport.findings.length);
 
   const binaryBun = cases.find(c => c.id === 'dependency-cve-match/bun-binary');
   assert.ok(binaryBun, 'Need a binary Bun coverage regression');
@@ -194,7 +220,36 @@ try {
   assert.match(await badPage.locator('#dependency-cve-details').innerText(), /unavailable/);
   assert.match(await badPage.locator('#checks-not-run').innerText(), /dependency_cve/);
   await badCatalog.close();
-  console.log(JSON.stringify({ ...measured.summary, ui: 'passed', exports: 'passed', network: 'same-origin GET assets only' }));
+  // Tampered KEV bytes must degrade only threat context. Source and ordinary
+  // dependency findings remain usable; no third-party query repairs the data.
+  const badKev = await browser.newContext();
+  await badKev.route('**/*', async route => {
+    const request = route.request();
+    if (!request.url().startsWith(base + '/') || request.method() !== 'GET') return route.abort();
+    if (request.url().endsWith('/engine-files.json')) {
+      const response = await route.fetch();
+      const files = await response.json();
+      files['app/data/kev-catalog.json'] = '{}';
+      return route.fulfill({ response, json: files });
+    }
+    return route.continue();
+  });
+  const badKevPage = await badKev.newPage();
+  await badKevPage.goto(base + '/index.html');
+  await badKevPage.getByLabel('Project ZIP', { exact: true }).setInputFiles(kevInput);
+  await badKevPage.getByRole('button', { name: 'Scan locally', exact: true }).click();
+  await badKevPage.locator('#results').waitFor({ state: 'visible', timeout: 120_000 });
+  assert.match(await badKevPage.locator('#project-checks-overview').innerText(), /CISA KEV.*unavailable/s);
+  const badKevDownload = badKevPage.waitForEvent('download');
+  await badKevPage.getByRole('button', { name: 'Export JSON', exact: true }).click();
+  await (await badKevDownload).saveAs(resolve(output, 'kev-unavailable.json'));
+  const badKevReport = JSON.parse(await readFile(resolve(output, 'kev-unavailable.json')));
+  assert.equal(badKevReport.project_checks.threat_context.status, 'unavailable');
+  assert.deepEqual(badKevReport.findings, kevCase.native.report.findings);
+  assert.deepEqual(badKevReport.project_checks.source, kevCase.native.report.project_checks.source);
+  await badKev.close();
+  console.log(JSON.stringify({ ...measured.summary, ui: 'passed', exports: 'passed',
+    kev_snapshot_integrity: 'passed', network: 'same-origin GET assets only' }));
 } finally {
   await browser.close();
 }

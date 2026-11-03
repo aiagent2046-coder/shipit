@@ -16,6 +16,7 @@ from app.scan.pipeline import BASIS_PREVIEW
 from app.db import DatabaseNotConfigured
 from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
 from app.scan.cve_match import RULE_ID as SNAPSHOT_RULE_ID
+from app.sca.refresh import refresh_score_threat_context
 
 
 def _observation_key(finding: dict) -> str:
@@ -111,6 +112,14 @@ access token through the normal repository create path.
     original_score = cached.get("score_json") or {}
     findings = cached.get("findings_json") or []
     score = await score_with_preview_history(repo, original_score, findings, digest, engine)
+    # Public intelligence can change without changed source or any new provider
+    # query. Copy the receipt on reuse; leave the original audit immutable.
+    score = refresh_score_threat_context(score, findings)
+    baseline = score.get("free_baseline")
+    if isinstance(baseline, dict) and isinstance(baseline.get("score"), dict):
+        refreshed = refresh_score_threat_context(baseline["score"], baseline.get("findings") or [])
+        if refreshed is not baseline["score"]:
+            score = {**score, "free_baseline": {**baseline, "score": refreshed}}
     if score is original_score:
         return cached
     score["analysis_reused_from"] = original_score.get("analysis_reused_from") or str(cached["id"])

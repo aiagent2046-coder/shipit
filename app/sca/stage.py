@@ -26,6 +26,7 @@ claims and only the first one was verified.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -428,6 +429,10 @@ def build_finding(dependency: Dependency, advisories: list[Advisory],
         "occurrences": occurrence_evidence(dependency),
         "occurrences_recorded": bool(dependency.occurrences),
         "advisory_ids": [advisory.identifier for advisory in advisories],
+        "advisory_aliases": sorted({value for advisory in advisories if not advisory.details_missing
+                                    for value in advisory.cve_ids if isinstance(value, str)
+                                    and re.fullmatch(r"CVE-\d{4}-\d{4,}", value)}),
+        "unreadable_advisory_ids": sorted(advisory.identifier for advisory in advisories if advisory.details_missing),
         "reachability": "not_assessed",
     }
     return DependencyFinding(

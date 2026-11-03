@@ -300,6 +300,14 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                             "Missing evidence is not a clean result; "
                             "tool execution and runtime behaviour are not authenticated."},
             })
+    if checks is not None and isinstance(checks.get("threat_context"), dict):
+        threat = checks["threat_context"]
+        if threat.get("status") in {"unavailable", "partial", "stale"}:
+            run["invocations"][0].setdefault("toolExecutionNotifications", []).append({
+                "level": "warning", "descriptor": {"id": "threat-context-incomplete"},
+                "message": {"text": "CISA KEV context is incomplete, unavailable or stale. "
+                            "No absence-of-exploitation claim is established; source findings remain unchanged."},
+            })
     if project_name:
         run["properties"] = {"project": project_name}
     return {"version": SARIF_VERSION, "$schema": SARIF_SCHEMA, "runs": [run]}

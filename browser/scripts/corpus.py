@@ -1,5 +1,7 @@
 """Build test inputs and native expectations; never included in public assets."""
 import base64
+from datetime import datetime, timezone
+import os
 import hashlib
 import io
 import zipfile
@@ -33,11 +35,12 @@ from tests.bun_fixtures import (  # noqa: E402
 )
 from parser_probes import probe_parsers  # noqa: E402
 
+AS_OF = os.environ.get('DRYDOCK_PARITY_AS_OF', datetime.now(timezone.utc).date().isoformat())
 CATALOG = json.loads((ROOT / "app/data/cve-catalog.json").read_text())
 
 
 def scan_archive(data):
-    return _scan_archive(data, CATALOG)
+    return _scan_archive(data, CATALOG, threat_as_of=AS_OF)
 
 
 def dependency_cases():
@@ -66,6 +69,30 @@ def dependency_cases():
         yield (f'dependency-cve-match/{name}', data, {
             'expect': [{'rule_id': 'dependency-cve-match', 'advisory_id': advisory}
                        for advisory in sorted(FAST_URI_ADVISORIES)]}, True)
+
+
+
+def threat_context_cases():
+    # The bundled reviewed GHSA connects Pillow to the KEV CVE alias. A fixed
+    # package and a source-only CVE mention must not acquire that priority.
+    cve = 'CVE-2023-4863'
+    for name, data, listed in (
+        ('pillow-affected', project('PyPI', 'pillow', '10.0.0'), True),
+        ('pillow-fixed', project('PyPI', 'pillow', '10.0.1'), False),
+        ('source-mention-only', archive({'app.py': 'print("CVE-2023-4863")'}), False),
+    ):
+        result = scan_archive(data)
+        context = result['report']['project_checks']['threat_context']
+        matches = [row for row in context['matches'] if row['cve_id'] == cve]
+        assert bool(matches) is listed
+        if listed:
+            assert len(matches) == 1 and matches[0]['priority'] == 'expedited'
+            assert all(ref['package'] == 'pillow' for ref in matches[0]['finding_refs'])
+        assert context['runtime_verified'] is False
+        yield {'id': f'threat-context/{name}', 'rule': 'dependency-cve-match',
+               'polarity': 'positive' if listed else 'negative',
+               'archive': base64.b64encode(data).decode(),
+               'expected': {'kev_cve': cve, 'kev_listed': listed}, 'native': result}
 
 
 def provenance_cases():
@@ -310,6 +337,7 @@ def main():
                       'archive': base64.b64encode(data).decode(), 'expected': expected,
                       'native': scan_archive(data)})
     cases.extend(project_check_cases())
+    cases.extend(threat_context_cases())
     cases.extend(provenance_cases())
     cases.extend(remediation_cases())
     cases.extend(acquisition_cases())
@@ -318,6 +346,7 @@ def main():
     portable = json.loads(subprocess.run(
         [sys.executable, __file__, "--portable"], check=True, capture_output=True, text=True,
         input=json.dumps([case['archive'] for case in cases]),
+        env={**os.environ, 'DRYDOCK_PARITY_AS_OF': AS_OF},
     ).stdout)
     for case, result in zip(cases, portable, strict=True):
         case['portable'] = result
@@ -343,7 +372,7 @@ def main():
         z.writestr('src/tail.py', 'from lxml import etree\n' + xml_call * 2
                    + 'query = "SELECT id FROM users WHERE id = " + user_id\n'
                      'cursor.execute(query)\n')
-    session = ScanSession(archive.getvalue(), CATALOG)
+    session = ScanSession(archive.getvalue(), CATALOG, threat_as_of=AS_OF)
     continuation = {"archive": base64.b64encode(archive.getvalue()).decode(),
                     "initial": session.result()}
     # Mixed-language rules need three batches for this mixed-source archive.

@@ -17,8 +17,21 @@ export async function loadNativeParsers(pyodide) {
 }
 
 export async function installEngine(pyodide, files) {
+  const dataLimits = new Map([
+    ['app/data/kev-catalog.json', 8 * 1024 * 1024],
+    ['app/data/kev-catalog.json.sha256', 1024],
+  ]);
+  // Keep data names exact: a JSON fixture must never widen the Python import
+  // boundary or let arbitrary bundle paths enter the virtual filesystem.
   for (const [path, source] of Object.entries(files)) {
-    if (!/^app\/[a-zA-Z0-9_/]+\.py$/.test(path)) throw new Error('Invalid engine bundle');
+    if (typeof source !== 'string' || (!/^app\/[a-zA-Z0-9_/]+\.py$/.test(path) && !dataLimits.has(path))) {
+      throw new Error('Invalid engine bundle');
+    }
+    if (dataLimits.has(path) && new TextEncoder().encode(source).byteLength > dataLimits.get(path)) {
+      throw new Error('Oversized engine data');
+    }
+  }
+  for (const [path, source] of Object.entries(files)) {
     const target = `/engine/${path}`;
     pyodide.FS.mkdirTree(target.slice(0, target.lastIndexOf('/')));
     pyodide.FS.writeFile(target, source);
@@ -41,28 +54,31 @@ export async function installCatalog(pyodide, bytes, expectedHash) {
   }
 }
 
-export function scanBytes(pyodide, archive) {
+export function scanBytes(pyodide, archive, threatAsOf = null) {
   // Only bytes cross this boundary, never interpolated Python source. Uploaded
   // files are read from an in-memory ZIP; they never enter Python's import path.
   pyodide.globals.set('_archive_bytes', new Uint8Array(archive));
+  pyodide.globals.set('_threat_as_of', threatAsOf);
   try {
     return JSON.parse(pyodide.runPython(`
 import json
 from app.ingest.validators import ArchiveValidationError
 def _browser_scan():
     try:
-        return json.dumps(scan_archive(bytes(_archive_bytes.to_py()), _dependency_catalog))
+        return json.dumps(scan_archive(bytes(_archive_bytes.to_py()), _dependency_catalog, threat_as_of=_threat_as_of))
     except ArchiveValidationError as exc:
         return json.dumps({"error": "invalid_archive", "reason": exc.reason})
 _browser_scan()
 `));
   } finally {
     pyodide.globals.delete('_archive_bytes');
+    pyodide.globals.delete('_threat_as_of');
   }
 }
 
-export function startSession(pyodide, archive) {
+export function startSession(pyodide, archive, threatAsOf = null) {
   pyodide.globals.set('_archive_bytes', new Uint8Array(archive));
+  pyodide.globals.set('_threat_as_of', threatAsOf);
   try {
     return JSON.parse(pyodide.runPython(`
 import json
@@ -72,7 +88,7 @@ def _start_session():
     global _scan_session
     _scan_session = None
     try:
-        _scan_session = ScanSession(bytes(_archive_bytes.to_py()), _dependency_catalog)
+        _scan_session = ScanSession(bytes(_archive_bytes.to_py()), _dependency_catalog, threat_as_of=_threat_as_of)
         return json.dumps(_scan_session.result())
     except ArchiveValidationError as exc:
         return json.dumps({"error": "invalid_archive", "reason": exc.reason})
@@ -80,6 +96,7 @@ _start_session()
 `));
   } finally {
     pyodide.globals.delete('_archive_bytes');
+    pyodide.globals.delete('_threat_as_of');
   }
 }
 

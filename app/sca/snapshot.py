@@ -10,6 +10,7 @@ from app.scan.cve_evidence import empty_cve_summary
 from app.scan.cve_match import RULE_ID, match_archive
 from app.sca.lockfiles import normalize_pypi
 from app.scan.remediation_catalog import CATALOG_VERSION as REMEDIATION_CATALOG_VERSION
+from app.scan.threat_context import context_is_current
 
 CATALOG_PATH = Path(__file__).resolve().parents[1] / "data/cve-catalog.json"
 CHECKSUM_PATH = CATALOG_PATH.with_suffix(".json.sha256")
@@ -40,11 +41,17 @@ def _inputs() -> tuple[bytes, bytes, str | None, str]:
     return parts[0], parts[1], failure, digest.hexdigest()
 
 
-def snapshot_is_current(score: dict) -> bool:
+def _catalog_is_current(score: dict) -> bool:
     metadata = (score.get("scan_manifest") or {}).get("dependency_snapshot")
     return (isinstance(metadata, dict) and metadata.get("version") == 1
             and metadata.get("mode") == "bundled"
             and metadata.get("fingerprint") == _inputs()[3])
+
+
+def snapshot_is_current(score: dict) -> bool:
+    project = (score.get("scan_manifest") or {}).get("project_checks")
+    return (_catalog_is_current(score)
+            and (not isinstance(project, dict) or context_is_current(project.get("threat_context"))))
 
 
 def baseline_is_current(score: dict) -> bool:
@@ -80,10 +87,17 @@ def run_snapshot_stage(data: bytes, *, assessment_observer=None) -> tuple[list[d
     return findings, stats
 
 
-def refresh_snapshot(score: dict, findings: list[dict], raw: bytes) -> dict:
+def refresh_snapshot(score: dict, findings: list[dict], raw: bytes, *,
+                     context_only_if_current: bool = False) -> dict:
     """Replace only snapshot evidence, preserving already purchased analysis."""
     # Delayed import: refresh uses pipeline scoring, which imports this stage.
-    from app.sca.refresh import refreshed_score
+    from app.sca.refresh import refreshed_score, refresh_score_threat_context
+
+    if context_only_if_current and _catalog_is_current(score):
+        # A new KEV receipt/day does not require another dependency inventory or
+        # source scan. No model/provider call is involved in this refresh.
+        return {"score": refresh_score_threat_context(score, findings), "findings": findings,
+                "llm": {}, "llm_usage": {"calls": 0}}
 
     kept = [f for f in findings if f.get("rule_id") != RULE_ID]
     previous = [f for f in findings if f.get("rule_id") == RULE_ID]

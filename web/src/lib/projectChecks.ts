@@ -1,4 +1,5 @@
 /** Bounded presentation only: these rows never affect findings or scores. */
+import { threatContextRows } from "./threatContext";
 type RecordValue = Record<string, unknown>;
 export type ProjectCheckRows = [string, string][];
 const object = (v: unknown): v is RecordValue => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -77,5 +78,10 @@ export function projectChecksRows(value: unknown): ProjectCheckRows {
     || (binary.status === "not_applicable" && (binary.artifacts.length > 0 || binary.artifacts_omitted !== 0))
     || (binary.status === "not_run" && binary.artifacts.some(item => !object(item) || item.status !== "not_run"))) return unavailable;
   binary.limitations.forEach((item, index) => rows.push([`Binary limitation ${index + 1}`, String(item)]));
+  if (Object.hasOwn(value, "threat_context")) {
+    const threatRows = threatContextRows(value.threat_context);
+    rows.splice(3, 0, threatRows[0]);
+    rows.push(...threatRows.slice(1));
+  }
   return rows;
 }

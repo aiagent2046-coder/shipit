@@ -511,6 +511,70 @@ function renderFinding(finding) {
   return article;
 }
 
+function threatContextRows(value) {
+  const invalid = [['CISA KEV threat context', 'Unavailable: invalid recorded threat context; no prioritization established.']];
+  const record = item => item !== null && typeof item === 'object' && !Array.isArray(item);
+  const bounded = (item, limit) => typeof item === 'string' && !/^[\s\u0085]*$/u.test(item)
+    && item.length <= limit * 2 && Array.from(item).length <= limit
+    && !/[\u0000-\u001f\u007f\ud800-\udfff]/u.test(item);
+  const digest = (item, length = 64) => typeof item === 'string'
+    && new RegExp(`^[0-9a-f]{${length}}$`).test(item);
+  const count = item => Number.isSafeInteger(item) && item >= 0;
+  const date = item => typeof item === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item)
+    && item.slice(0, 4) !== '0000' && Number.isFinite(Date.parse(`${item}T00:00:00Z`))
+    && new Date(`${item}T00:00:00Z`).toISOString().slice(0, 10) === item;
+  const timestamp = item => typeof item === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(item)
+    && date(item.slice(0, 10)) && Number(item.slice(11, 13)) < 24
+    && Number(item.slice(14, 16)) < 60 && Number(item.slice(17, 19)) < 60
+    && Number.isFinite(Date.parse(item));
+  if (!record(value) || value.schema !== 1 || value.runtime_verified !== false
+      || !['completed', 'partial', 'stale', 'unavailable'].includes(value.status)
+      || !date(value.as_of) || !digest(value.fingerprint)
+      || ![value.matched_cves, value.eligible_findings, value.unmapped_findings].every(count)
+      || !Array.isArray(value.matches) || value.matches.length > 256
+      || value.matched_cves !== value.matches.length
+      || !Array.isArray(value.limitations) || value.limitations.length > 32
+      || !value.limitations.every(item => bounded(item, 1024))) return invalid;
+  const source = value.source;
+  if (source !== null && (!record(source)
+      || source.repository !== 'https://github.com/cisagov/kev-data'
+      || !digest(source.commit, 40) || !timestamp(source.source_committed_at)
+      || !digest(source.upstream_sha256) || !digest(source.catalog_sha256)
+      || !bounded(source.catalog_version, 80) || !timestamp(source.date_released))) return invalid;
+  if ((value.status !== 'unavailable' && source === null)
+      || (value.status === 'unavailable' && value.matches.length)) return invalid;
+  const ids = new Set();
+  for (const match of value.matches) {
+    if (!record(match) || typeof match.cve_id !== 'string' || !/^CVE-\d{4}-\d{4,19}$/.test(match.cve_id)
+        || ids.has(match.cve_id) || match.priority !== 'expedited' || match.reason !== 'known_exploitation'
+        || !date(match.date_added) || !date(match.cisa_due_date) || !bounded(match.required_action, 4096)
+        || !['Known', 'Unknown'].includes(match.known_ransomware_campaign_use)
+        || !Array.isArray(match.finding_refs) || !match.finding_refs.length || match.finding_refs.length > 64) return invalid;
+    ids.add(match.cve_id);
+    for (const ref of match.finding_refs) {
+      if (!record(ref) || !['dependency-cve-match', 'dependency-known-vulnerability'].includes(ref.rule_id)
+          || !bounded(ref.file, 1024) || !count(ref.line) || !bounded(ref.package, 256)
+          || !bounded(ref.ecosystem, 80) || !bounded(ref.installed_version, 256)) return invalid;
+    }
+  }
+  const priority = value.status === 'unavailable' ? 'prioritization unavailable'
+    : `CVEs for expedited review: ${value.matched_cves}`;
+  const rows = [['CISA KEV threat context', `${value.status}; as of ${value.as_of}; ${priority}. Eligible findings: ${value.eligible_findings}; unmapped: ${value.unmapped_findings}. Project compromise is not established.`]];
+  rows.push(['Threat context scope', 'Known exploitation concerns this CVE in the wild; compromise of this project is not established. Priority is separate from severity and finding confidence. Absence from KEV is not evidence of safety.']);
+  if (source) {
+    rows.push(['KEV source', `${source.repository}; commit: ${source.commit}; committed: ${source.source_committed_at}; released: ${source.date_released}; catalog version: ${source.catalog_version}.`]);
+    rows.push(['KEV catalog SHA-256', source.catalog_sha256]);
+    rows.push(['KEV upstream SHA-256', source.upstream_sha256]);
+  }
+  for (const match of value.matches) {
+    const targets = match.finding_refs.map(ref => `${ref.ecosystem}:${ref.package} ${ref.installed_version} (${ref.file}:${ref.line})`).join('; ');
+    rows.push([`KEV ${match.cve_id}`, `Expedited review; listed ${match.date_added}. Affected findings: ${targets}. CISA action: ${match.required_action}`]);
+  }
+  value.limitations.forEach((item, index) => rows.push([`Threat limitation ${index + 1}`, item]));
+  return rows;
+}
+
 function renderProjectChecks(value) {
   const panel = byId('project-checks');
   const overview = byId('project-checks-overview');
@@ -578,6 +642,11 @@ function renderProjectChecks(value) {
       details.push([`Binary: ${item.path}`, `${label(item.status)}${item.reason ? ` · ${label(item.reason)}` : ''}; SHA-256: ${item.sha256 || 'Not recorded'}; bytes: ${item.bytes ?? 'Not recorded'}${item.provider ? `; Ghidra ${item.provider.version}` : ''}${item.facts ? `; functions: ${item.facts.functions.length}; imports: ${item.facts.imports.length}` : ''}`]);
     }
   } else rows.push(['Ghidra', unreadable]);
+  if (Object.hasOwn(value, 'threat_context')) {
+    const threatRows = threatContextRows(value.threat_context);
+    rows.push(threatRows[0]);
+    details.push(...threatRows.slice(1));
+  }
   renderDefinitions(overview, rows);
   renderDefinitions(evidence, details);
 }
