@@ -1,0 +1,50 @@
+name: Close superseded advisory snapshots
+
+on:
+  workflow_run:
+    # Optional workflows also wake cleanup if they finish after the required five.
+    workflows:
+      - production-ci
+      - browser-scan
+      - web-build
+      - db-postgres-smoke
+      - local-package
+      - security-audit
+      - dependency-remediation-contract
+      - sql-runtime-contract
+      - CodeQL Advanced
+      - Optional Ghidra static evidence
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+# Serialize with snapshot creation; never delete branches or merge PRs here.
+concurrency:
+  group: update-cve-catalog
+  cancel-in-progress: false
+
+jobs:
+  close-superseded:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.id == github.event.repository.id &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Close only merged-and-verified superseded snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/close_superseded_advisories.py --apply
