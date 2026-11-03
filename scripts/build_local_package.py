@@ -23,7 +23,7 @@ EXTERNAL = {"yaml", "tree_sitter", "tree_sitter_typescript", "pglast"}
 ALLOWED = {
     "app", "app.local_cli", "app.local_store", "app.logging_config", "app.log_context", "app.capabilities",
     "app.ingest", "app.ingest.validators", "app.report", "app.report.sarif", "app.report.plain_language",
-    "app.report.dependency_snapshot", "app.report.project_checks",
+    "app.report.dependency_snapshot", "app.report.project_checks", "app.report.threat_context",
     "app.sca", "app.sca.lockfiles", "app.sca.resolved_locks", "app.sca.bun_lock",
 }
 
@@ -162,12 +162,18 @@ def stage(root: Path, destination: Path) -> dict:
         output.write_text(relocate(source))
         hashes[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     (package / "data").mkdir()
-    for name in ("cve-catalog.json", "cve-catalog.json.sha256"):
+    for name in ("cve-catalog.json", "cve-catalog.json.sha256", "kev-catalog.json", "kev-catalog.json.sha256"):
         shutil.copyfile(root / "app/data" / name, package / "data" / name)
     raw = (package / "data/cve-catalog.json").read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     if digest != (package / "data/cve-catalog.json.sha256").read_text().split()[0]:
         raise ValueError("Bundled catalog checksum mismatch")
+    kev_raw = (package / "data/kev-catalog.json").read_bytes()
+    if len(kev_raw) > 8 * 1024 * 1024:
+        raise ValueError("Bundled KEV catalog exceeds package budget")
+    kev_digest = hashlib.sha256(kev_raw).hexdigest()
+    if kev_digest != (package / "data/kev-catalog.json.sha256").read_text().strip():
+        raise ValueError("Bundled KEV catalog checksum mismatch")
     for source, name in (("local/pyproject.toml.in", "pyproject.toml"), ("LICENSE", "LICENSE"),
                          ("docs/local-drydock.md", "README.md")):
         shutil.copyfile(root / source, destination / name)
@@ -183,7 +189,7 @@ def stage(root: Path, destination: Path) -> dict:
     info = {"package_version": config["project"]["version"], "engine_version": engine,
             "source_revision": revision, "source_dirty": dirty,
             "source_url": f"https://github.com/aiagent2046-coder/shipit/tree/{revision}",
-            "source_sha256": hashes, "catalog_sha256": digest, "dependencies": pins}
+            "source_sha256": hashes, "catalog_sha256": digest, "kev_catalog_sha256": kev_digest, "dependencies": pins}
     (package / "build-info.json").write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
     return info
 

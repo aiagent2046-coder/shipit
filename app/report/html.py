@@ -416,13 +416,16 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         for name, label in coverage_rows(score, raw_findings)
     )
     project_rows = project_checks_rows((score.get("scan_manifest") or {}).get("project_checks"))
+    project_summary_count = 4 if len(project_rows) > 3 and project_rows[3][0] == "CISA KEV threat context" else 3
     project_checks_html = (
         '<section aria-label="Project checks"><h2 class="sechead">Project checks</h2>'
         '<dl style="overflow-wrap:anywhere">'
-        + ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in project_rows[:3])
+        + ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>'
+                  for label, value in project_rows[:project_summary_count])
         + '</dl>' + (('<details><summary>Project evidence bindings</summary><dl style="overflow-wrap:anywhere">'
-          + ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in project_rows[3:])
-          + '</dl></details>') if len(project_rows) > 3 else '')
+          + ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>'
+                    for label, value in project_rows[project_summary_count:])
+          + '</dl></details>') if len(project_rows) > project_summary_count else '')
         + '<p class="secnote">' + escape(PROJECT_CHECKS_SCOPE) + '</p></section>'
         if project_rows else ''
     )

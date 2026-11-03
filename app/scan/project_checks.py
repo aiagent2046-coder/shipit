@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 
 from app.scan.binary_evidence import collect_binary_evidence
+from app.scan.threat_context import build_threat_context
 
 
 def dependency_checks(sca: dict, findings: int | None = None) -> dict:
@@ -38,7 +39,9 @@ def dependency_checks(sca: dict, findings: int | None = None) -> dict:
             'catalog_sha256': None, 'sources': {}, 'reason': reason or (None if ran else 'not_requested')}
 
 
-def project_checks(data: bytes, static: dict, sca: dict, dependency_findings: int | None = None) -> dict:
+def project_checks(data: bytes, static: dict, sca: dict, dependency_findings: int | None = None, *,
+                   dependency_records: list[dict] | None = None, threat_catalog: dict | None = None,
+                   threat_as_of: str | None = None) -> dict:
     checks = static.get('checks_run') or []
     failures = static.get('checks_not_run') or []
     incomplete = any(any(row.get('skip_reasons', {}).values())
@@ -52,4 +55,5 @@ def project_checks(data: bytes, static: dict, sca: dict, dependency_findings: in
                    'findings': len(static.get('findings') or []), 'agent_status': agent.get('status', 'not_run')},
         'dependencies': dependency_checks(sca, dependency_findings),
         'binary_static': collect_binary_evidence(data),
+        'threat_context': build_threat_context(dependency_records or [], catalog=threat_catalog, as_of=threat_as_of),
     }

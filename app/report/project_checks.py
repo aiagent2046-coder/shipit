@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from app.report.threat_context import threat_context_record, threat_context_rows
+
 SOURCE_REPOSITORIES = {
     "cvelist": "https://github.com/CVEProject/cvelistV5",
     "github-reviewed": "https://github.com/github/advisory-database",
@@ -176,6 +178,7 @@ def project_checks_record(value: object) -> dict | None:
         "schema": 1,
         "archive_sha256": value["archive_sha256"],
         "runtime_verified": False,
+        **({"threat_context": threat_context_record(value["threat_context"])} if "threat_context" in value else {}),
         "source": {key: source[key] for key in ("status", "checks_run", "checks_not_run", "findings", "agent_status")},
         "dependencies": {
             "status": dependencies["status"],
@@ -261,4 +264,8 @@ def project_checks_rows(value: object) -> list[tuple[str, str]]:
             detail += " Provider: " + provider + "."
         rows.append((f"Binary artifact {index}", detail))
     rows.extend((f"Binary limitation {i}", item) for i, item in enumerate(binary["limitations"], 1))
+    if "threat_context" in record:
+        threat_rows = threat_context_rows(record["threat_context"])
+        rows.insert(3, threat_rows[0])
+        rows.extend(threat_rows[1:])
     return rows

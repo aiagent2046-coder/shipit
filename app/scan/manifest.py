@@ -82,7 +82,8 @@ def _file_counts(coverage: object) -> dict | None:
 
 def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
                   failure_kind: str | None, sca: object = None, *,
-                  dependency_findings: int | None = None) -> dict:
+                  dependency_findings: int | None = None, dependency_records: list[dict] | None = None,
+                  threat_catalog: dict | None = None, threat_as_of: str | None = None) -> dict:
     """Recorded inputs, execution facts and what was NOT examined.
 
     `sca` is the dependency stage's stats when it ran, or its reason for not
@@ -130,7 +131,9 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
                    if reason in {"security_agent_unavailable", "security_agent_incomplete"})
     return {
         "archive_sha256": hashlib.sha256(data).hexdigest(),
-        "project_checks": project_checks(data, static, sca, dependency_findings),
+        "project_checks": project_checks(data, static, sca, dependency_findings,
+                                         dependency_records=dependency_records, threat_catalog=threat_catalog,
+                                         threat_as_of=threat_as_of),
         "engine_version": engine,
         "archive_files": len(names),
         # The archive digest identifies the exact input. A filename's short

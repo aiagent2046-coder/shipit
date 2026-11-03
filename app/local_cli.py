@@ -21,11 +21,13 @@ from app.ingest.validators import ArchiveValidationError
 from app.local_store import connect, default_state_dir, load_catalog, update_catalog
 from app.logging_config import configure_logging
 from app.report.plain_language import plain_fields
+from app.report.threat_context import threat_context_record, threat_context_rows
 from app.scan.browser import ScanSession
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS
 from app.scan.security_agent import agent_record
 from app.scan.version import AUDIT_ENGINE_VERSION
 from app.scan.binary_evidence import attach_binary_reports
+from app.scan.kev_catalog import fingerprint as kev_fingerprint
 from app.scan.remediation_catalog import remediation_hint, remediation_record
 
 # Keep local archives within both the static and offline dependency matcher budgets.
@@ -138,6 +140,12 @@ def record(db: sqlite3.Connection, root: Path, report: dict) -> dict:
         summary = {"created_at": report["created_at"], "engine_version": report["engine_version"],
                    "catalog_sha256": report["catalog"]["sha256"], "findings": len(report["findings"]),
                    "checks_not_run": len(report["checks_not_run"]), "changes": changes}
+        threat = (report.get("project_checks") or {}).get("threat_context")
+        if threat is not None:
+            normalized = threat_context_record(threat)
+            summary["threat_context"] = {key: normalized.get(key) for key in (
+                "status", "as_of", "fingerprint", "matched_cves",
+            )}
         if agent := agent_record(report.get("security_agent")):
             summary["pattern_review"] = {
                 "status": agent["status"], "catalog": agent["catalog"],
@@ -194,7 +202,8 @@ def poll_project(db: sqlite3.Connection, root: Path, state_dir: Path,
         scope = {**scope, "sha256": hashlib.sha256(
             scope["sha256"].encode() + b"\0" + hashlib.sha256(raw).digest()).hexdigest(),
                  "attached_binary_reports": len(reports)}
-    key = (scope["sha256"], metadata["sha256"], AUDIT_ENGINE_VERSION, datetime.now(timezone.utc).date().isoformat())
+    key = (scope["sha256"], metadata["sha256"], AUDIT_ENGINE_VERSION,
+           datetime.now(timezone.utc).date().isoformat(), kev_fingerprint())
     if key == previous_key:
         return key, None
     report = inspect_project(raw, scope, catalog, metadata)
@@ -396,6 +405,12 @@ def display(report: dict, as_json: bool, show_contextual: bool = False) -> None:
     if project:
         print("Project checks: " + json.dumps({name: project[name].get("status")
                                               for name in ("source", "dependencies", "binary_static")}))
+        if "threat_context" in project:
+            rows = threat_context_rows(project["threat_context"])
+            for label, detail in rows[:20]:
+                print(label + ": " + json.dumps(_short(detail, 1400)))
+            if len(rows) > 20:
+                print(f"{len(rows) - 20} additional threat context details are available in --json.")
         binary = project.get("binary_static") or {}
         for artifact in binary.get("artifacts", []):
             facts = artifact.get("facts") or {}
