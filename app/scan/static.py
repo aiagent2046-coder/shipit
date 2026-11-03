@@ -359,6 +359,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
     exclusion_labels = {"file_size_limit": "over the 1 MiB file limit", "symlink": "symbolic links",
                         "excluded_directory": "dependency/build directories",
                         "excluded_extension": "excluded file types", "binary_content": "binary content"}
+    exclusion_labels["binary_evidence"] = "imported binary evidence envelopes"
     excluded = ", ".join(f"{count} {exclusion_labels[reason]}"
                          for reason, count in sorted(file_coverage.get("exclusions", {}).items())) or "none"
     scope_description = (

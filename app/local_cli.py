@@ -25,6 +25,7 @@ from app.scan.browser import ScanSession
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS
 from app.scan.security_agent import agent_record
 from app.scan.version import AUDIT_ENGINE_VERSION
+from app.scan.binary_evidence import attach_binary_reports
 from app.scan.remediation_catalog import remediation_hint, remediation_record
 
 # Keep local archives within both the static and offline dependency matcher budgets.
@@ -164,15 +165,35 @@ def inspect_project(raw: bytes, scope: dict, catalog: dict, metadata: dict) -> d
     report.update(created_at=now.isoformat(), mode="local_offline", snapshot=scope,
                   catalog={**metadata, "age_days": ages, "stale": any(age > 7 for age in ages.values())},
                   can_continue=result["can_continue"])
+    report["project_checks"]["dependencies"]["catalog_sha256"] = metadata.get("sha256")
     report["limitations"] = list(dict.fromkeys([*report["limitations"], "selected_folder_only",
                                                "filesystem_snapshot_not_atomic"]))
     return report
 
 
 def poll_project(db: sqlite3.Connection, root: Path, state_dir: Path,
-                 previous_key: tuple | None = None) -> tuple[tuple, dict | None]:
+                 previous_key: tuple | None = None, *,
+                 binary_evidence: list[str] | None = None) -> tuple[tuple, dict | None]:
     catalog, metadata = load_catalog(db)
     raw, scope = snapshot(root, state_dir)
+    if binary_evidence:
+        reports = []
+        for argument in binary_evidence:
+            artifact, separator, filename = argument.partition("=")
+            if not separator or not artifact or not filename:
+                raise ValueError("binary evidence must be PROJECT_PATH=REPORT_JSON")
+            with os.fdopen(os.open(Path(filename).expanduser(), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK),
+                           "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ValueError("binary evidence must be a regular JSON file")
+                body = stream.read(1024 * 1024 + 1)
+            if len(body) > 1024 * 1024:
+                raise ValueError("binary evidence exceeds 1 MiB")
+            reports.append((artifact, body))
+        raw = attach_binary_reports(raw, reports)
+        scope = {**scope, "sha256": hashlib.sha256(
+            scope["sha256"].encode() + b"\0" + hashlib.sha256(raw).digest()).hexdigest(),
+                 "attached_binary_reports": len(reports)}
     key = (scope["sha256"], metadata["sha256"], AUDIT_ENGINE_VERSION, datetime.now(timezone.utc).date().isoformat())
     if key == previous_key:
         return key, None
@@ -186,6 +207,9 @@ def exit_status(report: dict, threshold: str) -> int:
     if agent and agent["status"] in {"partial", "unavailable"}:
         return 2
     # 2 signals unavailable/incomplete execution; 1 is the requested finding gate.
+    binary = (report.get("project_checks") or {}).get("binary_static") or {}
+    if binary.get("status") in {"partial", "unavailable", "not_run"}:
+        return 2
     coverage = report.get("dependency_cve", {})
     if (report["checks_not_run"] or report["can_continue"]
             or any(any(row.get("skip_reasons", {}).values()) for row in report.get("rule_coverage", {}).values())
@@ -368,6 +392,21 @@ def display(report: dict, as_json: bool, show_contextual: bool = False) -> None:
         print("Dependency manifest exclusions: " + json.dumps({
             "examples": dict(list(excluded.items())[:5]), "additional": excluded_omitted,
         }))
+    project = report.get("project_checks") or {}
+    if project:
+        print("Project checks: " + json.dumps({name: project[name].get("status")
+                                              for name in ("source", "dependencies", "binary_static")}))
+        binary = project.get("binary_static") or {}
+        for artifact in binary.get("artifacts", []):
+            facts = artifact.get("facts") or {}
+            print("Binary evidence: " + json.dumps({
+                "path": artifact.get("path"), "sha256": artifact.get("sha256"),
+                "status": artifact.get("status"), "reason": artifact.get("reason"),
+                "functions": len(facts.get("functions", [])), "imports": len(facts.get("imports", [])),
+            }))
+        if binary.get("artifacts"):
+            print("Ghidra reports are operator-supplied static observations bound to these file bytes; "
+                  "import consistency does not authenticate execution or establish a vulnerability.")
     print("Folder exclusions: " + json.dumps(report["snapshot"]["excluded"]))
     if agent := agent_record(report.get("security_agent")):
         print("Pattern review: " + json.dumps({
@@ -424,6 +463,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("project", type=Path)
         if name != "history":
             command.add_argument("--json", action="store_true", help="complete JSON report (JSON Lines for watch)")
+            command.add_argument("--binary-evidence", action="append", default=[], metavar="PROJECT_PATH=REPORT_JSON",
+                                 help="attach a Ghidra report to an exact project-relative binary (repeatable)")
             command.add_argument("--show-contextual", action="store_true",
                                  help="expand test/example/comment and optional hygiene findings in text output")
         if name == "scan":
@@ -476,7 +517,8 @@ def main(argv: list[str] | None = None) -> int:
             key = None
             while True:
                 try:
-                    key, report = poll_project(db, root, state_dir, key)
+                    options = {"binary_evidence": args.binary_evidence} if args.binary_evidence else {}
+                    key, report = poll_project(db, root, state_dir, key, **options)
                 except (OSError, ValueError, sqlite3.Error, ArchiveValidationError, RecursionError) as exc:
                     if args.command != "watch":
                         raise

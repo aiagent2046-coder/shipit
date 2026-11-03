@@ -245,6 +245,52 @@ def remediation_cases():
                    'archive': base64.b64encode(data).decode(), 'expected': expected, 'native': result}
 
 
+
+def project_check_cases():
+    """Bound imported binary evidence identically in CPython and shipped WASM."""
+    from tests.test_binary_evidence import elf, report, encoded
+    from app.scan.binary_evidence import ENVELOPE_PATH, attach_binary_reports
+
+    for name, state in (("bound", "completed"), ("mismatched", "unavailable"),
+                        ("incomplete", "partial"), ("not-supplied", "not_run"), ("wrapped-root", "completed")):
+        supplied = report()
+        if name == "mismatched":
+            supplied['artifact']['sha256'] = '0' * 64
+        elif name == "incomplete":
+            supplied['facts']['analysis_timed_out'] = True
+            supplied.update(status='partial', reason='analysis_timeout')
+        extra = {'bin/program': elf(),
+                 'src/main.py': 'import pickle\ndef load(value):\n    return pickle.loads(value)\n'}
+        if name not in {"not-supplied", "wrapped-root"}:
+            extra[ENVELOPE_PATH] = encoded({'version': 1, 'artifacts': [{'path': 'bin/program', 'report': supplied}]})
+        data = project('npm', 'lodash', '4.17.23', extra=extra)
+        baseline = None
+        if name == 'wrapped-root':
+            wrapped = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(data)) as original, zipfile.ZipFile(wrapped, 'w') as target:
+                for info in original.infolist():
+                    target.writestr('repo-main/' + info.filename, original.read(info))
+            data = wrapped.getvalue()
+            baseline = scan_archive(data)
+            data = attach_binary_reports(data, [('repo-main/bin/program', encoded(supplied))])
+        result = scan_archive(data)
+        if baseline is not None:
+            assert result['report']['findings'] == baseline['report']['findings']
+            assert result['report']['checks_run'] == baseline['report']['checks_run']
+        checks = result['report']['project_checks']
+        assert checks['binary_static']['status'] == state
+        assert checks['dependencies']['mode'] == 'offline_catalog'
+        assert checks['dependencies']['findings'] > 0
+        assert checks['source']['checks_run'] > 0
+        assert checks['runtime_verified'] is False
+        properties = result['sarif']['runs'][0]['invocations'][0]['properties']
+        assert properties['projectChecks']['binary_static']['status'] == state
+        yield {'id': f'project-checks/{name}', 'rule': 'dependency-cve-match', 'polarity': 'positive',
+               'archive': base64.b64encode(data).decode(),
+               'expected': {'expect': [{'rule_id': 'dependency-cve-match'}],
+                            'execution_successful': state != 'unavailable', 'binary_status': state}, 'native': result}
+
+
 def main():
     if "--portable" in sys.argv:
         # Reuse the exact uploaded bytes: independently rebuilt ZIP timestamps
@@ -263,6 +309,7 @@ def main():
                       'polarity': 'positive' if affected else 'negative',
                       'archive': base64.b64encode(data).decode(), 'expected': expected,
                       'native': scan_archive(data)})
+    cases.extend(project_check_cases())
     cases.extend(provenance_cases())
     cases.extend(remediation_cases())
     cases.extend(acquisition_cases())

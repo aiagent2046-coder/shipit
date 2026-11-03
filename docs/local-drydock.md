@@ -361,3 +361,15 @@ which takes precedence over the selected severity gate.
 Runtime tests, model explanations, automatic fixes, GUI, service installation,
 signatures and native Windows packaging are outside this first PR. These can
 build on the local report/history contract after reviewing the offline core.
+
+
+### Binary static evidence
+
+`scan` and `watch` accept repeatable `--binary-evidence PROJECT_PATH=REPORT_JSON`.
+Generate the report with the pinned Ghidra operator command, then bind it to the exact
+binary in the selected project. Source, database and binary-check statuses appear together
+in `project_checks` and the human-readable report. Missing, incomplete or rejected binary
+evidence returns exit 2; projects without detected binaries keep their existing exit behavior.
+No target binary or Ghidra process is started by a scan. See
+[the evidence workflow](ghidra-static-evidence.md#connect-evidence-to-a-project-audit)
+for generation, ZIP/browser import, limits and provenance semantics.

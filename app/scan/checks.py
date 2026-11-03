@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from app.scan.gitignore import ArchiveGitIgnore
+from app.scan.file_scope import source_archive_names
 from app.scan.secrets import (
     RULES,
     damp_for_non_production_path,
@@ -59,6 +60,7 @@ def archive_root(names: list[str]) -> str:
     very segment it was about to look for, so every route went unreported and
     the scan looked clean.
     """
+    names = source_archive_names(names)
     tops = {n.split("/", 1)[0] for n in names if n.strip("/")}
     if len(tops) == 1 and all("/" in n or n.endswith("/") for n in names):
         return next(iter(tops)) + "/"
@@ -67,6 +69,7 @@ def archive_root(names: list[str]) -> str:
 
 def _strip_root(names: list[str]) -> list[str]:
     """Normalize single-root exports (Lovable/Bolt wrap in one folder)."""
+    names = source_archive_names(names)
     root = archive_root(names)
     if not root:
         return names
@@ -332,7 +335,7 @@ _CI_CONFIG_PATHS = frozenset({
 
 def run_checks(fileobj: BinaryIO) -> list[CheckFinding]:
     with zipfile.ZipFile(fileobj) as zf:
-        raw_names = zf.namelist()
+        raw_names = source_archive_names(zf.namelist())
         root_prefix = archive_root(raw_names) or ""
         members = {raw[len(root_prefix):]: raw for raw in raw_names
                    if raw != root_prefix and not raw.endswith("/")}

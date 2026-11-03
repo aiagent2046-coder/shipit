@@ -41,6 +41,7 @@ from app.sca.osv import OsvClient
 from app.scan.pipeline import RUBRICS, BASIS_STATIC_ONLY, score_findings
 from app.scan.check_failure_scoring import failed_check_categories
 from app.scan.manifest import SCA_LIMITATIONS, sca_limitations, sca_manifest_fields
+from app.scan.project_checks import dependency_checks
 
 INVENTORY_VERSION = 1
 
@@ -230,6 +231,11 @@ def refreshed_score(stored_score: dict, findings: list[dict], stats: dict,
     """
     manifest = dict(stored_score.get("scan_manifest") or {})
     manifest.update(sca_manifest_fields(stats))
+    if isinstance(manifest.get("project_checks"), dict):
+        count = sum(f.get("rule_id") in {"dependency-cve-match", "dependency-known-vulnerability"}
+                    for f in findings)
+        manifest["project_checks"] = {**manifest["project_checks"],
+                                      "dependencies": dependency_checks(stats, count)}
     manifest["limitations"] = [reason for reason in manifest.get("limitations", [])
                                if reason not in SCA_LIMITATIONS] + sca_limitations(stats)
     refreshed = {**stored_score,

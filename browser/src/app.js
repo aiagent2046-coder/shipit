@@ -511,7 +511,79 @@ function renderFinding(finding) {
   return article;
 }
 
+function renderProjectChecks(value) {
+  const panel = byId('project-checks');
+  const overview = byId('project-checks-overview');
+  const evidence = byId('project-checks-evidence');
+  overview.replaceChildren();
+  evidence.replaceChildren();
+  panel.hidden = value == null;
+  if (value == null) return;
+  const record = item => item !== null && typeof item === 'object' && !Array.isArray(item);
+  const bounded = (item, max = 256) => typeof item === 'string' && item.length > 0
+    && item.length <= max && !/[\u0000-\u001f\u007f]/.test(item);
+  const digest = item => typeof item === 'string' && /^[0-9a-f]{64}$/.test(item);
+  const count = item => Number.isSafeInteger(item) && item >= 0;
+  const states = new Set(['completed', 'partial', 'unavailable', 'not_run', 'not_applicable']);
+  const label = item => item.replaceAll('_', ' ');
+  const unreadable = 'unavailable · Invalid or incompatible project check record; no complete result established.';
+  if (!record(value) || value.schema !== 1 || !digest(value.archive_sha256) || value.runtime_verified !== false) {
+    renderDefinitions(overview, [['Source', unreadable], ['Vulnerability databases', unreadable], ['Ghidra', unreadable]]);
+    return;
+  }
+  const rows = [];
+  const details = [['Project archive SHA-256', value.archive_sha256]];
+  const source = value.source;
+  if (record(source) && ['completed', 'partial', 'unavailable'].includes(source.status)
+      && ['checks_run', 'checks_not_run', 'findings'].every(key => count(source[key]))
+      && bounded(source.agent_status, 80)
+      && !(source.status === 'completed' && source.checks_not_run > 0)) {
+    rows.push(['Source', `${label(source.status)} · ${source.checks_run} checks run · ${source.checks_not_run} not run · ${source.findings} findings`]);
+    details.push(['Pattern review status', source.agent_status]);
+  } else rows.push(['Source', unreadable]);
+  const dependency = value.dependencies;
+  const repositories = { cvelist: 'https://github.com/CVEProject/cvelistV5', 'github-reviewed': 'https://github.com/github/advisory-database' };
+  const sourcePins = record(dependency?.sources) ? Object.entries(dependency.sources) : null;
+  const validPins = sourcePins && sourcePins.length <= 2 && sourcePins.every(([name, pin]) =>
+    Object.hasOwn(repositories, name) && record(pin) && pin.repository === repositories[name]
+    && typeof pin.commit === 'string' && /^[0-9a-f]{40}$/.test(pin.commit)
+    && bounded(pin.generated_at, 64));
+  if (record(dependency) && states.has(dependency.status)
+      && ['offline_catalog', 'live_osv', 'not_run'].includes(dependency.mode)
+      && count(dependency.findings) && (dependency.catalog_sha256 == null || digest(dependency.catalog_sha256))
+      && validPins && (dependency.reason == null || bounded(dependency.reason))) {
+    rows.push(['Vulnerability databases', `${label(dependency.status)} · ${label(dependency.mode)} · ${dependency.findings} findings${dependency.reason ? ` · ${label(dependency.reason)}` : ''}`]);
+    details.push(['Catalog SHA-256', dependency.catalog_sha256 || 'Not recorded']);
+    for (const [name, pin] of sourcePins) details.push([`Advisory source: ${name}`, `${pin.repository}; commit: ${pin.commit}; generated: ${pin.generated_at}`]);
+  } else rows.push(['Vulnerability databases', unreadable]);
+  const binary = value.binary_static;
+  const artifacts = record(binary) && Array.isArray(binary.artifacts) && binary.artifacts.length <= 32 ? binary.artifacts : null;
+  const validArtifacts = artifacts && artifacts.every(item => record(item) && bounded(item.path, 1024)
+    && states.has(item.status) && (item.sha256 == null || digest(item.sha256))
+    && (item.bytes == null || count(item.bytes)) && (item.reason == null || bounded(item.reason))
+    && item.runtime_verified !== true && item.automatic_patch !== true
+    && (item.provenance == null || item.provenance === 'operator_supplied')
+    && (item.provider == null || (record(item.provider) && item.provider.name === 'ghidra' && bounded(item.provider.version, 80)))
+    && (item.facts == null || (record(item.facts) && Array.isArray(item.facts.functions)
+      && item.facts.functions.length <= 1000 && Array.isArray(item.facts.imports) && item.facts.imports.length <= 1000))
+    && (!['completed', 'partial'].includes(item.status) || (digest(item.sha256) && count(item.bytes) && item.provider && item.facts)));
+  if (record(binary) && binary.schema === 1 && states.has(binary.status)
+      && binary.archive_sha256 === value.archive_sha256 && binary.runtime_verified === false
+      && binary.automatic_patch === false && binary.provenance === 'operator_supplied'
+      && count(binary.artifacts_omitted) && validArtifacts
+      && !(binary.status === 'completed' && (binary.artifacts_omitted > 0 || !artifacts.length || artifacts.some(item => item.status !== 'completed')))) {
+    rows.push(['Ghidra', `${label(binary.status)} · ${artifacts.length} binary artifacts · operator-supplied static evidence`]);
+    if (count(binary.artifacts_omitted) && binary.artifacts_omitted > 0) details.push(['Binary artifacts omitted', String(binary.artifacts_omitted)]);
+    for (const item of artifacts) {
+      details.push([`Binary: ${item.path}`, `${label(item.status)}${item.reason ? ` · ${label(item.reason)}` : ''}; SHA-256: ${item.sha256 || 'Not recorded'}; bytes: ${item.bytes ?? 'Not recorded'}${item.provider ? `; Ghidra ${item.provider.version}` : ''}${item.facts ? `; functions: ${item.facts.functions.length}; imports: ${item.facts.imports.length}` : ''}`]);
+    }
+  } else rows.push(['Ghidra', unreadable]);
+  renderDefinitions(overview, rows);
+  renderDefinitions(evidence, details);
+}
+
 function renderReport(report) {
+  renderProjectChecks(report.project_checks);
   byId('engine-version').textContent = report.engine_version ? `Engine ${text(report.engine_version)}` : 'Local static scan';
   const gaps = Array.isArray(report.checks_not_run) ? [...report.checks_not_run] : [];
   const dependency = report.dependency_cve;

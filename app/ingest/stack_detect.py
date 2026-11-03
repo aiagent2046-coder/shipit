@@ -28,6 +28,8 @@ import zipfile
 from enum import Enum
 from typing import BinaryIO
 
+from app.scan.file_scope import source_archive_names
+
 
 class Stack(str, Enum):
     NEXTJS = "nextjs"
@@ -41,6 +43,7 @@ _FASTAPI_IMPORT = re.compile(r"^\s*(from\s+fastapi\s+import|import\s+fastapi)", 
 
 def _root_prefix(names: list[str]) -> str:
     """Lovable/Bolt exports wrap everything in a single top folder."""
+    names = source_archive_names(names)
     tops = {n.split("/", 1)[0] for n in names if n.strip("/")}
     if len(tops) == 1 and any("/" in n for n in names):
         return next(iter(tops)) + "/"
@@ -95,7 +98,7 @@ def _node_deps(zf: zipfile.ZipFile, path: str) -> dict:
 def detect_stack(fileobj: BinaryIO) -> Stack:
     """Detect stack from a ZIP that already passed validate_zip."""
     with zipfile.ZipFile(fileobj) as zf:
-        names = zf.namelist()
+        names = source_archive_names(zf.namelist())
         prefix = _root_prefix(names)
 
         # Next.js: package.json with next dependency, or next.config.*.

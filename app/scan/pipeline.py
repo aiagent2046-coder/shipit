@@ -739,7 +739,7 @@ def run_scan(data: bytes, llm_client: LLMClient, llm_passes: int = 1,
             "scan_manifest": scan_manifest(data, AUDIT_ENGINE_VERSION, static,
                                            llm_summary if isinstance(llm_summary, dict) else vars(spend),
                                            llm_failure_kind(llm_summary),
-                                           sca_summary),
+                                           sca_summary, dependency_findings=len(dependency_findings)),
             "frontend_scan": static.get("score", {}).get("frontend_scan", {}),
             # An audit whose LLM stage was skipped or failed must not
             # look like a clean bill of health: a repo that scored 0.0

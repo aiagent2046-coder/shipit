@@ -9,6 +9,7 @@ from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manif
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.security_agent import agent_record
 from app.scan.check_failures import normalize_check_failures
+from app.scan.project_checks import project_checks
 from app.scan.cve_evidence import normalize_cve_summary
 from app.sca.lockfiles import OSV_ECOSYSTEM
 
@@ -80,7 +81,8 @@ def _file_counts(coverage: object) -> dict | None:
 
 
 def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
-                  failure_kind: str | None, sca: object = None) -> dict:
+                  failure_kind: str | None, sca: object = None, *,
+                  dependency_findings: int | None = None) -> dict:
     """Recorded inputs, execution facts and what was NOT examined.
 
     `sca` is the dependency stage's stats when it ran, or its reason for not
@@ -128,6 +130,7 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
                    if reason in {"security_agent_unavailable", "security_agent_incomplete"})
     return {
         "archive_sha256": hashlib.sha256(data).hexdigest(),
+        "project_checks": project_checks(data, static, sca, dependency_findings),
         "engine_version": engine,
         "archive_files": len(names),
         # The archive digest identifies the exact input. A filename's short

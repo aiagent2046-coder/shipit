@@ -1,5 +1,6 @@
 import type { Finding, Score } from "@/lib/types";
 import { coverageRows, manifestRows, modelAcceptanceNotice, modelStatusNotice, nonModelStatusNotices, observationSummary, reviewContributionRows } from "@/lib/evidence";
+import { ProjectChecks } from "./ProjectChecks";
 import { PatternReview } from "./PatternReview";
 
 export function AuditCoverage({ score, findings }: { score: Score; findings: Finding[] }) {
@@ -8,6 +9,7 @@ export function AuditCoverage({ score, findings }: { score: Score; findings: Fin
   const contribution = reviewContributionRows(score);
   return (
     <section aria-label="Audit coverage">
+      <ProjectChecks value={score.scan_manifest?.project_checks} />
       <p className="mb-4 text-sm">{observationSummary(findings)}</p>
       {acceptance && <aside aria-label="Model observation acceptance" className="mb-4 rounded-lg border border-amber-500 p-4">
         <h3 className="font-semibold">{acceptance[0]}</h3>
