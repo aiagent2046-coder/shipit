@@ -49,6 +49,16 @@ def test_strict_result_preserves_partial_flags():
     assert ghidra.parse_result(json.dumps(value).encode(), "a" * 64)["analysis_timed_out"] is True
 
 
+def test_empty_recovery_is_never_completed():
+    # Real Ghidra 12.2 exits 0 on a valid ELF header followed by garbage and
+    # exports zero functions/imports; an empty export is not evidence.
+    value = {**raw_result(), "functions": [], "imports": []}
+    assert ghidra.outcome(value) == ("partial", "no_functions_recovered")
+    assert ghidra.outcome({**raw_result(), "imports": []}) == ("completed", "static_export_completed")
+    assert ghidra.outcome({**value, "analysis_timed_out": True}) == ("partial", "analysis_timeout")
+    assert ghidra.outcome({**raw_result(), "truncated": True}) == ("partial", "fact_limit")
+
+
 @pytest.mark.parametrize("change", [
     {"version": True}, {"ghidra_version": "12.1"}, {"executable_sha256": "b" * 64},
     {"language_id": "AARCH64:LE:64:v8A"}, {"truncated": 0}, {"runtime_verified": True},
