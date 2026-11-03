@@ -416,6 +416,41 @@ try {
   await scanControlled({ findings: [] });
   assert.equal(await roadmap.locator('.roadmap-task').count(), 0);
   assert.match(await roadmap.innerText(), /does not establish that the project is ready or safe/);
+  const projectPanel = page.locator('#project-checks');
+  assert.equal(await projectPanel.isVisible(), false, 'Legacy reports omit project check overview');
+  const projectChecks = {
+    schema: 1, archive_sha256: 'a'.repeat(64), runtime_verified: false,
+    source: { status: 'partial', checks_run: 3, checks_not_run: 1, findings: 0, agent_status: 'completed' },
+    dependencies: { status: 'completed', mode: 'offline_catalog', findings: 0,
+      catalog_sha256: 'b'.repeat(64), reason: null,
+      sources: { cvelist: { repository: 'https://github.com/CVEProject/cvelistV5', commit: 'c'.repeat(40), generated_at: '2026-11-02T00:00:00Z' } } },
+    binary_static: { schema: 1, status: 'not_run', archive_sha256: 'a'.repeat(64), provenance: 'operator_supplied', artifacts_omitted: 0,
+      runtime_verified: false, automatic_patch: false, artifacts: [{ path: '<img src=x onerror=alert(3)>.elf',
+        sha256: 'd'.repeat(64), bytes: 128, status: 'not_run', reason: 'ghidra_report_not_supplied', provider: null, facts: null }] },
+  };
+  await scanControlled({ findings: [], project_checks: projectChecks });
+  assert.match(await projectPanel.innerText(), /Source[\s\S]*partial · 3 checks run · 1 not run/);
+  assert.match(await projectPanel.innerText(), /Ghidra[\s\S]*not run · 1 binary artifacts/);
+  assert.match(await projectPanel.innerText(), /does not authenticate tool execution/);
+  await projectPanel.locator('summary').click();
+  assert.ok((await projectPanel.innerText()).includes('b'.repeat(64)));
+  assert.ok((await projectPanel.innerText()).includes('c'.repeat(40)));
+  assert.ok((await projectPanel.innerText()).includes('<img src=x onerror=alert(3)>.elf'));
+  assert.equal(await projectPanel.locator('img').count(), 0, 'Binary paths must remain text');
+  const importedChecks = structuredClone(projectChecks);
+  importedChecks.binary_static.status = 'completed';
+  Object.assign(importedChecks.binary_static.artifacts[0], { status: 'completed', reason: 'static_export_completed',
+    provider: { name: 'ghidra', version: '12.0.3' }, facts: { functions: [{ name: 'main' }], imports: [{ name: 'strcpy' }] } });
+  await scanControlled({ findings: [], project_checks: importedChecks });
+  assert.match(await projectPanel.innerText(), /completed · 1 binary artifacts · operator-supplied static evidence/);
+  assert.match(await page.locator('#findings-summary').innerText(), /No findings from the checks that ran/);
+  importedChecks.binary_static.archive_sha256 = 'f'.repeat(64);
+  await scanControlled({ findings: [], project_checks: importedChecks });
+  assert.match(await projectPanel.innerText(), /Ghidra[\s\S]*unavailable · Invalid or incompatible/);
+  await scanControlled({ findings: [], project_checks: { ...projectChecks, runtime_verified: true } });
+  assert.match(await projectPanel.innerText(), /Source[\s\S]*unavailable · Invalid or incompatible/);
+  await scanControlled({ findings: [] });
+  assert.equal(await projectPanel.isVisible(), false, 'A later legacy report must clear prior evidence');
   assert.deepEqual(errors, []);
   console.log('Report UI: grouping, retained evidence, roadmap prerequisites and source links, conditional deployment, coverage gaps, keyboard disclosure, safe text, unchanged exports and mobile layout passed');
 } finally {

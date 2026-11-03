@@ -28,7 +28,8 @@ export function evaluateCase(item, result) {
   if (failures.length) {
     errors.push('unexpected_check_failure');
   }
-  if (sarif.runs[0].invocations[0].executionSuccessful !== true) errors.push('sarif_execution_failure');
+  if (sarif.runs[0].invocations[0].executionSuccessful !== (item.expected.execution_successful ?? true)) errors.push('sarif_execution_failure');
+  if (item.expected.binary_status && report.project_checks?.binary_static?.status !== item.expected.binary_status) errors.push('binary_evidence_status');
   if (report.limitations.includes('recommendation_enrichment_unavailable')) errors.push('advice_guards_missing');
   // A browser must never invent additional findings due to a failed parser.
   const remaining = item.native.report.findings.map(identity);

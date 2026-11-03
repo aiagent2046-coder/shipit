@@ -46,6 +46,8 @@ def _result(data: bytes, static: dict, dependencies: dict | None = None) -> dict
     manifest = scan_manifest(
         data, AUDIT_ENGINE_VERSION, static,
         {"skipped_reason": "llm_not_run_browser"}, None,
+        {"dependency_cve": dependencies["coverage"]} if dependencies else {},
+        dependency_findings=len(dependencies["findings"]) if dependencies else 0,
     )
     # Matching uses a preloaded public snapshot; no package query leaves the worker.
     dependency_coverage = dependencies["coverage"] if dependencies else None
@@ -93,6 +95,7 @@ def _result(data: bytes, static: dict, dependencies: dict | None = None) -> dict
             "limitations": limitations,
             "runtime_verified": False,
             "security_agent": agent_record(static.get("security_agent")),
+            "project_checks": manifest["project_checks"],
             **({"dependency_cve": dependency_coverage} if dependency_coverage else {}),
         },
         "sarif": sarif,

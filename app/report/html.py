@@ -8,6 +8,8 @@ assets: the report is a single file that can be shared as-is.
 from __future__ import annotations
 
 from html import escape
+
+from app.report.project_checks import project_checks_rows, SCOPE as PROJECT_CHECKS_SCOPE
 from app.scan.claim_evidence import (
     narrative_review_checks, partial_contradicted, syntax_contradicted, unsupported_transport,
 )
@@ -413,6 +415,17 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         f'<span class="cat-skip">{escape(label)}</span></div>'
         for name, label in coverage_rows(score, raw_findings)
     )
+    project_rows = project_checks_rows((score.get("scan_manifest") or {}).get("project_checks"))
+    project_checks_html = (
+        '<section aria-label="Project checks"><h2 class="sechead">Project checks</h2>'
+        '<dl style="overflow-wrap:anywhere">'
+        + ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in project_rows[:3])
+        + '</dl>' + (('<details><summary>Project evidence bindings</summary><dl style="overflow-wrap:anywhere">'
+          + ''.join(f'<dt>{escape(label)}</dt><dd>{escape(value)}</dd>' for label, value in project_rows[3:])
+          + '</dl></details>') if len(project_rows) > 3 else '')
+        + '<p class="secnote">' + escape(PROJECT_CHECKS_SCOPE) + '</p></section>'
+        if project_rows else ''
+    )
     basis = str(score.get("basis") or "unknown")
     notice = model_status_notice(score)
     status_note = (
@@ -615,6 +628,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
 {tier_note}
 {status_note}
 {acceptance_note}
+{project_checks_html}
 <section>{cats}</section>
 {body}
 {coverage_note}

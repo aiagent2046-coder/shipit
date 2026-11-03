@@ -35,6 +35,7 @@ from app.scan.react_async_context import react_async_premise_checks
 from app.scan.scoring import CATEGORIES, ScoredFinding
 from app.scan.secrets import damp_for_non_production_path, is_non_production_path
 from app.scan.source_facts import facts_prompt
+from app.scan.file_scope import is_binary_evidence_path
 from app.scan.rejection_diagnostics import MAX_REJECTION_ITEMS, rejected_item
 
 # Per-file cap in the prompt, ~5% of MAX_TOTAL_CHARS: no single file may take
@@ -917,7 +918,7 @@ def _iter_code_files(zf: zipfile.ZipFile, *, source_hashes: dict[str, str] | Non
     out = []
     for info in zf.infolist():
         n = info.filename
-        if info.is_dir() or any(d in n for d in _SKIP_DIRS):
+        if info.is_dir() or is_binary_evidence_path(n) or any(d in n for d in _SKIP_DIRS):
             continue
         if stat.S_ISLNK(info.external_attr >> 16):
             continue
@@ -1174,6 +1175,7 @@ def is_dependency_lockfile(name: str) -> bool:
 def has_application_source(files: list[tuple[str, str]]) -> bool:
     """Project metadata alone does not turn a test-only archive into an app."""
     return any(not is_non_production_path(name) and not is_dependency_lockfile(name)
+               and not is_binary_evidence_path(name)
                and name.rsplit("/", 1)[-1] not in _PROJECT_METADATA for name, _ in files)
 
 
@@ -1189,7 +1191,7 @@ def select_files(files: list[tuple[str, str]], rubric: str,
         return []
     kw = RUBRICS[rubric]["keywords"]
     matched = [(n, t) for n, t in files
-               if not is_dependency_lockfile(n) and (kw.search(n) or kw.search(t))]
+               if not is_binary_evidence_path(n) and not is_dependency_lockfile(n) and (kw.search(n) or kw.search(t))]
     production = [(n, t) for n, t in matched if not is_non_production_path(n)]
     support = [(n, t) for n, t in matched if is_non_production_path(n)]
     if not has_application_source(files) and any(is_non_production_path(n) for n, _ in files):

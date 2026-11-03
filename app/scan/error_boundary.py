@@ -89,6 +89,7 @@ from dataclasses import dataclass, field
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding, archive_root
+from app.scan.file_scope import source_archive_names
 from app.scan.secrets import is_non_production_path
 
 # Matched on PATH SEGMENTS, never as substrings. `"build/" in name` also
@@ -273,6 +274,7 @@ class BoundaryScan:
 
 
 def _norm(names: list[str]) -> list[str]:
+    names = source_archive_names(names)
     root = archive_root(names)
     if not root:
         return [n for n in names if not n.endswith("/")]
@@ -568,7 +570,7 @@ def scan_error_boundary(fileobj: BinaryIO) -> BoundaryScan:
     are found and each is analyzed as the application it is.
     """
     with zipfile.ZipFile(fileobj) as zf:
-        raw_names = zf.namelist()
+        raw_names = source_archive_names(zf.namelist())
         root = archive_root(raw_names)
         files = _norm(raw_names)
         budget = _Budget()

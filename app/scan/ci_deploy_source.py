@@ -21,6 +21,7 @@ import yaml
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding, archive_root
+from app.scan.file_scope import source_archive_names
 
 RULE_ID = "ci-deploys-a-different-repository"
 
@@ -219,7 +220,7 @@ def scan_ci_deploy_source(fileobj: BinaryIO) -> list[CheckFinding]:
     """One finding per workflow that deploys a repository other than this one."""
     fileobj.seek(0)
     with zipfile.ZipFile(fileobj) as zf:
-        names = zf.namelist()
+        names = source_archive_names(zf.namelist())
         root = archive_root(names)
         identity = self_identity(root)
         if not identity:
