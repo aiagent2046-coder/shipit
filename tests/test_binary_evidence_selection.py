@@ -62,7 +62,7 @@ def test_imported_secret_shaped_symbol_is_not_source_or_scored_finding(prefix):
     from app.scan.static import run_static_scan
 
     supplied = report()
-    supplied['facts']['imports'][0]['name'] = 'AKIAABCDEFGHIJKLMNOP'
+    supplied['facts']['imports'][0]['name'] = 'AKIA' + 'ABCDEFGHIJKLMNOP'
     baseline = archive({prefix + 'bin/program': elf(), prefix + 'app.py': b'print("hello")'})
     path = prefix + binary.ENVELOPE_PATH
     envelope = encoded({'version': 1, 'artifacts': [{'path': 'bin/program', 'report': supplied}]})
@@ -96,7 +96,7 @@ def test_evidence_exclusion_does_not_hide_neighbouring_source_or_secrets(path):
     from app.scan.llm_scan import _iter_code_files, select_files
     from app.scan.secrets import scan_secrets
 
-    content = b'{"password":"AKIAABCDEFGHIJKLMNOP"}'
+    content = b'{"password":"' + b'AKIA' + b'ABCDEFGHIJKLMNOP"}'
     data = archive({path: content})
     findings = list(scan_secrets(io.BytesIO(data)))
     assert any(finding.file == path for finding in findings)
@@ -104,5 +104,3 @@ def test_evidence_exclusion_does_not_hide_neighbouring_source_or_secrets(path):
         with zipfile.ZipFile(io.BytesIO(data)) as zipped:
             assert path in dict(_iter_code_files(zipped))
         assert path in dict(select_files([(path, content.decode())], 'auth'))
-
-
