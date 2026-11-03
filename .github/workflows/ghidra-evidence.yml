@@ -35,7 +35,7 @@ jobs:
         run: |
           python -m pip install pytest==8.4.2
           python -m pytest --noconftest -q tests/test_ghidra_evidence.py
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ghidra-12.2.zip
           key: ghidra-12.2-2c2cd776db3c1f6a097ba418922378ac3649cadd5e844a6f5f088ae628a7be67
