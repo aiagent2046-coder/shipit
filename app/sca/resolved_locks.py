@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import replace
+from itertools import islice
 
 import yaml
 
@@ -14,6 +15,7 @@ from app.sca.lockfiles import Dependency, _NPM_NAME, _NPM_VERSION, _PYPI_NAME, _
 
 MAX_YAML_NODES = 100_000
 MAX_YAML_DEPTH = 64
+MAX_YAML_DOCUMENTS = 8
 MAX_UV_REFERENCE_CHECKS = 100_000
 MAX_UV_SCOPE_STEPS = 100_000
 
@@ -94,12 +96,36 @@ def _npm_reference(name: object, value: object) -> tuple[str, str] | None:
 
 
 def pnpm_packages(manifest: str, text: str, out: list[Dependency]) -> str | None:
+    """Read one pnpm lockfile, which may span several YAML documents.
+
+    pnpm 10+ writes the pinned package manager itself as a separate lockfile
+    document ahead of the project lockfile. Every non-empty document must
+    itself be a supported v9 lockfile; documents are independent inventories,
+    their pins are unioned, and any gap marks the whole manifest incomplete.
+    """
     try:
-        data = yaml.load(text, Loader=_LockLoader)
+        documents = list(islice(yaml.load_all(text, Loader=_LockLoader),
+                                MAX_YAML_DOCUMENTS + 1))
     except (_YamlLimit, RecursionError):
         return "parser_limit"
     except (yaml.YAMLError, ValueError):
         return "malformed"
+    if len(documents) > MAX_YAML_DOCUMENTS:
+        return "parser_limit"
+    gap = False
+    seen = False
+    for data in documents:
+        if data is None:
+            continue
+        seen = True
+        reason = _pnpm_document(data, manifest, out)
+        if reason in ("malformed", "unsupported"):
+            return reason
+        gap = gap or reason is not None
+    return ("unresolved" if gap else None) if seen else "malformed"
+
+
+def _pnpm_document(data: object, manifest: str, out: list[Dependency]) -> str | None:
     if not isinstance(data, dict):
         return "malformed"
     if str(data.get("lockfileVersion")) not in {"9", "9.0"}:
@@ -133,7 +159,8 @@ def pnpm_packages(manifest: str, text: str, out: list[Dependency]) -> str | None
         if not isinstance(importer, dict):
             reason = "unresolved"
             continue
-        for field in ("dependencies", "devDependencies", "optionalDependencies"):
+        for field in ("dependencies", "devDependencies", "optionalDependencies",
+                      "packageManagerDependencies"):
             block = importer.get(field, {})
             if not isinstance(block, dict):
                 reason = "unresolved"
