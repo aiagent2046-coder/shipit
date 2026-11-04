@@ -1,0 +1,1327 @@
+[
+  {
+    "name": "completed_exact_cve_with_escaped_labels",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "completed; as of 2026-11-03; CVEs for expedited review: 1. Eligible findings: 1; unmapped: 0. Project compromise is not established."
+      ],
+      [
+        "Threat context scope",
+        "Known exploitation concerns this CVE in the wild; compromise of this project is not established. Priority is separate from severity and finding confidence. Absence from KEV is not evidence of safety."
+      ],
+      [
+        "KEV source",
+        "https://github.com/cisagov/kev-data; commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; committed: 2026-11-02T10:11:12Z; released: 2026-11-02T10:11:12.123456Z; catalog version: 2026.11.02."
+      ],
+      [
+        "KEV catalog SHA-256",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      [
+        "KEV upstream SHA-256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      [
+        "KEV CVE-2026-12345",
+        "Expedited review; listed 2026-11-02. Affected findings: npm:<svg onload=alert(1)> 1.0.0 (package-lock.json:0). CISA action: Apply vendor guidance <img src=x onerror=alert(1)>"
+      ],
+      [
+        "Threat limitation 1",
+        "not_project_exploitation_proof"
+      ]
+    ]
+  },
+  {
+    "name": "partial",
+    "value": {
+      "schema": 1,
+      "status": "partial",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "partial; as of 2026-11-03; CVEs for expedited review: 1. Eligible findings: 1; unmapped: 0. Project compromise is not established."
+      ],
+      [
+        "Threat context scope",
+        "Known exploitation concerns this CVE in the wild; compromise of this project is not established. Priority is separate from severity and finding confidence. Absence from KEV is not evidence of safety."
+      ],
+      [
+        "KEV source",
+        "https://github.com/cisagov/kev-data; commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; committed: 2026-11-02T10:11:12Z; released: 2026-11-02T10:11:12.123456Z; catalog version: 2026.11.02."
+      ],
+      [
+        "KEV catalog SHA-256",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      [
+        "KEV upstream SHA-256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      [
+        "KEV CVE-2026-12345",
+        "Expedited review; listed 2026-11-02. Affected findings: npm:<svg onload=alert(1)> 1.0.0 (package-lock.json:0). CISA action: Apply vendor guidance <img src=x onerror=alert(1)>"
+      ],
+      [
+        "Threat limitation 1",
+        "not_project_exploitation_proof"
+      ]
+    ]
+  },
+  {
+    "name": "stale",
+    "value": {
+      "schema": 1,
+      "status": "stale",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-08-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "stale; as of 2026-11-03; CVEs for expedited review: 1. Eligible findings: 1; unmapped: 0. Project compromise is not established."
+      ],
+      [
+        "Threat context scope",
+        "Known exploitation concerns this CVE in the wild; compromise of this project is not established. Priority is separate from severity and finding confidence. Absence from KEV is not evidence of safety."
+      ],
+      [
+        "KEV source",
+        "https://github.com/cisagov/kev-data; commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; committed: 2026-08-02T10:11:12Z; released: 2026-11-02T10:11:12.123456Z; catalog version: 2026.11.02."
+      ],
+      [
+        "KEV catalog SHA-256",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      [
+        "KEV upstream SHA-256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      [
+        "KEV CVE-2026-12345",
+        "Expedited review; listed 2026-11-02. Affected findings: npm:<svg onload=alert(1)> 1.0.0 (package-lock.json:0). CISA action: Apply vendor guidance <img src=x onerror=alert(1)>"
+      ],
+      [
+        "Threat limitation 1",
+        "not_project_exploitation_proof"
+      ]
+    ]
+  },
+  {
+    "name": "unavailable_snapshot",
+    "value": {
+      "schema": 1,
+      "status": "unavailable",
+      "as_of": "2026-11-03",
+      "source": null,
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 0,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "unavailable; as of 2026-11-03; prioritization unavailable. Eligible findings: 1; unmapped: 0. Project compromise is not established."
+      ],
+      [
+        "Threat context scope",
+        "Known exploitation concerns this CVE in the wild; compromise of this project is not established. Priority is separate from severity and finding confidence. Absence from KEV is not evidence of safety."
+      ],
+      [
+        "Threat limitation 1",
+        "not_project_exploitation_proof"
+      ]
+    ]
+  },
+  {
+    "name": "no_listed_matches_is_not_safety",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 0,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "completed; as of 2026-11-03; CVEs for expedited review: 0. Eligible findings: 1; unmapped: 0. Project compromise is not established."
+      ],
+      [
+        "Threat context scope",
+        "Known exploitation concerns this CVE in the wild; compromise of this project is not established. Priority is separate from severity and finding confidence. Absence from KEV is not evidence of safety."
+      ],
+      [
+        "KEV source",
+        "https://github.com/cisagov/kev-data; commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; committed: 2026-11-02T10:11:12Z; released: 2026-11-02T10:11:12.123456Z; catalog version: 2026.11.02."
+      ],
+      [
+        "KEV catalog SHA-256",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      [
+        "KEV upstream SHA-256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      [
+        "Threat limitation 1",
+        "not_project_exploitation_proof"
+      ]
+    ]
+  },
+  {
+    "name": "invalid_runtime_verified",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": true,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_fingerprint",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "bad",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_matched_cves",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 2,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_schema",
+    "value": {
+      "schema": true,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_as_of",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-02-30",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_source",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://evil.example"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_match_priority",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "critical",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_match_cve_id",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-\uff12\uff10\uff12\uff16-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_match_date_added",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-02-30",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_match_finding_refs",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": []
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_match_required_action",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "bad\u007fdata",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "duplicate_cve",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 2,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        },
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_midnight_rollover",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T24:00:00Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_year_zero",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "0000-11-02T00:00:00Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "unknown_fields_not_exported",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "secret_extra": "not exported"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "<svg onload=alert(1)>",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0",
+              "secret_extra": "not exported"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "completed; as of 2026-11-03; CVEs for expedited review: 1. Eligible findings: 1; unmapped: 0. Project compromise is not established."
+      ],
+      [
+        "Threat context scope",
+        "Known exploitation concerns this CVE in the wild; compromise of this project is not established. Priority is separate from severity and finding confidence. Absence from KEV is not evidence of safety."
+      ],
+      [
+        "KEV source",
+        "https://github.com/cisagov/kev-data; commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; committed: 2026-11-02T10:11:12Z; released: 2026-11-02T10:11:12.123456Z; catalog version: 2026.11.02."
+      ],
+      [
+        "KEV catalog SHA-256",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      [
+        "KEV upstream SHA-256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      [
+        "KEV CVE-2026-12345",
+        "Expedited review; listed 2026-11-02. Affected findings: npm:<svg onload=alert(1)> 1.0.0 (package-lock.json:0). CISA action: Apply vendor guidance <img src=x onerror=alert(1)>"
+      ],
+      [
+        "Threat limitation 1",
+        "not_project_exploitation_proof"
+      ]
+    ]
+  },
+  {
+    "name": "invalid_lone_surrogate",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "broken\ud800text",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "invalid_whitespace_label",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "   ",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "Unavailable: invalid recorded threat context; no prioritization established."
+      ]
+    ]
+  },
+  {
+    "name": "valid_emoji_label",
+    "value": {
+      "schema": 1,
+      "status": "completed",
+      "as_of": "2026-11-03",
+      "source": {
+        "repository": "https://github.com/cisagov/kev-data",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_committed_at": "2026-11-02T10:11:12Z",
+        "upstream_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "catalog_version": "2026.11.02",
+        "date_released": "2026-11-02T10:11:12.123456Z",
+        "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "matched_cves": 1,
+      "eligible_findings": 1,
+      "unmapped_findings": 0,
+      "matches": [
+        {
+          "cve_id": "CVE-2026-12345",
+          "priority": "expedited",
+          "reason": "known_exploitation",
+          "date_added": "2026-11-02",
+          "required_action": "Apply vendor guidance <img src=x onerror=alert(1)>",
+          "cisa_due_date": "2026-11-23",
+          "known_ransomware_campaign_use": "Unknown",
+          "finding_refs": [
+            {
+              "rule_id": "dependency-cve-match",
+              "file": "package-lock.json",
+              "line": 0,
+              "package": "package\ud83d\udd0e",
+              "ecosystem": "npm",
+              "installed_version": "1.0.0"
+            }
+          ]
+        }
+      ],
+      "limitations": [
+        "not_project_exploitation_proof"
+      ],
+      "runtime_verified": false,
+      "secret_extra": "not exported"
+    },
+    "rows": [
+      [
+        "CISA KEV threat context",
+        "completed; as of 2026-11-03; CVEs for expedited review: 1. Eligible findings: 1; unmapped: 0. Project compromise is not established."
+      ],
+      [
+        "Threat context scope",
+        "Known exploitation concerns this CVE in the wild; compromise of this project is not established. Priority is separate from severity and finding confidence. Absence from KEV is not evidence of safety."
+      ],
+      [
+        "KEV source",
+        "https://github.com/cisagov/kev-data; commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; committed: 2026-11-02T10:11:12Z; released: 2026-11-02T10:11:12.123456Z; catalog version: 2026.11.02."
+      ],
+      [
+        "KEV catalog SHA-256",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ],
+      [
+        "KEV upstream SHA-256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      [
+        "KEV CVE-2026-12345",
+        "Expedited review; listed 2026-11-02. Affected findings: npm:package\ud83d\udd0e 1.0.0 (package-lock.json:0). CISA action: Apply vendor guidance <img src=x onerror=alert(1)>"
+      ],
+      [
+        "Threat limitation 1",
+        "not_project_exploitation_proof"
+      ]
+    ]
+  }
+]

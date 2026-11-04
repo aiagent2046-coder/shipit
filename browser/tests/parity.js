@@ -28,7 +28,16 @@ export function evaluateCase(item, result) {
   if (failures.length) {
     errors.push('unexpected_check_failure');
   }
-  if (sarif.runs[0].invocations[0].executionSuccessful !== true) errors.push('sarif_execution_failure');
+  if (sarif.runs[0].invocations[0].executionSuccessful !== (item.expected.execution_successful ?? true)) errors.push('sarif_execution_failure');
+  if (item.expected.binary_status && report.project_checks?.binary_static?.status !== item.expected.binary_status) errors.push('binary_evidence_status');
+  if (item.expected.kev_cve) {
+    const context = report.project_checks?.threat_context;
+    const matches = context?.matches?.filter(row => row.cve_id === item.expected.kev_cve) ?? [];
+    if (Boolean(matches.length) !== item.expected.kev_listed || matches.length > 1 ||
+        matches.some(row => row.priority !== 'expedited') || context?.runtime_verified !== false) {
+      errors.push('kev_priority_evidence');
+    }
+  }
   if (report.limitations.includes('recommendation_enrichment_unavailable')) errors.push('advice_guards_missing');
   // A browser must never invent additional findings due to a failed parser.
   const remaining = item.native.report.findings.map(identity);

@@ -53,3 +53,12 @@ https://github.com/github/advisory-database . The database is licensed under
 CC-BY-4.0. Each compiled snapshot records the exact source commit and selection
 counters. Inclusion identifies GitHub curator review at that source revision; it
 does not imply endorsement by GitHub or establish application exploitability.
+
+## Known exploitation context
+
+The CISA Known Exploited Vulnerabilities (KEV) snapshot is derived from CISA's
+public data mirror: https://github.com/cisagov/kev-data . That repository distributes
+the data under CC0. Drydock records the upstream commit, original data checksum,
+publication date and compiled snapshot checksum. KEV membership provides known
+exploitation context for existing dependency findings; it does not establish
+compromise or runtime exploitability of the scanned project.

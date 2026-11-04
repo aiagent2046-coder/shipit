@@ -14,6 +14,7 @@ from itertools import islice
 import zipfile
 
 from app.ingest.validators import MAX_ARCHIVE_BYTES
+from app.scan.file_scope import is_binary_evidence_path
 
 MAX_SOURCE_BYTES = 400_000
 MAX_SNAPSHOT_BYTES = 2_000_000
@@ -48,6 +49,8 @@ class SourceSnapshot:
         self._archive = zipfile.ZipFile(io.BytesIO(data))
         self._entries = {}
         for info in self._archive.infolist():
+            if is_binary_evidence_path(info.filename):
+                continue
             if info.filename in self._entries:
                 self._archive.close()
                 raise SourceUnavailable("source_unavailable")

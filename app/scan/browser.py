@@ -10,15 +10,18 @@ import io
 import hashlib
 from copy import deepcopy
 from dataclasses import replace
+from datetime import datetime, timezone
 
 from app.report.sarif import build_sarif
 from app.scan.manifest import scan_manifest
+from app.scan.kev_catalog import load_catalog as load_kev_catalog
 from app.scan.static import run_static_scan
 from app.scan.security_agent import agent_record, attach_security_agent
 from app.scan.version import AUDIT_ENGINE_VERSION
 
 
-def scan_archive(data: bytes, catalog: dict | None = None) -> dict:
+def scan_archive(data: bytes, catalog: dict | None = None, *,
+                 threat_catalog: dict | None = None, threat_as_of: str | None = None) -> dict:
     """Return JSON-serializable findings and SARIF; validation errors propagate.
 
     The shared static stage enforces the upload contract, including the 50 MiB
@@ -28,7 +31,8 @@ def scan_archive(data: bytes, catalog: dict | None = None) -> dict:
     if not isinstance(data, bytes):
         raise TypeError("scan_archive expects bytes")
     static = run_static_scan(io.BytesIO(data), allow_missing_native=True)
-    return _result(data, static, _dependencies(data, catalog))
+    return _result(data, static, _dependencies(data, catalog),
+                   threat_catalog=threat_catalog, threat_as_of=threat_as_of)
 
 
 def _dependencies(data: bytes, catalog: dict | None) -> dict | None:
@@ -42,10 +46,15 @@ def _dependencies(data: bytes, catalog: dict | None) -> dict | None:
                 "limitations": ["cve_catalog_invalid"]}}
 
 
-def _result(data: bytes, static: dict, dependencies: dict | None = None) -> dict:
+def _result(data: bytes, static: dict, dependencies: dict | None = None, *,
+            threat_catalog: dict | None = None, threat_as_of: str | None = None) -> dict:
     manifest = scan_manifest(
         data, AUDIT_ENGINE_VERSION, static,
         {"skipped_reason": "llm_not_run_browser"}, None,
+        {"dependency_cve": dependencies["coverage"]} if dependencies else {},
+        dependency_findings=len(dependencies["findings"]) if dependencies else 0,
+        dependency_records=dependencies["findings"] if dependencies else [],
+        threat_catalog=threat_catalog, threat_as_of=threat_as_of,
     )
     # Matching uses a preloaded public snapshot; no package query leaves the worker.
     dependency_coverage = dependencies["coverage"] if dependencies else None
@@ -93,6 +102,7 @@ def _result(data: bytes, static: dict, dependencies: dict | None = None) -> dict
             "limitations": limitations,
             "runtime_verified": False,
             "security_agent": agent_record(static.get("security_agent")),
+            "project_checks": manifest["project_checks"],
             **({"dependency_cve": dependency_coverage} if dependency_coverage else {}),
         },
         "sarif": sarif,
@@ -107,16 +117,20 @@ class ScanSession:
     Checks without file accounting are never claimed to be resumable.
     """
 
-    def __init__(self, data: bytes, catalog: dict | None = None):
+    def __init__(self, data: bytes, catalog: dict | None = None, *,
+                 threat_catalog: dict | None = None, threat_as_of: str | None = None):
         if not isinstance(data, bytes):
             raise TypeError("ScanSession expects bytes")
         self.data = data
+        self.threat_catalog = load_kev_catalog() if threat_catalog is None else deepcopy(threat_catalog)
+        self.threat_as_of = threat_as_of or datetime.now(timezone.utc).date().isoformat()
         self.static = run_static_scan(io.BytesIO(data), allow_missing_native=True)
         self.dependencies = _dependencies(data, catalog)
 
     def result(self) -> dict:
         failed = {item["check"] for item in self.static["checks_not_run"]}
-        result = _result(self.data, self.static, self.dependencies)
+        result = _result(self.data, self.static, self.dependencies,
+                         threat_catalog=self.threat_catalog, threat_as_of=self.threat_as_of)
         result["can_continue"] = any(
             record.get("skip_reasons", {}).get("file_limit", 0) and name not in failed
             for name, record in self.static["rule_coverage"].items()

@@ -113,6 +113,18 @@ def parse_result(data: bytes, binary_sha256: str) -> dict:
         raise Unavailable("invalid_result") from error
 
 
+def outcome(facts: dict) -> tuple[str, str]:
+    """Ghidra exits 0 on a malformed ELF it could not load; zero recovered
+    functions is that failure, never a completed static export."""
+    if facts["analysis_timed_out"]:
+        return "partial", "analysis_timeout"
+    if facts["truncated"]:
+        return "partial", "fact_limit"
+    if not facts["functions"]:
+        return "partial", "no_functions_recovered"
+    return "completed", "static_export_completed"
+
+
 def extract_distribution(archive: Path, target: Path) -> Path:
     if not archive.is_file():
         raise Unavailable("tool_unavailable")
@@ -227,10 +239,7 @@ def inspect(binary: Path, archive: Path, java_home: Path, diagnostic_log: Path |
                                   "distribution_sha256": ARCHIVE_SHA256,
                                   "exporter_sha256": hashlib.sha256(exporter_bytes).hexdigest()}
             report["facts"] = facts
-            partial = facts["analysis_timed_out"] or facts["truncated"]
-            report.update(status="partial" if partial else "completed",
-                          reason="analysis_timeout" if facts["analysis_timed_out"] else (
-                              "fact_limit" if facts["truncated"] else "static_export_completed"))
+            report["status"], report["reason"] = outcome(facts)
     except Unavailable as error:
         report["reason"] = str(error)
     except (OSError, ValueError, zipfile.BadZipFile):

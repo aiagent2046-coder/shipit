@@ -373,7 +373,7 @@ async def _execute_job(
 
     if cached and not job.get("account_id"):
         scan = await asyncio.to_thread(refresh_snapshot, cached["score_json"],
-                                       cached["findings_json"] or [], raw)
+                                       cached["findings_json"] or [], raw, context_only_if_current=True)
         scan["score"]["analysis_reused_from"] = (
             cached["score_json"].get("analysis_reused_from") or str(cached["id"]))
 

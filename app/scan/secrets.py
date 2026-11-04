@@ -27,6 +27,7 @@ from typing import BinaryIO, Iterator
 from app.scan.check_loading import is_native_import_error
 from app.scan.credential_context import (MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context)
 from app.scan.file_scope import GENERATED_DIRECTORIES, is_dependency_path as is_dependency_path
+from app.scan.file_scope import is_binary_evidence_path
 from app.scan.secret_text_context import repeated_test_text_spans
 
 MAX_SCANNED_FILE_BYTES = 1 * 1024 * 1024  # skip huge files: minified bundles etc.
@@ -899,6 +900,9 @@ def _iter_text_files(zf: zipfile.ZipFile, coverage: dict | None = None) -> Itera
         if info.is_dir():
             continue
         coverage["files_total"] += 1
+        if is_binary_evidence_path(name):
+            skip("binary_evidence")
+            continue
         if info.file_size > MAX_SCANNED_FILE_BYTES:
             skip("file_size_limit")
             continue

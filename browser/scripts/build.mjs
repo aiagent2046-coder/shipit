@@ -55,9 +55,18 @@ const paths = (await readdir(join(root, 'app/scan')))
   .map(name => `app/scan/${name}`);
 paths.push('app/__init__.py', 'app/capabilities.py', 'app/ingest/__init__.py',
   'app/ingest/validators.py', 'app/report/__init__.py', 'app/report/plain_language.py',
-  'app/report/sarif.py', 'app/report/dependency_snapshot.py', 'app/sca/__init__.py', 'app/sca/lockfiles.py',
+  'app/report/sarif.py', 'app/report/project_checks.py', 'app/report/threat_context.py', 'app/report/dependency_snapshot.py', 'app/sca/__init__.py', 'app/sca/lockfiles.py',
   'app/sca/resolved_locks.py', 'app/sca/bun_lock.py');
 for (const path of paths.sort()) files[path] = await readFile(join(root, path), 'utf8');
+// KEV is an inert, pinned data snapshot. Include it in the engine receipt so
+// browser scans remain offline and source changes cannot reuse old intelligence.
+const kev = await readFile(join(root, 'app/data/kev-catalog.json'));
+if (kev.length > 8 * 1024 * 1024) throw new Error('KEV snapshot exceeds browser budget');
+const kevHash = createHash('sha256').update(kev).digest('hex');
+const kevReceipt = await readFile(join(root, 'app/data/kev-catalog.json.sha256'), 'utf8');
+if (kevReceipt.trim() !== kevHash) throw new Error('KEV snapshot digest mismatch');
+files['app/data/kev-catalog.json'] = new TextDecoder('utf-8', { fatal: true }).decode(kev);
+files['app/data/kev-catalog.json.sha256'] = kevReceipt;
 const bundle = JSON.stringify(files);
 await writeFile(join(out, 'engine-files.json'), bundle);
 const catalog = await readFile(join(root, 'app/data/cve-catalog.json'));
@@ -85,7 +94,7 @@ for (const name of ['index.html', 'app.js', 'styles.css', 'worker.js', 'runtime.
 const manifest = {
   profile: 'python-browser-native', pyodide: version,
   python: lock.info.python, engine_sha256: createHash('sha256').update(bundle).digest('hex'),
-  cve_catalog_sha256: catalogHash,
+  cve_catalog_sha256: catalogHash, kev_catalog_sha256: kevHash,
   native_parsers: Object.fromEntries(native.packages.map(p => [p.name, p.version])),
   receipt_hash_library: { name: '@noble/hashes', version: JSON.parse(await readFile(join(noble, 'package.json'))).version },
 };

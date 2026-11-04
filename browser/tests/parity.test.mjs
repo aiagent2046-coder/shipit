@@ -59,3 +59,23 @@ test('advisory expectations check GHSA identities without requiring a CVE field'
   assert.equal(evaluateCase(item, item.native).expectation_passed, false);
   assert.equal(evaluateCase(item, missing).expectation_passed, true);
 });
+
+test('engine installation allows only the two bounded KEV data paths', async () => {
+  const { installEngine } = await import('../src/runtime.js');
+  const writes = [];
+  const runtime = { FS: { mkdirTree() {}, writeFile: (...args) => writes.push(args) },
+    async runPythonAsync() {}, runPython() {} };
+  await installEngine(runtime, { 'app/__init__.py': '', 'app/data/kev-catalog.json': '{}',
+    'app/data/kev-catalog.json.sha256': 'a'.repeat(64) + '\n' });
+  assert.equal(writes.length, 3);
+  for (const [path, value] of [
+    ['app/data/extra.json', '{}'], ['app/data/../kev-catalog.json', '{}'],
+    ['app/data/kev-catalog.json.py/evil', ''], ['app/data/kev-catalog.json.sha256', 'a'.repeat(1025)],
+    ['app/data/kev-catalog.json', '\u00e9'.repeat(4 * 1024 * 1024 + 1)],
+    ['app/data/kev-catalog.json', {}],
+  ]) {
+    writes.length = 0;
+    await assert.rejects(installEngine(runtime, { 'app/__init__.py': '', [path]: value }), /engine/);
+    assert.equal(writes.length, 0, 'Reject the whole bundle before writing any entry');
+  }
+});

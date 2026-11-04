@@ -27,16 +27,57 @@ assertParserParity(expectedProbes, actualProbes);
 const start = performance.now();
 const rows = cases.map(item => {
   const bytes = Uint8Array.from(Buffer.from(item.archive, 'base64'));
-  return evaluateCase(item, scanBytes(pyodide, bytes.buffer));
+  return evaluateCase(item, scanBytes(pyodide, bytes.buffer, item.native.report.project_checks.threat_context.as_of));
 });
+// Corrupt/missing or changed KEV knowledge may change threat context only.
+// Exercise the shipped filesystem loader, not a mocked catalog callback.
+const kevCase = cases.find(item => item.id === 'threat-context/pillow-affected');
+assert.ok(kevCase, 'Need a real CVE-to-KEV alias regression');
+const kevArchive = Uint8Array.from(Buffer.from(kevCase.archive, 'base64')).buffer;
+const kevDate = kevCase.native.report.project_checks.threat_context.as_of;
+const kevPath = '/engine/app/data/kev-catalog.json';
+const kevReceiptPath = kevPath + '.sha256';
+const originalKev = pyodide.FS.readFile(kevPath, { encoding: 'utf8' });
+const originalKevReceipt = pyodide.FS.readFile(kevReceiptPath, { encoding: 'utf8' });
+for (const problem of ['corrupt', 'missing']) {
+  if (problem === 'corrupt') pyodide.FS.writeFile(kevPath, '{}');
+  else pyodide.FS.unlink(kevPath);
+  const degraded = scanBytes(pyodide, kevArchive, kevDate);
+  assert.equal(degraded.report.project_checks.threat_context.status, 'unavailable');
+  assert.deepEqual(degraded.report.findings, kevCase.native.report.findings);
+  assert.deepEqual(degraded.report.project_checks.source, kevCase.native.report.project_checks.source);
+  assert.deepEqual(degraded.report.project_checks.binary_static, kevCase.native.report.project_checks.binary_static);
+  assert.equal(degraded.sarif.runs[0].results.length, kevCase.native.sarif.runs[0].results.length);
+  pyodide.FS.writeFile(kevPath, originalKev);
+}
+pyodide.runPython(`
+from pathlib import Path
+import hashlib, json
+from app.scan.kev_catalog import encode_catalog
+_kev_path = Path('/engine/app/data/kev-catalog.json')
+_kev_data = json.loads(_kev_path.read_text())
+del _kev_data['entries']['CVE-2023-4863']
+_kev_bytes = encode_catalog(_kev_data)
+_kev_path.write_bytes(_kev_bytes)
+_kev_path.with_suffix('.json.sha256').write_text(hashlib.sha256(_kev_bytes).hexdigest() + '\\n')
+`);
+const revisedKev = scanBytes(pyodide, kevArchive, kevDate);
+assert.deepEqual(revisedKev.report.findings, kevCase.native.report.findings);
+assert.ok(!revisedKev.report.project_checks.threat_context.matches.some(row => row.cve_id === 'CVE-2023-4863'));
+assert.notEqual(revisedKev.report.project_checks.threat_context.fingerprint,
+  kevCase.native.report.project_checks.threat_context.fingerprint);
+pyodide.FS.writeFile(kevPath, originalKev);
+pyodide.FS.writeFile(kevReceiptPath, originalKevReceipt);
+assert.deepEqual(scanBytes(pyodide, kevArchive, kevDate), kevCase.native);
 const continuation = JSON.parse(await readFile(resolve(root, 'test-dist/continuation.json')));
 const archive = Uint8Array.from(Buffer.from(continuation.archive, 'base64'));
-assert.deepEqual(startSession(pyodide, archive.buffer), continuation.initial);
+assert.deepEqual(startSession(pyodide, archive.buffer, continuation.initial.report.project_checks.threat_context.as_of), continuation.initial);
 for (const expected of continuation.continuations) {
   assert.deepEqual(continueSession(pyodide), expected);
 }
 const summary = summarize(rows);
 summary.continuation = 'passed';
+summary.kev_snapshot_integrity = 'passed';
 summary.elapsed_ms = Math.round(performance.now() - start);
 summary.runtime = 'Pyodide in Node (browser run recorded separately)';
 summary.parser_probes = 'passed';

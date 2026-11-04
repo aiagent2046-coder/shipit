@@ -24,6 +24,7 @@ TWO DECISIONS WORTH NAMING:
 from __future__ import annotations
 
 from app.scan.fact_projection_grouping import validated_fact_group
+from app.report.project_checks import project_checks_record
 
 import hashlib
 import json
@@ -255,6 +256,8 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                 "ruleCoverage": normalize_rule_coverage(manifest.get("rule_coverage")),
                 **({"securityAgent": agent} if
                    (agent := agent_record(manifest.get("security_agent"))) is not None else {}),
+                **({"projectChecks": checks} if
+                   (checks := project_checks_record(manifest.get("project_checks"))) is not None else {}),
                 "cveEvidence": normalize_cve_summary(manifest.get("sca_cve")),
                 **({"dependencyCve": manifest["dependency_cve"]}
                    if isinstance(manifest.get("dependency_cve"), dict) else {}),
@@ -284,6 +287,30 @@ def build_sarif(findings: list[dict], *, engine_version: str,
             "message": {"text": "Pattern review could not complete its bounded plan. "
                         "Retained static findings remain observations; missing review is not a clean result."},
         })
+    checks = project_checks_record(manifest.get("project_checks"))
+    if checks is not None:
+        invalid = checks.get("status") == "unavailable"
+        binary_status = (checks.get("binary_static") or {}).get("status")
+        if invalid or binary_status in {"unavailable", "partial", "not_run"}:
+            unavailable = invalid or binary_status == "unavailable"
+            if unavailable:
+                run["invocations"][0]["executionSuccessful"] = False
+            run["invocations"][0].setdefault("toolExecutionNotifications", []).append({
+                "level": "error" if unavailable else "warning",
+                "descriptor": {"id": "project-check-evidence-unavailable" if unavailable
+                               else "binary-static-incomplete"},
+                "message": {"text": "Project check evidence is unavailable or binary static review did not complete. "
+                            "Missing evidence is not a clean result; "
+                            "tool execution and runtime behaviour are not authenticated."},
+            })
+    if checks is not None and isinstance(checks.get("threat_context"), dict):
+        threat = checks["threat_context"]
+        if threat.get("status") in {"unavailable", "partial", "stale"}:
+            run["invocations"][0].setdefault("toolExecutionNotifications", []).append({
+                "level": "warning", "descriptor": {"id": "threat-context-incomplete"},
+                "message": {"text": "CISA KEV context is incomplete, unavailable or stale. "
+                            "No absence-of-exploitation claim is established; source findings remain unchanged."},
+            })
     if project_name:
         run["properties"] = {"project": project_name}
     return {"version": SARIF_VERSION, "$schema": SARIF_SCHEMA, "runs": [run]}

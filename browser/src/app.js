@@ -511,7 +511,148 @@ function renderFinding(finding) {
   return article;
 }
 
+function threatContextRows(value) {
+  const invalid = [['CISA KEV threat context', 'Unavailable: invalid recorded threat context; no prioritization established.']];
+  const record = item => item !== null && typeof item === 'object' && !Array.isArray(item);
+  const bounded = (item, limit) => typeof item === 'string' && !/^[\s\u0085]*$/u.test(item)
+    && item.length <= limit * 2 && Array.from(item).length <= limit
+    && !/[\u0000-\u001f\u007f\ud800-\udfff]/u.test(item);
+  const digest = (item, length = 64) => typeof item === 'string'
+    && new RegExp(`^[0-9a-f]{${length}}$`).test(item);
+  const count = item => Number.isSafeInteger(item) && item >= 0;
+  const date = item => typeof item === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item)
+    && item.slice(0, 4) !== '0000' && Number.isFinite(Date.parse(`${item}T00:00:00Z`))
+    && new Date(`${item}T00:00:00Z`).toISOString().slice(0, 10) === item;
+  const timestamp = item => typeof item === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(item)
+    && date(item.slice(0, 10)) && Number(item.slice(11, 13)) < 24
+    && Number(item.slice(14, 16)) < 60 && Number(item.slice(17, 19)) < 60
+    && Number.isFinite(Date.parse(item));
+  if (!record(value) || value.schema !== 1 || value.runtime_verified !== false
+      || !['completed', 'partial', 'stale', 'unavailable'].includes(value.status)
+      || !date(value.as_of) || !digest(value.fingerprint)
+      || ![value.matched_cves, value.eligible_findings, value.unmapped_findings].every(count)
+      || !Array.isArray(value.matches) || value.matches.length > 256
+      || value.matched_cves !== value.matches.length
+      || !Array.isArray(value.limitations) || value.limitations.length > 32
+      || !value.limitations.every(item => bounded(item, 1024))) return invalid;
+  const source = value.source;
+  if (source !== null && (!record(source)
+      || source.repository !== 'https://github.com/cisagov/kev-data'
+      || !digest(source.commit, 40) || !timestamp(source.source_committed_at)
+      || !digest(source.upstream_sha256) || !digest(source.catalog_sha256)
+      || !bounded(source.catalog_version, 80) || !timestamp(source.date_released))) return invalid;
+  if ((value.status !== 'unavailable' && source === null)
+      || (value.status === 'unavailable' && value.matches.length)) return invalid;
+  const ids = new Set();
+  for (const match of value.matches) {
+    if (!record(match) || typeof match.cve_id !== 'string' || !/^CVE-\d{4}-\d{4,19}$/.test(match.cve_id)
+        || ids.has(match.cve_id) || match.priority !== 'expedited' || match.reason !== 'known_exploitation'
+        || !date(match.date_added) || !date(match.cisa_due_date) || !bounded(match.required_action, 4096)
+        || !['Known', 'Unknown'].includes(match.known_ransomware_campaign_use)
+        || !Array.isArray(match.finding_refs) || !match.finding_refs.length || match.finding_refs.length > 64) return invalid;
+    ids.add(match.cve_id);
+    for (const ref of match.finding_refs) {
+      if (!record(ref) || !['dependency-cve-match', 'dependency-known-vulnerability'].includes(ref.rule_id)
+          || !bounded(ref.file, 1024) || !count(ref.line) || !bounded(ref.package, 256)
+          || !bounded(ref.ecosystem, 80) || !bounded(ref.installed_version, 256)) return invalid;
+    }
+  }
+  const priority = value.status === 'unavailable' ? 'prioritization unavailable'
+    : `CVEs for expedited review: ${value.matched_cves}`;
+  const rows = [['CISA KEV threat context', `${value.status}; as of ${value.as_of}; ${priority}. Eligible findings: ${value.eligible_findings}; unmapped: ${value.unmapped_findings}. Project compromise is not established.`]];
+  rows.push(['Threat context scope', 'Known exploitation concerns this CVE in the wild; compromise of this project is not established. Priority is separate from severity and finding confidence. Absence from KEV is not evidence of safety.']);
+  if (source) {
+    rows.push(['KEV source', `${source.repository}; commit: ${source.commit}; committed: ${source.source_committed_at}; released: ${source.date_released}; catalog version: ${source.catalog_version}.`]);
+    rows.push(['KEV catalog SHA-256', source.catalog_sha256]);
+    rows.push(['KEV upstream SHA-256', source.upstream_sha256]);
+  }
+  for (const match of value.matches) {
+    const targets = match.finding_refs.map(ref => `${ref.ecosystem}:${ref.package} ${ref.installed_version} (${ref.file}:${ref.line})`).join('; ');
+    rows.push([`KEV ${match.cve_id}`, `Expedited review; listed ${match.date_added}. Affected findings: ${targets}. CISA action: ${match.required_action}`]);
+  }
+  value.limitations.forEach((item, index) => rows.push([`Threat limitation ${index + 1}`, item]));
+  return rows;
+}
+
+function renderProjectChecks(value) {
+  const panel = byId('project-checks');
+  const overview = byId('project-checks-overview');
+  const evidence = byId('project-checks-evidence');
+  overview.replaceChildren();
+  evidence.replaceChildren();
+  panel.hidden = value == null;
+  if (value == null) return;
+  const record = item => item !== null && typeof item === 'object' && !Array.isArray(item);
+  const bounded = (item, max = 256) => typeof item === 'string' && item.length > 0
+    && item.length <= max && !/[\u0000-\u001f\u007f]/.test(item);
+  const digest = item => typeof item === 'string' && /^[0-9a-f]{64}$/.test(item);
+  const count = item => Number.isSafeInteger(item) && item >= 0;
+  const states = new Set(['completed', 'partial', 'unavailable', 'not_run', 'not_applicable']);
+  const label = item => item.replaceAll('_', ' ');
+  const unreadable = 'unavailable · Invalid or incompatible project check record; no complete result established.';
+  if (!record(value) || value.schema !== 1 || !digest(value.archive_sha256) || value.runtime_verified !== false) {
+    renderDefinitions(overview, [['Source', unreadable], ['Vulnerability databases', unreadable], ['Ghidra', unreadable]]);
+    return;
+  }
+  const rows = [];
+  const details = [['Project archive SHA-256', value.archive_sha256]];
+  const source = value.source;
+  if (record(source) && ['completed', 'partial', 'unavailable'].includes(source.status)
+      && ['checks_run', 'checks_not_run', 'findings'].every(key => count(source[key]))
+      && bounded(source.agent_status, 80)
+      && !(source.status === 'completed' && source.checks_not_run > 0)) {
+    rows.push(['Source', `${label(source.status)} · ${source.checks_run} checks run · ${source.checks_not_run} not run · ${source.findings} findings`]);
+    details.push(['Pattern review status', source.agent_status]);
+  } else rows.push(['Source', unreadable]);
+  const dependency = value.dependencies;
+  const repositories = { cvelist: 'https://github.com/CVEProject/cvelistV5', 'github-reviewed': 'https://github.com/github/advisory-database' };
+  const sourcePins = record(dependency?.sources) ? Object.entries(dependency.sources) : null;
+  const validPins = sourcePins && sourcePins.length <= 2 && sourcePins.every(([name, pin]) =>
+    Object.hasOwn(repositories, name) && record(pin) && pin.repository === repositories[name]
+    && typeof pin.commit === 'string' && /^[0-9a-f]{40}$/.test(pin.commit)
+    && bounded(pin.generated_at, 64));
+  if (record(dependency) && states.has(dependency.status)
+      && ['offline_catalog', 'live_osv', 'not_run'].includes(dependency.mode)
+      && count(dependency.findings) && (dependency.catalog_sha256 == null || digest(dependency.catalog_sha256))
+      && validPins && (dependency.reason == null || bounded(dependency.reason))) {
+    rows.push(['Vulnerability databases', `${label(dependency.status)} · ${label(dependency.mode)} · ${dependency.findings} findings${dependency.reason ? ` · ${label(dependency.reason)}` : ''}`]);
+    details.push(['Catalog SHA-256', dependency.catalog_sha256 || 'Not recorded']);
+    for (const [name, pin] of sourcePins) details.push([`Advisory source: ${name}`, `${pin.repository}; commit: ${pin.commit}; generated: ${pin.generated_at}`]);
+  } else rows.push(['Vulnerability databases', unreadable]);
+  const binary = value.binary_static;
+  const artifacts = record(binary) && Array.isArray(binary.artifacts) && binary.artifacts.length <= 32 ? binary.artifacts : null;
+  const validArtifacts = artifacts && artifacts.every(item => record(item) && bounded(item.path, 1024)
+    && states.has(item.status) && (item.sha256 == null || digest(item.sha256))
+    && (item.bytes == null || count(item.bytes)) && (item.reason == null || bounded(item.reason))
+    && item.runtime_verified !== true && item.automatic_patch !== true
+    && (item.provenance == null || item.provenance === 'operator_supplied')
+    && (item.provider == null || (record(item.provider) && item.provider.name === 'ghidra' && bounded(item.provider.version, 80)))
+    && (item.facts == null || (record(item.facts) && Array.isArray(item.facts.functions)
+      && item.facts.functions.length <= 1000 && Array.isArray(item.facts.imports) && item.facts.imports.length <= 1000))
+    && (!['completed', 'partial'].includes(item.status) || (digest(item.sha256) && count(item.bytes) && item.provider && item.facts)));
+  if (record(binary) && binary.schema === 1 && states.has(binary.status)
+      && binary.archive_sha256 === value.archive_sha256 && binary.runtime_verified === false
+      && binary.automatic_patch === false && binary.provenance === 'operator_supplied'
+      && count(binary.artifacts_omitted) && validArtifacts
+      && !(binary.status === 'completed' && (binary.artifacts_omitted > 0 || !artifacts.length || artifacts.some(item => item.status !== 'completed')))) {
+    rows.push(['Ghidra', `${label(binary.status)} · ${artifacts.length} binary artifacts · operator-supplied static evidence`]);
+    if (count(binary.artifacts_omitted) && binary.artifacts_omitted > 0) details.push(['Binary artifacts omitted', String(binary.artifacts_omitted)]);
+    for (const item of artifacts) {
+      details.push([`Binary: ${item.path}`, `${label(item.status)}${item.reason ? ` · ${label(item.reason)}` : ''}; SHA-256: ${item.sha256 || 'Not recorded'}; bytes: ${item.bytes ?? 'Not recorded'}${item.provider ? `; Ghidra ${item.provider.version}` : ''}${item.facts ? `; functions: ${item.facts.functions.length}; imports: ${item.facts.imports.length}` : ''}`]);
+    }
+  } else rows.push(['Ghidra', unreadable]);
+  if (Object.hasOwn(value, 'threat_context')) {
+    const threatRows = threatContextRows(value.threat_context);
+    rows.push(threatRows[0]);
+    details.push(...threatRows.slice(1));
+  }
+  renderDefinitions(overview, rows);
+  renderDefinitions(evidence, details);
+}
+
 function renderReport(report) {
+  renderProjectChecks(report.project_checks);
   byId('engine-version').textContent = report.engine_version ? `Engine ${text(report.engine_version)}` : 'Local static scan';
   const gaps = Array.isArray(report.checks_not_run) ? [...report.checks_not_run] : [];
   const dependency = report.dependency_cve;

@@ -41,6 +41,8 @@ from app.sca.osv import OsvClient
 from app.scan.pipeline import RUBRICS, BASIS_STATIC_ONLY, score_findings
 from app.scan.check_failure_scoring import failed_check_categories
 from app.scan.manifest import SCA_LIMITATIONS, sca_limitations, sca_manifest_fields
+from app.scan.project_checks import dependency_checks
+from app.scan.threat_context import build_threat_context, context_is_current
 
 INVENTORY_VERSION = 1
 
@@ -220,6 +222,21 @@ def score_inputs_from_stored(score: dict) -> dict:
     }
 
 
+def refresh_score_threat_context(score: dict, findings: list[dict]) -> dict:
+    """Refresh only the public intelligence receipt; preserve source proof and scores.
+
+    Pre-project-check records remain historical. Their engine version, rather than
+    fabricated source coverage, decides whether a new audit is needed.
+    """
+    manifest = score.get("scan_manifest") or {}
+    project = manifest.get("project_checks")
+    if not isinstance(project, dict) or context_is_current(project.get("threat_context")):
+        return score
+    return {**score, "scan_manifest": {**manifest, "project_checks": {
+        **project, "threat_context": build_threat_context(findings),
+    }}}
+
+
 def refreshed_score(stored_score: dict, findings: list[dict], stats: dict,
                     previous_audit_id: str | None = None) -> dict:
     """The stored score with its computed numbers recomputed for `findings`.
@@ -230,6 +247,12 @@ def refreshed_score(stored_score: dict, findings: list[dict], stats: dict,
     """
     manifest = dict(stored_score.get("scan_manifest") or {})
     manifest.update(sca_manifest_fields(stats))
+    if isinstance(manifest.get("project_checks"), dict):
+        count = sum(f.get("rule_id") in {"dependency-cve-match", "dependency-known-vulnerability"}
+                    for f in findings)
+        manifest["project_checks"] = {**manifest["project_checks"],
+                                      "dependencies": dependency_checks(stats, count),
+                                      "threat_context": build_threat_context(findings)}
     manifest["limitations"] = [reason for reason in manifest.get("limitations", [])
                                if reason not in SCA_LIMITATIONS] + sca_limitations(stats)
     refreshed = {**stored_score,

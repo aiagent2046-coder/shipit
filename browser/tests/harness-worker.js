@@ -25,7 +25,7 @@ self.onmessage = async () => {
     const rows = [];
     for (const item of cases) {
       const bytes = Uint8Array.from(atob(item.archive), c => c.charCodeAt(0));
-      rows.push(evaluateCase(item, scanBytes(pyodide, bytes.buffer)));
+      rows.push(evaluateCase(item, scanBytes(pyodide, bytes.buffer, item.native.report.project_checks.threat_context.as_of)));
       if (rows.length % 25 === 0) self.postMessage({ type: 'progress', message: `${rows.length}/${cases.length}` });
     }
     const summary = summarize(rows);

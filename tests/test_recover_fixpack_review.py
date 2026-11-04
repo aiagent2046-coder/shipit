@@ -293,11 +293,20 @@ def test_download_blocks_foreign_redirects_and_oversized_responses(response):
                                limit=5, redirects=True, transport=httpx.MockTransport(lambda _: response))
 
 
+def root_owned_stat(info):
+    # Keep the full stat contract: pytest capture also calls os.fstat.
+    values = list(info)
+    values[stat.ST_UID] = 0
+    attributes = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+    attributes["st_uid"] = 0
+    return os.stat_result(values, attributes)
+
+
 def test_same_job_serialized_but_other_jobs_can_run(tmp_path, monkeypatch):
     monkeypatch.setattr(recovery, "STATE_DIR", tmp_path / "protected")
     real_lstat, real_fstat = Path.lstat, os.fstat
-    monkeypatch.setattr(Path, "lstat", lambda p: SimpleNamespace(st_mode=real_lstat(p).st_mode, st_uid=0))
-    monkeypatch.setattr(os, "fstat", lambda fd: SimpleNamespace(st_mode=real_fstat(fd).st_mode, st_uid=0))
+    monkeypatch.setattr(Path, "lstat", lambda p: root_owned_stat(real_lstat(p)))
+    monkeypatch.setattr(os, "fstat", lambda fd: root_owned_stat(real_fstat(fd)))
     with recovery.review_lock(REQUEST):
         with pytest.raises(recovery.guards.RecoveryRefused, match="already running"):
             with recovery.review_lock(REQUEST):
@@ -318,7 +327,7 @@ def test_recovery_does_not_follow_a_log_symlink(tmp_path):
 
 def test_private_log_is_redacted_protected_and_not_sent_to_stdout(tmp_path, monkeypatch, capsys):
     real_fstat = os.fstat
-    monkeypatch.setattr(os, "fstat", lambda fd: SimpleNamespace(st_mode=real_fstat(fd).st_mode, st_uid=0))
+    monkeypatch.setattr(os, "fstat", lambda fd: root_owned_stat(real_fstat(fd)))
     logfile = tmp_path / "review.log"
     with recovery.configure_private_log(logfile):
         logging.getLogger("review-recovery-test").warning("Provider password=%s", PRIVATE_TOKEN)

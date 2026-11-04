@@ -20,7 +20,7 @@ from app.sca.lockfiles import (
     collect_dependency_inventory, dependency_exclusion_reason, normalize_pypi,
     occurrence_evidence, occurrence_summary,
 )
-from app.scan.kev_catalog import KEV_FEED, SOURCE_NAME as KEV_SOURCE
+from app.scan.kev_feed import KEV_FEED, SOURCE_NAME as KEV_SOURCE
 from app.scan.remediation_catalog import UpgradeBudget, plan_dependency_upgrade, remediation_hint
 
 RULE_ID = "dependency-cve-match"

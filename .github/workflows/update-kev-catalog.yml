@@ -1,0 +1,170 @@
+name: Update pinned CISA KEV context
+
+on:
+  schedule:
+    - cron: '43 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-kev-catalog
+  cancel-in-progress: false
+
+jobs:
+  compile-and-propose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out official KEV data as inert input
+        uses: actions/checkout@v7
+        with:
+          repository: cisagov/kev-data
+          ref: develop
+          path: kev-source
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: browser/package-lock.json
+      - name: Install application test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Compile and independently rebuild the complete snapshot
+        run: |
+          python scripts/build_kev_catalog.py --source kev-source
+          python scripts/build_kev_catalog.py --source kev-source --check
+      - name: Verify compiler, matching and offline boundaries
+        run: |
+          python -m pytest -q tests/test_kev_catalog.py tests/test_threat_context.py tests/test_kev_update.py tests/test_local_package.py
+          python scripts/build_local_package.py --out "$RUNNER_TEMP/kev-local-stage" --stage-only
+          python browser/scripts/corpus.py browser/test-dist/cases.json
+      - name: Verify browser snapshot integrity and WASM parity
+        run: |
+          npm --prefix browser ci --ignore-scripts
+          npm --prefix browser run build
+          node browser/scripts/prepare-harness.mjs
+          node --test browser/tests/parity.test.mjs
+          npm --prefix browser run test:wasm
+      - name: Maintain one reviewable KEV update PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          BRANCH: automation/kev-threat-context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          paths=(app/data/kev-catalog.json app/data/kev-catalog.json.sha256)
+          git add -- "${paths[@]}"
+          if git diff --cached --quiet; then
+            echo 'Pinned KEV context is unchanged; no PR mutation.'
+            exit 0
+          fi
+
+          # A stable branch prevents a new open PR for each upstream revision.
+          # Only replace our own single data-only commit, using an exact lease.
+          # Human edits, unrelated branches and rejected PRs remain untouched.
+          old_head=""
+          if ref=$(git ls-remote --exit-code --heads origin "$BRANCH"); then
+            old_head="${ref%%[[:space:]]*}"
+            git fetch origin "$BRANCH"
+            test "$(git rev-parse FETCH_HEAD)" = "$old_head"
+            gh pr list --head "$BRANCH" --state all --limit 100 \
+              --json number,state,mergedAt,headRefOid,author,isCrossRepository,baseRefName \
+              > "$RUNNER_TEMP/kev-existing-prs.json"
+            OLD_HEAD="$old_head" python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          old = os.environ['OLD_HEAD']
+          prs = json.loads((Path(os.environ['RUNNER_TEMP']) / 'kev-existing-prs.json').read_text())
+          opened = [pr for pr in prs if pr['state'] == 'OPEN']
+          if len(opened) > 1:
+              raise SystemExit('Refusing to update ambiguous KEV PRs')
+          candidates = opened or [pr for pr in prs if pr['mergedAt'] and pr['headRefOid'] == old]
+          allowed = {'app/data/kev-catalog.json', 'app/data/kev-catalog.json.sha256'}
+          valid = [pr for pr in candidates if pr['headRefOid'] == old
+                   and pr['author']['login'] in {'github-actions[bot]', 'app/github-actions'}
+                   and not pr['isCrossRepository'] and pr['baseRefName'] == os.environ['BASE_BRANCH']]
+          if len(valid) != 1:
+              raise SystemExit('Refusing to overwrite an unrecognised, edited or rejected KEV branch')
+          base = git('merge-base', 'HEAD', old)
+          # After a normal merge, the old head is already in main. For an open
+          # or squash-merged PR it must still contain exactly one bot commit.
+          count = int(git('rev-list', '--count', f'{base}..{old}'))
+          if count not in (0, 1) or (opened and count != 1):
+              raise SystemExit('KEV branch contains additional commits; maintainer review required')
+          if count:
+              changed = set(git('diff', '--name-only', base, old).splitlines())
+              if not changed or not changed <= allowed:
+                  raise SystemExit('KEV branch contains non-catalog changes')
+              if git('show', '-s', '--format=%an <%ae>', old) != (
+                      'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'):
+                  raise SystemExit('KEV branch head is not the workflow commit')
+          PY
+            if git diff --quiet "$old_head" -- "${paths[@]}"; then
+              echo 'An existing PR already contains this KEV snapshot.'
+              exit 0
+            fi
+          fi
+
+          git switch -c "$BRANCH"
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'Update pinned CISA KEV threat context'
+          gh auth setup-git
+          git push --force-with-lease="refs/heads/$BRANCH:$old_head" origin "HEAD:refs/heads/$BRANCH"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          raw = Path('app/data/kev-catalog.json').read_bytes()
+          value = json.loads(raw)
+          source = value['source']
+          body = (
+              'Replace the complete pinned CISA KEV snapshot, including upstream removals and corrections.\n\n'
+              f'Source commit: `{source["commit"]}`\n'
+              f'Source blob SHA-256: `{source["upstream_sha256"]}`\n'
+              f'Compiled snapshot SHA-256: `{hashlib.sha256(raw).hexdigest()}`\n'
+              f'Entries: {len(value["entries"])}\n\n'
+              'Validation: independent deterministic rebuild, strict catalog/import tests, '
+              'local package staging, browser integrity and WASM parity. Required full workflows '
+              'are dispatched for the exact update branch.\n\n'
+              'KEV changes remediation priority for already matched CVEs; it does not establish '
+              'project compromise, change severity/confidence, or create additional findings. '
+              'No automatic merge or PR closure is performed.\n'
+          )
+          (Path(os.environ['RUNNER_TEMP']) / 'kev-update-pr.md').write_text(body)
+          PY
+          number=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [[ -n "$number" ]]; then
+            gh pr edit "$number" --body-file "$RUNNER_TEMP/kev-update-pr.md"
+          else
+            gh pr create --head "$BRANCH" --base "$BASE_BRANCH" \
+              --title 'Update pinned CISA KEV threat context' --body-file "$RUNNER_TEMP/kev-update-pr.md"
+          fi
+          # GITHUB_TOKEN-created PRs do not themselves start ordinary PR CI.
+          # Explicit dispatch tests the new head without claiming deploy success as CI.
+          for workflow in production-ci.yml web-build.yml db-postgres-smoke.yml \
+            browser-scan.yml local-package.yml; do
+            gh workflow run "$workflow" --ref "$BRANCH"
+          done

@@ -89,6 +89,7 @@ export interface RejectionDiagnostic {
 
 export interface ScanManifest {
   // Validated at the presentation boundary for older/malformed stored reports.
+  project_checks?: unknown;
   security_agent?: unknown;
   sca_cve?: unknown;
   dependency_cve?: unknown;

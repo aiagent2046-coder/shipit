@@ -87,7 +87,7 @@ import zipfile
 from typing import BinaryIO
 
 from app.scan.checks import CheckFinding, archive_root
-from app.scan.file_scope import is_excluded_handler_tree
+from app.scan.file_scope import is_binary_evidence_path, is_excluded_handler_tree
 from app.scan.rls import read_committed_sql
 from app.scan.sql_schema import parse_schema
 
@@ -247,7 +247,7 @@ def _key_holding_modules(fileobj: BinaryIO) -> dict[str, tuple[str, int]]:
         root = archive_root(zf.namelist())
         read = 0
         for info in zf.infolist():
-            if info.is_dir() or read >= _MAX_MODULES_READ:
+            if info.is_dir() or is_binary_evidence_path(info.filename) or read >= _MAX_MODULES_READ:
                 continue
             rel = info.filename[len(root):] if root else info.filename
             lowered = rel.lower()
@@ -332,7 +332,7 @@ def scan_service_role(fileobj: BinaryIO) -> list[CheckFinding]:
         # routes. See archive_root in app/scan/checks.py.
         root = archive_root(zf.namelist())
         for info in zf.infolist():
-            if info.is_dir():
+            if info.is_dir() or is_binary_evidence_path(info.filename):
                 continue
             rel = info.filename[len(root):] if root else info.filename
             # Generated and vendored trees hold route-shaped FILENAMES, not the
