@@ -20,7 +20,7 @@ from app.sca.lockfiles import (
     collect_dependency_inventory, dependency_exclusion_reason, normalize_pypi,
     occurrence_evidence, occurrence_summary,
 )
-from app.scan.kev_feed import KEV_FEED, SOURCE_NAME as KEV_SOURCE
+from app.scan.kev_feed import KEV_REPOSITORY, SOURCE_NAME as KEV_SOURCE
 from app.scan.remediation_catalog import UpgradeBudget, plan_dependency_upgrade, remediation_hint
 
 RULE_ID = "dependency-cve-match"
@@ -322,23 +322,17 @@ def _valid_source(value: object, repository: str) -> dict | None:
     return {"repository": repository, "commit": commit, "generated_at": date}
 
 
-def _valid_feed_source(value: object) -> dict | None:
-    """A downloaded feed has no commit; its identity is version, release time and digest."""
-    if not isinstance(value, dict) or value.get("feed") != KEV_FEED:
+def _valid_kev_source(value: object) -> dict | None:
+    """A pinned repository source like the others, plus the upstream catalog version and blob digest."""
+    pinned = _valid_source(value, KEV_REPOSITORY)
+    if pinned is None:
         return None
-    version, date, digest = value.get("catalog_version"), value.get("generated_at"), value.get("sha256")
+    version, digest = value.get("catalog_version"), value.get("sha256")
     if not isinstance(version, str) or not re.fullmatch(r"[0-9]{4}\.[0-9]{2}\.[0-9]{2}", version):
         return None
     if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
         return None
-    if not isinstance(date, str) or len(date) > 64:
-        return None
-    try:
-        if datetime.fromisoformat(date.replace("Z", "+00:00")).tzinfo is None:
-            return None
-    except ValueError:
-        return None
-    return {"feed": KEV_FEED, "catalog_version": version, "generated_at": date, "sha256": digest}
+    return {**pinned, "catalog_version": version, "sha256": digest}
 
 
 def _sources(catalog: object) -> dict[str, dict] | None:
@@ -362,7 +356,7 @@ def _sources(catalog: object) -> dict[str, dict] | None:
         return None
     result = {"cvelist": cvelist, "github-reviewed": github}
     if schema == 3:
-        kev = _valid_feed_source(sources.get(KEV_SOURCE))
+        kev = _valid_kev_source(sources.get(KEV_SOURCE))
         if kev is None:
             return None
         result[KEV_SOURCE] = kev

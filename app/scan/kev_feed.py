@@ -6,9 +6,10 @@ versions are affected. The index is therefore keyed by CVE ID and consulted
 only after a package/version match already exists. Absence from KEV never
 means "not exploited"; presence never means this application was exploited.
 
-The feed is a single moving file without version history, so the snapshot
-records its catalogVersion, release time and SHA-256 instead of a commit.
-Source format: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+The input is ``known_exploited_vulnerabilities.json`` read from a pinned commit
+of CISA's public Git mirror, the same blob ``app/scan/kev_catalog`` compiles
+for threat context, so both artifacts share one provenance chain: repository,
+commit, commit time, upstream catalogVersion and the blob's SHA-256.
 """
 from __future__ import annotations
 
@@ -16,7 +17,8 @@ from copy import deepcopy
 from datetime import date, datetime
 import re
 
-KEV_FEED = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+from app.scan.kev_catalog import REPOSITORY as KEV_REPOSITORY
+
 SOURCE_NAME = "cisa-kev"
 MAX_RECORDS = 100_000
 _CVE_ID = re.compile(r"CVE-[0-9]{4}-[0-9]{4,19}\Z")
@@ -65,14 +67,31 @@ def _record(value: object) -> tuple[str, dict]:
                     "ransomware": ransomware}
 
 
-def merge_kev(catalog: dict, feed: object, *, feed_sha256: str) -> dict:
+def _commit_time(value: object) -> str:
+    if not isinstance(value, str) or len(value) > 64:
+        raise ValueError("generated_at must be the ISO 8601 commit time of the KEV source")
+    try:
+        aware = datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is not None
+    except ValueError as exc:
+        raise ValueError("generated_at must be the ISO 8601 commit time of the KEV source") from exc
+    if not aware:
+        raise ValueError("generated_at must carry a UTC offset")
+    return value
+
+
+def merge_kev(catalog: dict, feed: object, *, commit: str, generated_at: str, sha256: str) -> dict:
     """Return a deterministic three-source catalog without mutating the input.
 
-    Any malformed feed aborts the build with ValueError: a partial exploitation
-    index would silently downgrade known-exploited matches to ordinary ones.
+    ``commit``/``generated_at`` identify the cisagov/kev-data commit the blob was
+    read from and ``sha256`` is the digest of that blob. Any malformed feed aborts
+    the build with ValueError: a partial exploitation index would silently
+    downgrade known-exploited matches to ordinary ones.
     """
-    if not isinstance(feed_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", feed_sha256):
-        raise ValueError("feed_sha256 must be the lowercase SHA-256 of the feed bytes")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("commit must be the full lowercase SHA-1 of the KEV source commit")
+    if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise ValueError("sha256 must be the lowercase SHA-256 of the upstream KEV blob")
+    _commit_time(generated_at)
     if (not isinstance(catalog, dict) or catalog.get("schema_version") != 2
             or not isinstance(catalog.get("sources"), dict)
             or set(catalog["sources"]) != {"cvelist", "github-reviewed"}
@@ -84,7 +103,7 @@ def merge_kev(catalog: dict, feed: object, *, feed_sha256: str) -> dict:
     version = feed.get("catalogVersion")
     if not isinstance(version, str) or not _CATALOG_VERSION.fullmatch(version):
         raise ValueError("invalid KEV catalogVersion")
-    released = _released(feed.get("dateReleased"))
+    _released(feed.get("dateReleased"))
     rows = feed["vulnerabilities"]
     if type(feed.get("count")) is not int or feed["count"] != len(rows):
         raise ValueError("KEV count does not match the vulnerabilities array")
@@ -117,8 +136,10 @@ def merge_kev(catalog: dict, feed: object, *, feed_sha256: str) -> dict:
     stats["kev_in_catalog"] = len(referenced)
 
     result["schema_version"] = 3
-    result["sources"][SOURCE_NAME] = {"feed": KEV_FEED, "catalog_version": version,
-                                      "generated_at": released, "sha256": feed_sha256}
+    # Same identity fields as the other repository sources, plus the upstream catalog version.
+    # dateReleased is validated above but not recorded: the commit pins the bytes.
+    result["sources"][SOURCE_NAME] = {"repository": KEV_REPOSITORY, "commit": commit, "generated_at": generated_at,
+                                      "catalog_version": version, "sha256": sha256}
     result["exploitation"] = {SOURCE_NAME: {cve_id: index[cve_id] for cve_id in sorted(index)}}
     result["stats"].update(stats)
     return result

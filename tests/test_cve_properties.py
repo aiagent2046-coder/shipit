@@ -81,8 +81,8 @@ def _with_kev(catalog, listed):
     annotated = json.loads(json.dumps(catalog))
     annotated["schema_version"] = 3
     annotated["sources"]["cisa-kev"] = {
-        "feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
-        "catalog_version": "2026.11.03", "generated_at": "2026-11-03T20:00:24Z", "sha256": "c" * 64,
+        "repository": "https://github.com/cisagov/kev-data", "commit": "d" * 40,
+        "generated_at": "2026-11-03T21:32:24Z", "catalog_version": "2026.11.03", "sha256": "c" * 64,
     }
     annotated["exploitation"] = {"cisa-kev": {
         CVE_ID if listed else "CVE-2020-0001": {"date_added": "2026-10-01", "due_date": "2026-10-22",
