@@ -55,6 +55,10 @@ The committed files are:
 
 The snapshot retains the official repository URL, full source commit, source commit
 timestamp, original upstream blob SHA-256, upstream catalog version and publication time.
+The bundled advisory snapshot (`app/data/cve-catalog.json`, source `cisa-kev`; see
+`docs/sca-dependency-evidence.md`) is compiled from the same checkout in the same run
+and records the same commit and blob SHA-256, so the per-finding KEV annotation and this
+threat context never describe two different KEV catalogs.
 It uses no wall-clock build timestamp. The commit timestamp is not described as a fetch
 time or a statement that CISA reviewed every entry on that day.
 
@@ -105,21 +109,21 @@ Browser and local packages carry the same reviewed KEV bytes.
 
 ## Reviewed daily updates
 
-`.github/workflows/update-kev-catalog.yml` checks out the official source separately,
-rebuilds the snapshot twice, runs catalog/import/package checks and browser/WASM parity,
-then maintains one update branch: `automation/kev-threat-context`.
+`.github/workflows/update-cve-catalog.yml` is the single nightly updater for CVE, GHSA
+and KEV knowledge (see `docs/browser-cve-learning.md`). It checks out `cisagov/kev-data`
+once, without persisted credentials, and passes that checkout both to
+`scripts/build_cve_catalog.py --kev-source` and to `scripts/build_kev_catalog.py`, then
+rebuilds both artifacts a second time with `--check`, runs catalog/import/threat-context
+tests, local package staging and browser/WASM parity, and stages the three advisory files
+together with the two KEV files.
 
-The workflow stages only the two generated KEV files. An existing open update must be
-the bot's single data-only commit; additional human commits or unrelated changes stop
-the update. An exact Git lease prevents overwriting a concurrently changed branch.
-An already merged branch can be reused; a closed, unmerged proposal is not silently
-reopened or overwritten. Identical snapshots produce no mutation. A maintainer must
-resolve such blocked branches explicitly before scheduled updates can resume.
-
-After proposing changed bytes, the workflow dispatches the full production, web,
-PostgreSQL, browser and local-package checks for that branch. Updates remain subject
-to review and merge; this workflow never merges or closes a PR. It does not modify the
-separate CVE/GHSA updater or its superseded-snapshot cleanup rules.
+Changed bytes become one reviewable PR on a branch named after all three source commits
+(`automation/advisory-knowledge-<cve>-<ghsa>-kev<kev>`); identical snapshots produce no
+PR. The workflow dispatches the full production, web, PostgreSQL, browser and
+local-package checks for that branch and never merges. Superseded proposals are closed
+only by `close-superseded-advisories.yml` after a newer snapshot merged and passed CI,
+and only when `kev-catalog.json` names the same KEV commit and blob as the advisory
+snapshot it ships with.
 
 ## Scope of centre integration
 

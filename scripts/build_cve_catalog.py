@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile pinned CVE and reviewed GHSA Git data as one inert offline snapshot.
+"""Compile pinned CVE, reviewed GHSA and CISA KEV Git data as one inert offline snapshot.
 
 The compiler does not execute anything in either source checkout, follow
 advisory links, install packages, or train a classifier. A rebuild replaces the
@@ -35,6 +35,14 @@ OFFICIAL_GHSA_REMOTES = {
     "git@github.com:github/advisory-database.git",
     "ssh://git@github.com/github/advisory-database.git",
 }
+# The same checkout scripts/build_kev_catalog.py compiles into app/data/kev-catalog.json.
+OFFICIAL_KEV_REPOSITORY = "https://github.com/cisagov/kev-data"
+OFFICIAL_KEV_REMOTES = {
+    OFFICIAL_KEV_REPOSITORY, OFFICIAL_KEV_REPOSITORY + ".git",
+    "git@github.com:cisagov/kev-data.git", "ssh://git@github.com/cisagov/kev-data.git",
+}
+KEV_SOURCE_FILE = "known_exploited_vulnerabilities.json"
+MAX_KEV_BYTES = 16 * 1024 * 1024
 
 
 def _git(source: Path, *args: str) -> bytes:
@@ -121,20 +129,26 @@ def encode_json(value: dict) -> bytes:
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-MAX_KEV_BYTES = 16 * 1024 * 1024
+def read_kev_source(source: Path) -> tuple[dict, dict]:
+    """Parse the KEV catalogue pinned at a clean official checkout's HEAD, with its Git identity.
 
-
-def read_kev_feed(path: Path) -> tuple[dict, str]:
-    """The feed is a plain file, not a Git tree: its identity is the bytes' digest."""
-    with path.open("rb") as handle:
-        raw = handle.read(MAX_KEV_BYTES + 1)
-    if len(raw) > MAX_KEV_BYTES:
+    The blob is read by object ID, so a concurrent worktree edit cannot change
+    bytes attributed to the pinned commit; the identity mirrors what
+    ``app/scan/kev_catalog.normalize_upstream`` records for kev-catalog.json.
+    """
+    commit, generated_at = source_identity(source, OFFICIAL_KEV_REMOTES)
+    row = _git(source, "ls-tree", commit, "--", KEV_SOURCE_FILE).decode().strip().split()
+    if len(row) != 4 or row[:2] != ["100644", "blob"] or row[3] != KEV_SOURCE_FILE:
+        raise ValueError("KEV input must be a regular non-executable JSON Git blob")
+    oid = row[2]
+    if not 0 < int(_git(source, "cat-file", "-s", oid)) <= MAX_KEV_BYTES:
         raise ValueError("KEV feed exceeds size limit")
+    raw = _git(source, "cat-file", "blob", oid)
     try:
         feed = json.loads(raw)
     except (ValueError, UnicodeError) as exc:
         raise ValueError(f"invalid JSON in KEV feed: {exc}") from exc
-    return feed, hashlib.sha256(raw).hexdigest()
+    return feed, {"commit": commit, "generated_at": generated_at, "sha256": hashlib.sha256(raw).hexdigest()}
 
 
 def build_snapshot(source: Path, ghsa_source: Path | None = None,
@@ -178,8 +192,10 @@ def build_snapshot(source: Path, ghsa_source: Path | None = None,
         if _git(ghsa_source, "rev-parse", "HEAD").decode().strip() != ghsa_commit:
             raise ValueError("GHSA source HEAD changed during compilation")
     if kev_source is not None:
-        feed, feed_sha256 = read_kev_feed(kev_source)
-        catalog = merge_kev(catalog, feed, feed_sha256=feed_sha256)
+        feed, identity = read_kev_source(kev_source)
+        catalog = merge_kev(catalog, feed, **identity)
+        if _git(kev_source, "rev-parse", "HEAD").decode().strip() != identity["commit"]:
+            raise ValueError("KEV source HEAD changed during compilation")
 
     if _git(source, "rev-parse", "HEAD").decode().strip() != commit:
         raise ValueError("CVE source HEAD changed during compilation")
@@ -235,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--kev-source", type=Path,
-        help="downloaded CISA known_exploited_vulnerabilities.json; annotates matched CVEs, requires --ghsa-source",
+        help="clean local official cisagov/kev-data checkout; annotates matched CVEs, requires --ghsa-source",
     )
     parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "app/data/cve-catalog.json")
     parser.add_argument("--summary", type=Path, default=PROJECT_ROOT / "app/data/cve-learning.json")

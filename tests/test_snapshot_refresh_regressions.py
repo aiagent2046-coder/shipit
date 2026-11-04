@@ -175,8 +175,8 @@ def test_a_kev_refresh_reannotates_saved_matches_without_a_model_call(catalog):
     assert finding["claim_evidence"]["exploitation"] == {"status": "not_assessed"}
     assert snapshot.snapshot_is_current(initial["score"])
 
-    kev_source = {"feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
-                  "catalog_version": "2026.11.03", "generated_at": "2026-11-03T20:00:24Z", "sha256": "c" * 64}
+    kev_source = {"repository": "https://github.com/cisagov/kev-data", "commit": "d" * 40,
+                  "generated_at": "2026-11-03T21:32:24Z", "catalog_version": "2026.11.03", "sha256": "c" * 64}
     data = catalog({"PyPI:adyen": [{**advisory(), "aliases": [CVE]}]})
     data.update(schema_version=3, sources={**data["sources"], "cisa-kev": kev_source},
                 exploitation={"cisa-kev": {CVE: {"date_added": "2026-10-01", "due_date": "2026-10-22",

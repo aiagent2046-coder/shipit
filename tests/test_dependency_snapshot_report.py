@@ -96,8 +96,8 @@ def test_retained_finding_shows_its_original_source_separately_from_new_catalog(
     assert "Application reachability was not checked." in html
 
 
-KEV_SNAPSHOT = {"feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
-                "catalog_version": "2026.11.03", "generated_at": "2026-11-03T20:00:24.8741Z", "sha256": "e" * 64}
+KEV_SNAPSHOT = {"repository": "https://github.com/cisagov/kev-data", "commit": "d" * 40,
+                "generated_at": "2026-11-03T21:32:24Z", "catalog_version": "2026.11.03", "sha256": "e" * 64}
 UNREADABLE = "Recorded but unreadable; treat as not assessed."
 KEV_LISTED = {"status": "listed", "source": "cisa-kev", "cve_id": "CVE-2025-12345", "date_added": "2026-10-01",
               "due_date": "2026-10-22", "ransomware": "Known", "snapshot": KEV_SNAPSHOT}
@@ -122,6 +122,8 @@ def dependency_finding(exploitation=..., severity="high"):
     (..., "Not assessed; this finding's snapshot carried no exploitation source."),
     ({**KEV_LISTED, "ransomware": "Maybe"}, UNREADABLE),
     ({**KEV_LISTED, "snapshot": {**KEV_SNAPSHOT, "sha256": "short"}}, UNREADABLE),
+    ({**KEV_LISTED, "snapshot": {**KEV_SNAPSHOT, "commit": "short"}}, UNREADABLE),
+    ({**KEV_LISTED, "snapshot": {k: v for k, v in KEV_SNAPSHOT.items() if k != "repository"}}, UNREADABLE),
     ({"status": "listed", "source": "cisa-kev", "snapshot": KEV_SNAPSHOT}, UNREADABLE),
     ({"status": "not_listed", "source": "other", "snapshot": KEV_SNAPSHOT}, UNREADABLE),
 ])

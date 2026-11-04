@@ -5,10 +5,14 @@ import json
 import pytest
 
 from app.scan import kev_feed
-from app.scan.kev_feed import KEV_FEED, merge_kev
+from app.scan.kev_feed import KEV_REPOSITORY, merge_kev
 
 SHA = "c" * 64
+COMMIT = "d" * 40
+COMMITTED = "2026-11-03T21:32:24Z"
 DATE = "2026-11-03T20:00:24.8741Z"
+# The identity the compiler reads from the pinned cisagov/kev-data checkout.
+IDENTITY = {"commit": COMMIT, "generated_at": COMMITTED, "sha256": SHA}
 
 
 def two_source_catalog():
@@ -45,14 +49,16 @@ def feed(*entries, **changes):
 def test_merge_adds_a_third_source_and_an_exploitation_index_without_touching_matches():
     base = two_source_catalog()
     before = deepcopy(base)
-    result = merge_kev(base, feed(), feed_sha256=SHA)
+    result = merge_kev(base, feed(), **IDENTITY)
     assert base == before
     assert result["schema_version"] == 3
     assert result["packages"] == base["packages"]
     assert result["source"] == base["source"]
     assert set(result["sources"]) == {"cvelist", "github-reviewed", "cisa-kev"}
-    assert result["sources"]["cisa-kev"] == {"feed": KEV_FEED, "catalog_version": "2026.11.03",
-                                             "generated_at": DATE, "sha256": SHA}
+    # One provenance chain with kev-catalog.json: the pinned commit and upstream blob digest, no feed URL.
+    assert result["sources"]["cisa-kev"] == {"repository": KEV_REPOSITORY, "commit": COMMIT,
+                                             "generated_at": COMMITTED, "catalog_version": "2026.11.03",
+                                             "sha256": SHA}
     assert result["exploitation"] == {"cisa-kev": {
         "CVE-2020-0001": {"date_added": "2025-03-01", "due_date": "2025-03-22", "ransomware": "Unknown"},
         "CVE-2024-99999": {"date_added": "2025-03-01", "due_date": "2025-03-22", "ransomware": "Unknown"},
@@ -66,8 +72,8 @@ def test_merge_adds_a_third_source_and_an_exploitation_index_without_touching_ma
 
 
 def test_rebuild_is_deterministic_and_json_sorted():
-    first = merge_kev(two_source_catalog(), feed(), feed_sha256=SHA)
-    second = merge_kev(two_source_catalog(), json.loads(json.dumps(feed())), feed_sha256=SHA)
+    first = merge_kev(two_source_catalog(), feed(), **IDENTITY)
+    second = merge_kev(two_source_catalog(), json.loads(json.dumps(feed())), **IDENTITY)
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
 
 
@@ -87,28 +93,36 @@ def test_rebuild_is_deterministic_and_json_sorted():
 ])
 def test_malformed_feeds_fail_the_whole_build(broken):
     with pytest.raises(ValueError):
-        merge_kev(two_source_catalog(), broken, feed_sha256=SHA)
+        merge_kev(two_source_catalog(), broken, **IDENTITY)
 
 
-def test_feed_identity_and_base_catalog_are_required():
-    with pytest.raises(ValueError, match="sha256"):
-        merge_kev(two_source_catalog(), feed(), feed_sha256="not-a-digest")
+@pytest.mark.parametrize("broken, message", [
+    ({"sha256": "not-a-digest"}, "sha256"),
+    ({"commit": "abc123"}, "commit"),
+    ({"generated_at": "2026-11-03T21:32:24"}, "generated_at"),
+    ({"generated_at": "yesterday"}, "generated_at"),
+])
+def test_pinned_identity_is_required(broken, message):
+    with pytest.raises(ValueError, match=message):
+        merge_kev(two_source_catalog(), feed(), **{**IDENTITY, **broken})
+
+
+def test_base_catalog_must_be_the_two_source_snapshot():
     legacy = two_source_catalog()
     legacy["schema_version"] = 1
     del legacy["sources"]
     with pytest.raises(ValueError, match="two-source"):
-        merge_kev(legacy, feed(), feed_sha256=SHA)
+        merge_kev(legacy, feed(), **IDENTITY)
 
 
 def test_record_limit_is_enforced(monkeypatch):
     monkeypatch.setattr(kev_feed, "MAX_RECORDS", 2)
     with pytest.raises(ValueError, match="limit"):
-        merge_kev(two_source_catalog(), feed(), feed_sha256=SHA)
+        merge_kev(two_source_catalog(), feed(), **IDENTITY)
 
 
 def test_unknown_record_fields_are_ignored_but_consumed_fields_are_strict():
-    tolerant = merge_kev(two_source_catalog(), feed(entry(forensicTriage="Yes", newField=1)), feed_sha256=SHA)
+    tolerant = merge_kev(two_source_catalog(), feed(entry(forensicTriage="Yes", newField=1)), **IDENTITY)
     assert list(tolerant["exploitation"]["cisa-kev"]) == ["CVE-2025-12345"]
     with pytest.raises(ValueError):
-        merge_kev(two_source_catalog(), feed({k: v for k, v in entry().items() if k != "dueDate"}),
-                  feed_sha256=SHA)
+        merge_kev(two_source_catalog(), feed({k: v for k, v in entry().items() if k != "dueDate"}), **IDENTITY)
