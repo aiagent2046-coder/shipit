@@ -20,9 +20,12 @@ from app.sca.lockfiles import (
     collect_dependency_inventory, dependency_exclusion_reason, normalize_pypi,
     occurrence_evidence, occurrence_summary,
 )
+from app.scan.kev_catalog import KEV_FEED, SOURCE_NAME as KEV_SOURCE
 from app.scan.remediation_catalog import UpgradeBudget, plan_dependency_upgrade, remediation_hint
 
 RULE_ID = "dependency-cve-match"
+MAX_EXPLOITATION_RECORDS = 100_000
+ADVISORY_SOURCES = ("cvelist", "github-reviewed")
 MAX_ARCHIVE_BYTES = 50_000_000
 MAX_ARCHIVE_MEMBERS = 20_000
 MAX_EXPANDED_BYTES = 100_000_000
@@ -319,6 +322,25 @@ def _valid_source(value: object, repository: str) -> dict | None:
     return {"repository": repository, "commit": commit, "generated_at": date}
 
 
+def _valid_feed_source(value: object) -> dict | None:
+    """A downloaded feed has no commit; its identity is version, release time and digest."""
+    if not isinstance(value, dict) or value.get("feed") != KEV_FEED:
+        return None
+    version, date, digest = value.get("catalog_version"), value.get("generated_at"), value.get("sha256")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]{4}\.[0-9]{2}\.[0-9]{2}", version):
+        return None
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return None
+    if not isinstance(date, str) or len(date) > 64:
+        return None
+    try:
+        if datetime.fromisoformat(date.replace("Z", "+00:00")).tzinfo is None:
+            return None
+    except ValueError:
+        return None
+    return {"feed": KEV_FEED, "catalog_version": version, "generated_at": date, "sha256": digest}
+
+
 def _sources(catalog: object) -> dict[str, dict] | None:
     if not isinstance(catalog, dict) or type(catalog.get("schema_version")) is not int:
         return None
@@ -328,16 +350,50 @@ def _sources(catalog: object) -> dict[str, dict] | None:
         return None
     if schema == 1:
         return {"cvelist": primary}
-    if schema != 2:
+    if schema not in (2, 3):
         return None
+    expected = {"cvelist", "github-reviewed"} | ({KEV_SOURCE} if schema == 3 else set())
     sources = catalog.get("sources")
-    if not isinstance(sources, dict) or set(sources) != {"cvelist", "github-reviewed"}:
+    if not isinstance(sources, dict) or set(sources) != expected:
         return None
     cvelist = _valid_source(sources.get("cvelist"), SOURCE_REPOSITORY)
     github = _valid_source(sources.get("github-reviewed"), GHSA_REPOSITORY)
     if cvelist != primary or github is None:
         return None
-    return {"cvelist": cvelist, "github-reviewed": github}
+    result = {"cvelist": cvelist, "github-reviewed": github}
+    if schema == 3:
+        kev = _valid_feed_source(sources.get(KEV_SOURCE))
+        if kev is None:
+            return None
+        result[KEV_SOURCE] = kev
+    return result
+
+
+def _exploitation_index(catalog: dict, sources: dict[str, dict]) -> dict[str, dict] | None:
+    """CVE ID -> KEV record, or None when the snapshot carries no exploitation source.
+
+    A schema-3 catalog whose index is malformed raises: silently dropping the
+    index would downgrade known-exploited matches to ordinary ones.
+    """
+    if KEV_SOURCE not in sources:
+        if "exploitation" in catalog:
+            raise ValueError("exploitation index without a source")
+        return None
+    container = catalog.get("exploitation")
+    if not isinstance(container, dict) or set(container) != {KEV_SOURCE}:
+        raise ValueError("invalid exploitation index")
+    index = container[KEV_SOURCE]
+    if not isinstance(index, dict) or len(index) > MAX_EXPLOITATION_RECORDS:
+        raise ValueError("invalid exploitation index")
+    for cve_id, record in index.items():
+        if (not isinstance(cve_id, str) or not _CVE_ID.fullmatch(cve_id) or not isinstance(record, dict)
+                or set(record) != {"date_added", "due_date", "ransomware"}
+                or record["ransomware"] not in ("Known", "Unknown")
+                or any(not isinstance(record[key], str)
+                       or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", record[key])
+                       for key in ("date_added", "due_date"))):
+            raise ValueError("invalid exploitation record")
+    return index
 
 
 def _source(catalog: object) -> dict | None:
@@ -464,7 +520,7 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
     coverage = {
         "status": "partial", "status_counts": dict.fromkeys((*sorted(_STATUSES), "not_in_catalog"), 0),
         "dependencies_found": 0, "dependencies_checked": 0, "packages_in_catalog": 0,
-        "advisory_evaluations": 0, "unresolved_ranges": 0, "manifests": [],
+        "advisory_evaluations": 0, "unresolved_ranges": 0, "kev_listed_findings": 0, "manifests": [],
         "incomplete_manifests": {}, "inventory_truncated": 0, "findings_truncated": 0,
         "evaluations_truncated": 0,
         "unknown_reason_counts": {}, "details_truncated": 0,
@@ -481,6 +537,9 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
             "PyPI comparisons support numeric releases and canonical a/b/rc prereleases; "
             "epochs, post/dev/local versions and other spellings remain unsupported. "
             "npm comparisons require SemVer; CVE range lower bound '0' means the earliest version.",
+            "CISA KEV annotates matched CVEs with known exploitation elsewhere. Listing does not establish "
+            "exploitation of this application; absence from KEV does not establish that a vulnerability "
+            "is unexploited.",
         ],
     }
     findings = []
@@ -490,6 +549,13 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
     if sources is None or not isinstance(packages, dict):
         coverage.update(status="unavailable", error="invalid_catalog")
         return result
+    try:
+        kev_index = _exploitation_index(catalog, sources)
+    except ValueError:
+        coverage.update(status="unavailable", error="invalid_catalog")
+        return result
+    # The upgrade recipe binds to advisory provenance only; KEV never changes a candidate version.
+    advisory_sources = {name: sources[name] for name in ADVISORY_SOURCES if name in sources}
     stats = catalog.get("stats", {})
     if isinstance(stats, dict):
         for key, value in islice(stats.items(), 100):
@@ -621,6 +687,16 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
             ghsa_id = next((item for item in entry_ids if _GHSA_ID.fullmatch(item)), None)
             advisory_id = cve_id or ghsa_id or group_id
             source_keys = sorted({source_key for _, _, source_key in group})
+            # KEV is keyed by CVE; a GHSA-only group is looked up through its CVE aliases.
+            kev_hits = [item for item in all_ids if kev_index is not None and item in kev_index]
+            if kev_index is None:
+                exploitation = {"status": "not_assessed"}
+            elif kev_hits:
+                exploitation = {"status": "listed", "source": KEV_SOURCE, "cve_id": kev_hits[0],
+                                **kev_index[kev_hits[0]], "snapshot": sources[KEV_SOURCE]}
+                coverage["kev_listed_findings"] += 1
+            else:
+                exploitation = {"status": "not_listed", "source": KEV_SOURCE, "snapshot": sources[KEV_SOURCE]}
             evidence = {
                 "version": 1, "package": name, "ecosystem": dep.ecosystem,
                 "installed_version": dep.version, "manifest": dep.manifest,
@@ -645,6 +721,7 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
                 ) and not any(
                     assessment.get("matched_versions", []) for _, assessment, _ in group
                 ),
+                "exploitation": exploitation,
                 "reachability": "not_assessed",
             }
             if cve_id:
@@ -653,20 +730,26 @@ def match_archive(data: bytes, catalog: dict, *, assessment_observer=None) -> di
                 evidence["ghsa_id"] = ghsa_id
             if remediation is None:
                 remediation = plan_dependency_upgrade(
-                    dep.ecosystem, name, dep.version, entries, sources,
+                    dep.ecosystem, name, dep.version, entries, advisory_sources,
                     identities_complete=identities_complete and not truncated, budget=remediation_budget,
                 )
             # Persist the recipe with its source binding, including honest manual-review outcomes.
             evidence["remediation"] = remediation
+            listed = exploitation["status"] == "listed"
             findings.append({
                 "rule_id": RULE_ID,
-                "title": f"{name} {dep.version} matches {advisory_id}",
-                "severity": "high", "confidence": 0.9, "category": "Security",
+                "title": f"{name} {dep.version} matches {advisory_id}" + (" (CISA KEV)" if listed else ""),
+                # Known exploitation elsewhere is the "fix first" signal; it is not a reachability claim.
+                "severity": "critical" if listed else "high", "confidence": 0.9, "category": "Security",
                 "file": dep.manifest, "line": dep.line,
                 "explanation": (
                     f"The resolved {dep.ecosystem} package version is listed as affected "
-                    f"by {advisory_id} in the bundled advisory snapshot. Application "
-                    "reachability and exploitability have not been verified. "
+                    f"by {advisory_id} in the bundled advisory snapshot. "
+                    + (f"CISA lists {exploitation['cve_id']} in the Known Exploited Vulnerabilities catalog "
+                       f"(added {exploitation['date_added']}; known ransomware campaign use: "
+                       f"{exploitation['ransomware']}). Exploitation elsewhere does not establish "
+                       "exploitation of this application. " if listed else "")
+                    + "Application reachability and exploitability have not been verified. "
                     + occurrence_summary(dep)
                 ),
                 "fix_hint": remediation_hint(remediation),

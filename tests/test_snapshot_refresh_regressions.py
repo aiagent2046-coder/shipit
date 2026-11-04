@@ -164,3 +164,37 @@ def test_internal_assessment_observer_does_not_change_public_matcher_output(cata
 
     assert output == cve_match.match_archive(raw, data)
     assert {dep.name for dep, _, _ in observed} == {"adyen", "requests"}
+
+
+def test_a_kev_refresh_reannotates_saved_matches_without_a_model_call(catalog):
+    raw = archive("adyen")
+    catalog({"PyPI:adyen": [{**advisory(), "aliases": [CVE]}]})
+    initial = scan(raw)
+    finding, = initial["findings"]
+    assert finding["severity"] == "high"
+    assert finding["claim_evidence"]["exploitation"] == {"status": "not_assessed"}
+    assert snapshot.snapshot_is_current(initial["score"])
+
+    kev_source = {"feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+                  "catalog_version": "2026.11.03", "generated_at": "2026-11-03T20:00:24Z", "sha256": "c" * 64}
+    data = catalog({"PyPI:adyen": [{**advisory(), "aliases": [CVE]}]})
+    data.update(schema_version=3, sources={**data["sources"], "cisa-kev": kev_source},
+                exploitation={"cisa-kev": {CVE: {"date_added": "2026-10-01", "due_date": "2026-10-22",
+                                                 "ransomware": "Known"}}})
+    published = json.dumps(data).encode()
+    snapshot.CATALOG_PATH.write_bytes(published)
+    snapshot.CHECKSUM_PATH.write_text(hashlib.sha256(published).hexdigest())
+    # The catalog bytes are part of the fingerprint, so the saved result is stale on its own.
+    assert not snapshot.snapshot_is_current(initial["score"])
+
+    refreshed = snapshot.refresh_snapshot(initial["score"], initial["findings"], raw)
+    assert refreshed["llm_usage"] == {"calls": 0}
+    finding, = refreshed["findings"]
+    assert finding["severity"] == "critical"
+    assert finding["title"].endswith("(CISA KEV)")
+    assert finding["claim_evidence"]["exploitation"]["status"] == "listed"
+    assert finding["claim_evidence"]["exploitation"]["cve_id"] == CVE
+    assert "snapshot_check_status" not in finding["claim_evidence"]
+    assert refreshed["sca"]["dependency_cve"]["kev_listed_findings"] == 1
+    assert refreshed["sca"]["dependency_snapshot"].get("retained_findings") is None
+    assert snapshot.snapshot_is_current(refreshed["score"])

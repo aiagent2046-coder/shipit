@@ -388,6 +388,89 @@ def test_cve_alias_deduplicates_matching_sources_and_disagreement_is_unknown():
     assert result["coverage"]["details"][0]["reason"] == "conflicting_advisory_sources"
 
 
+KEV_SOURCE = {"feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+              "catalog_version": "2026.11.03", "generated_at": "2026-11-03T20:00:24.8741Z", "sha256": "c" * 64}
+KEV_RECORD = {"date_added": "2026-10-01", "due_date": "2026-10-22", "ransomware": "Known"}
+
+
+def three_source_catalog(entries, key="npm:widget", kev=None):
+    snapshot = two_source_catalog(entries, key)
+    snapshot["schema_version"] = 3
+    snapshot["sources"]["cisa-kev"] = dict(KEV_SOURCE)
+    snapshot["exploitation"] = {"cisa-kev": {"CVE-2025-12345": dict(KEV_RECORD)} if kev is None else kev}
+    return snapshot
+
+
+def test_kev_listing_raises_severity_and_records_exploitation_without_touching_the_match():
+    listed = match_archive(npm(), three_source_catalog([advisory()]))
+    plain = match_archive(npm(), two_source_catalog([advisory()]))
+    finding, = listed["findings"]
+    assert finding["severity"] == "critical"
+    assert finding["title"] == "widget 1.2.3 matches CVE-2025-12345 (CISA KEV)"
+    assert "Known Exploited Vulnerabilities" in finding["explanation"]
+    assert "does not establish exploitation of this application" in finding["explanation"]
+    evidence = finding["claim_evidence"]
+    assert evidence["exploitation"] == {"status": "listed", "source": "cisa-kev", "cve_id": "CVE-2025-12345",
+                                        **KEV_RECORD, "snapshot": KEV_SOURCE}
+    assert evidence["reachability"] == "not_assessed"
+    # Advisory provenance and the upgrade recipe are untouched by the annotation.
+    assert [s["name"] for s in evidence["snapshot_sources"]] == ["cvelist"]
+    assert set(evidence["remediation"]["binding"]["sources"]) == {"cvelist", "github-reviewed"}
+    assert evidence["remediation"] == plain["findings"][0]["claim_evidence"]["remediation"]
+    assert listed["coverage"]["status_counts"] == plain["coverage"]["status_counts"]
+    assert listed["coverage"]["kev_listed_findings"] == 1
+    assert set(listed["coverage"]["sources"]) == {"cvelist", "github-reviewed", "cisa-kev"}
+    assert any("CISA KEV" in text for text in listed["coverage"]["limitations"])
+
+
+def test_kev_is_looked_up_through_ghsa_cve_aliases():
+    ghsa = osv_advisory([{"introduced": "0"}, {"fixed": "2.0.0"}], aliases=["CVE-2025-12345"])
+    finding, = match_archive(npm(), three_source_catalog([ghsa]))["findings"]
+    assert finding["severity"] == "critical"
+    assert finding["claim_evidence"]["exploitation"]["cve_id"] == "CVE-2025-12345"
+    unaliased = osv_advisory([{"introduced": "0"}, {"fixed": "2.0.0"}])
+    finding, = match_archive(npm(), three_source_catalog([unaliased]))["findings"]
+    assert finding["severity"] == "high"
+    assert finding["claim_evidence"]["exploitation"] == {"status": "not_listed", "source": "cisa-kev",
+                                                         "snapshot": KEV_SOURCE}
+
+
+def test_not_listed_and_not_assessed_stay_distinct():
+    result = match_archive(npm(), three_source_catalog([advisory()], kev={"CVE-2020-0001": dict(KEV_RECORD)}))
+    finding, = result["findings"]
+    assert finding["severity"] == "high"
+    assert finding["title"] == "widget 1.2.3 matches CVE-2025-12345"
+    assert finding["claim_evidence"]["exploitation"]["status"] == "not_listed"
+    assert result["coverage"]["kev_listed_findings"] == 0
+    legacy, = match_archive(npm(), two_source_catalog([advisory()]))["findings"]
+    assert legacy["claim_evidence"]["exploitation"] == {"status": "not_assessed"}
+    assert legacy["severity"] == "high"
+
+
+@pytest.mark.parametrize("break_catalog", [
+    lambda c: c.pop("exploitation"),
+    lambda c: c["sources"].pop("cisa-kev"),
+    lambda c: c["sources"]["cisa-kev"].update(feed="https://example.invalid/kev.json"),
+    lambda c: c["sources"]["cisa-kev"].update(sha256="short"),
+    lambda c: c["sources"]["cisa-kev"].update(catalog_version="v1"),
+    lambda c: c["exploitation"].update(other={}),
+    lambda c: c["exploitation"]["cisa-kev"].update({"CVE-2025-12345": {**KEV_RECORD, "ransomware": "Maybe"}}),
+    lambda c: c["exploitation"]["cisa-kev"].update({"CVE-2025-12345": {**KEV_RECORD, "extra": 1}}),
+    lambda c: c["exploitation"]["cisa-kev"].update({"not-a-cve": dict(KEV_RECORD)}),
+    lambda c: c["exploitation"]["cisa-kev"].update({"CVE-2025-12345": {**KEV_RECORD, "due_date": "soon"}}),
+])
+def test_malformed_three_source_catalogs_are_unavailable_not_downgraded(break_catalog):
+    snapshot = three_source_catalog([advisory()])
+    break_catalog(snapshot)
+    result = match_archive(npm(), snapshot)
+    assert result["findings"] == []
+    assert result["coverage"]["error"] == "invalid_catalog"
+    # A two-source catalog never carries an index; one that does is not trusted either.
+    stray = two_source_catalog([advisory()])
+    stray["exploitation"] = {"cisa-kev": {}}
+    assert match_archive(npm(), stray)["coverage"]["error"] == "invalid_catalog"
+
+
 def test_two_source_catalog_requires_both_exact_pinned_origins():
     missing = two_source_catalog([osv_advisory([{"introduced": "0"}])])
     del missing["sources"]["github-reviewed"]

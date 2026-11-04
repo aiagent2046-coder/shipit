@@ -12,7 +12,12 @@ SOURCE_REPOSITORIES = {
     "cvelist": "https://github.com/CVEProject/cvelistV5",
     "github-reviewed": "https://github.com/github/advisory-database",
 }
-SOURCE_LABELS = {"cvelist": "CVE Program", "github-reviewed": "GitHub-reviewed GHSA"}
+FEED_SOURCES = {
+    "cisa-kev": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+}
+SOURCE_LABELS = {"cvelist": "CVE Program", "github-reviewed": "GitHub-reviewed GHSA", "cisa-kev": "CISA KEV"}
+KEV_SCOPE = ("Listing does not establish exploitation of this application; "
+             "absence from KEV does not establish that a vulnerability is unexploited.")
 GAP_LABELS = {
     "unsupported_bun_binary_lockfile": "Binary bun.lockb is unsupported; provide a text bun.lock",
 }
@@ -111,6 +116,66 @@ def _reasons(value: object) -> dict | None:
     return {k: v for k, v in sorted(value.items()) if v}
 
 
+def _feed_source(name: str, source: object) -> dict | None:
+    if (not isinstance(source, dict) or source.get("feed") != FEED_SOURCES[name]
+            or not isinstance(source.get("catalog_version"), str)
+            or not re.fullmatch(r"[0-9]{4}\.[0-9]{2}\.[0-9]{2}", source["catalog_version"])
+            or not isinstance(source.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", source["sha256"])
+            or _date(source.get("generated_at")) is None):
+        return None
+    return {key: source[key] for key in ("feed", "catalog_version", "generated_at", "sha256")}
+
+
+def _source_detail(source: dict) -> str:
+    if "feed" in source:
+        return (f"{source['feed']}; catalog version: {source['catalog_version']}; "
+                f"SHA-256: {source['sha256']}; released: {source['generated_at']}.")
+    return f"{source['repository']}; commit: {source['commit']}; generated: {source['generated_at']}."
+
+
+def exploitation_record(value: object) -> dict | None:
+    """Normalize a finding's KEV annotation; anything unreadable is None, never 'not listed'."""
+    if not isinstance(value, dict) or value.get("status") not in {"listed", "not_listed", "not_assessed"}:
+        return None
+    status = value["status"]
+    if status == "not_assessed":
+        return {"status": status}
+    snapshot = _feed_source("cisa-kev", value.get("snapshot"))
+    if value.get("source") != "cisa-kev" or snapshot is None:
+        return None
+    record = {"status": status, "source": "cisa-kev", "snapshot": snapshot}
+    if status == "listed":
+        cve_id = value.get("cve_id")
+        if (not isinstance(cve_id, str) or not re.fullmatch(r"CVE-[0-9]{4}-[0-9]{4,19}", cve_id)
+                or value.get("ransomware") not in {"Known", "Unknown"}
+                or any(not isinstance(value.get(key), str)
+                       or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value[key])
+                       for key in ("date_added", "due_date"))):
+            return None
+        record.update(cve_id=cve_id, date_added=value["date_added"], due_date=value["due_date"],
+                      ransomware=value["ransomware"])
+    return record
+
+
+def exploitation_rows(value: object) -> list[tuple[str, str]]:
+    if value is None:
+        return [("Known exploitation", "Not assessed; this finding's snapshot carried no exploitation source.")]
+    record = exploitation_record(value)
+    if record is None:
+        return [("Known exploitation", "Recorded but unreadable; treat as not assessed.")]
+    if record["status"] == "not_assessed":
+        return [("Known exploitation", "Not assessed; this finding's snapshot carried no exploitation source.")]
+    version = record["snapshot"]["catalog_version"]
+    if record["status"] == "not_listed":
+        return [("Known exploitation", f"Not listed in CISA KEV catalog version {version}. "
+                 "Absence does not establish that the vulnerability is unexploited.")]
+    return [("Known exploitation",
+             f"Listed in the CISA Known Exploited Vulnerabilities catalog as {record['cve_id']}; "
+             f"added {record['date_added']}; federal due date {record['due_date']}; "
+             f"known ransomware campaign use: {record['ransomware']}. KEV catalog version {version}. "
+             "Exploitation elsewhere does not establish exploitation of this application.")]
+
+
 def snapshot_coverage(value: object) -> dict | None:
     if not isinstance(value, dict) or not isinstance(value.get("status"), str) or value["status"] not in {
             "checked", "partial", "not_applicable", "unavailable"}:
@@ -123,7 +188,8 @@ def snapshot_coverage(value: object) -> dict | None:
             or not all(_count(value.get(k)) for k in ("dependencies_found", "dependencies_checked"))):
         return None
     sources = value.get("sources")
-    if not isinstance(sources, dict) or not sources or not set(sources) <= set(SOURCE_REPOSITORIES):
+    if (not isinstance(sources, dict) or not sources
+            or not set(sources) <= set(SOURCE_REPOSITORIES) | set(FEED_SOURCES)):
         return None
     cleaned_sources = {}
     for name in SOURCE_REPOSITORIES:
@@ -136,9 +202,18 @@ def snapshot_coverage(value: object) -> dict | None:
                 or _date(source.get("generated_at")) is None):
             return None
         cleaned_sources[name] = {key: source[key] for key in ("repository", "commit", "generated_at")}
+    for name in FEED_SOURCES:
+        if name not in sources:
+            continue
+        cleaned_sources[name] = _feed_source(name, sources[name])
+        if cleaned_sources[name] is None:
+            return None
+    if not _count(value.get("kev_listed_findings", 0)):
+        return None
     result = {"status": value["status"], "sources": cleaned_sources, "status_counts": {
         key: counts[key] for key in ("affected", "unaffected", "unknown", "not_in_catalog")},
-        **{key: value[key] for key in ("dependencies_found", "dependencies_checked")}}
+        **{key: value[key] for key in ("dependencies_found", "dependencies_checked")},
+        "kev_listed_findings": value.get("kev_listed_findings", 0)}
     for key in ("unknown_reason_counts", "manifest_gap_reason_counts"):
         result[key] = _reasons(value.get(key, {}))
         if result[key] is None:
@@ -186,8 +261,10 @@ def snapshot_rows(value: object, metadata_value: object = None) -> list[tuple[st
         return rows
     rows.append(("Snapshot freshness", _freshness(coverage, metadata)))
     for name, source in coverage["sources"].items():
-        rows.append((f"Snapshot source: {SOURCE_LABELS[name]}",
-                     f"{source['repository']}; commit: {source['commit']}; generated: {source['generated_at']}."))
+        rows.append((f"Snapshot source: {SOURCE_LABELS[name]}", _source_detail(source)))
+    if "cisa-kev" in coverage["sources"]:
+        rows.append(("Snapshot known exploitation",
+                     f"{coverage['kev_listed_findings']} reported matches are listed in CISA KEV. " + KEV_SCOPE))
     counts = coverage["status_counts"]
     rows += [("Snapshot dependency coverage",
               f"{coverage['dependencies_checked']} of {coverage['dependencies_found']} dependency versions checked. "
@@ -257,6 +334,7 @@ def snapshot_finding_rows(value: object) -> list[tuple[str, str]]:
                      f"{source['repository']}; commit: {source['commit']}; generated: {source['generated_at']}."))
     if not rows:
         rows.append(("Finding snapshot source", "Not recorded or unreadable for this finding."))
+    rows.extend(exploitation_rows(value.get("exploitation")))
     card = remediation_record(value)
     if card is not None:
         recipe = card["recipe"]
