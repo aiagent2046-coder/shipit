@@ -10,6 +10,11 @@ SOURCE_REPOSITORIES = {
     "cvelist": "https://github.com/CVEProject/cvelistV5",
     "github-reviewed": "https://github.com/github/advisory-database",
 }
+# Feeds have no commit; their identity is the catalog version plus the digest of the downloaded bytes.
+SOURCE_FEEDS = {
+    "cisa-kev": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+}
+FEED_KEYS = ("feed", "catalog_version", "generated_at", "sha256")
 STATUSES = {"completed", "partial", "unavailable", "not_run", "not_applicable"}
 SCOPE = (
     "Missing or incomplete checks are not clean results. Ghidra evidence is operator-supplied; "
@@ -76,6 +81,17 @@ def project_checks_record(value: object) -> dict | None:
         return invalid
     clean_sources = {}
     for name, item in sources.items():
+        if name in SOURCE_FEEDS:
+            if (
+                not isinstance(item, dict)
+                or item.get("feed") != SOURCE_FEEDS[name]
+                or _text(item.get("catalog_version"), 80) is None
+                or _text(item.get("generated_at"), 64) is None
+                or not _hash(item.get("sha256"))
+            ):
+                return invalid
+            clean_sources[name] = {key: item[key] for key in FEED_KEYS}
+            continue
         if (
             name not in SOURCE_REPOSITORIES
             or not isinstance(item, dict)
@@ -243,7 +259,7 @@ def project_checks_rows(value: object) -> list[tuple[str, str]]:
     for name, provenance in dependencies["sources"].items():
         rows.append(
             (
-                f"Advisory source: {name}",
+                f"{'Exploitation feed' if 'feed' in provenance else 'Advisory source'}: {name}",
                 "; ".join(f"{key}: {item}" for key, item in provenance.items()) or "Provenance not recorded",
             )
         )

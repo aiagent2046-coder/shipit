@@ -999,5 +999,202 @@
         "Unavailable: invalid or incompatible recorded evidence; no complete result established."
       ]
     ]
+  },
+  {
+    "name": "kev_feed_source",
+    "value": {
+      "schema": 1,
+      "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtime_verified": false,
+      "source": {
+        "status": "partial",
+        "checks_run": 4,
+        "checks_not_run": 1,
+        "findings": 0,
+        "agent_status": "completed"
+      },
+      "dependencies": {
+        "status": "partial",
+        "mode": "offline_catalog",
+        "findings": 0,
+        "catalog_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sources": {
+          "cvelist": {
+            "repository": "https://github.com/CVEProject/cvelistV5",
+            "commit": "cccccccccccccccccccccccccccccccccccccccc",
+            "generated_at": "2026-11-02T00:00:00Z",
+            "secret_extra": "not exported"
+          },
+          "cisa-kev": {
+            "feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+            "catalog_version": "2026.11.03",
+            "generated_at": "2026-11-03T20:00:24Z",
+            "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "secret_extra": "not exported"
+          }
+        },
+        "reason": "unknown_versions"
+      },
+      "binary_static": {
+        "schema": 1,
+        "status": "completed",
+        "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "provenance": "operator_supplied",
+        "runtime_verified": false,
+        "automatic_patch": false,
+        "artifacts_omitted": 0,
+        "artifacts": [
+          {
+            "path": "<img src=x onerror=alert(1)>.elf",
+            "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "bytes": 64,
+            "status": "completed",
+            "reason": null,
+            "provider": {
+              "name": "ghidra",
+              "version": "12.0",
+              "secret_extra": "not exported"
+            },
+            "facts": {
+              "functions": [
+                {
+                  "name": "CVE-2099-1234"
+                }
+              ],
+              "imports": [
+                {
+                  "name": "secret_extra"
+                }
+              ]
+            }
+          }
+        ],
+        "limitations": [
+          "binary_package_versions_not_inferred"
+        ]
+      }
+    },
+    "rows": [
+      [
+        "Source",
+        "partial; checks run: 4; not run: 1; findings: 0; pattern review: completed."
+      ],
+      [
+        "Vulnerability databases",
+        "partial; mode: offline catalog; findings: 0."
+      ],
+      [
+        "Ghidra / binary static",
+        "completed; artifacts: 1; omitted: 0. Operator-supplied evidence; execution not authenticated."
+      ],
+      [
+        "Project archive SHA-256",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      [
+        "Dependency check scope",
+        "unknown_versions"
+      ],
+      [
+        "Catalog SHA-256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      [
+        "Advisory source: cvelist",
+        "repository: https://github.com/CVEProject/cvelistV5; commit: cccccccccccccccccccccccccccccccccccccccc; generated_at: 2026-11-02T00:00:00Z"
+      ],
+      [
+        "Exploitation feed: cisa-kev",
+        "feed: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json; catalog_version: 2026.11.03; generated_at: 2026-11-03T20:00:24Z; sha256: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      [
+        "Binary artifact 1",
+        "<img src=x onerror=alert(1)>.elf; completed; SHA-256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd; bytes: 64. functions: 1. imports: 1. Provider: name: ghidra; version: 12.0."
+      ],
+      [
+        "Binary limitation 1",
+        "binary_package_versions_not_inferred"
+      ]
+    ]
+  },
+  {
+    "name": "kev_feed_without_digest",
+    "value": {
+      "schema": 1,
+      "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtime_verified": false,
+      "source": {
+        "status": "partial",
+        "checks_run": 4,
+        "checks_not_run": 1,
+        "findings": 0,
+        "agent_status": "completed"
+      },
+      "dependencies": {
+        "status": "partial",
+        "mode": "offline_catalog",
+        "findings": 0,
+        "catalog_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sources": {
+          "cvelist": {
+            "repository": "https://github.com/CVEProject/cvelistV5",
+            "commit": "cccccccccccccccccccccccccccccccccccccccc",
+            "generated_at": "2026-11-02T00:00:00Z",
+            "secret_extra": "not exported"
+          },
+          "cisa-kev": {
+            "feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+            "catalog_version": "2026.11.03",
+            "generated_at": "2026-11-03T20:00:24Z",
+            "secret_extra": "not exported"
+          }
+        },
+        "reason": "unknown_versions"
+      },
+      "binary_static": {
+        "schema": 1,
+        "status": "completed",
+        "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "provenance": "operator_supplied",
+        "runtime_verified": false,
+        "automatic_patch": false,
+        "artifacts_omitted": 0,
+        "artifacts": [
+          {
+            "path": "<img src=x onerror=alert(1)>.elf",
+            "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "bytes": 64,
+            "status": "completed",
+            "reason": null,
+            "provider": {
+              "name": "ghidra",
+              "version": "12.0",
+              "secret_extra": "not exported"
+            },
+            "facts": {
+              "functions": [
+                {
+                  "name": "CVE-2099-1234"
+                }
+              ],
+              "imports": [
+                {
+                  "name": "secret_extra"
+                }
+              ]
+            }
+          }
+        ],
+        "limitations": [
+          "binary_package_versions_not_inferred"
+        ]
+      }
+    },
+    "rows": [
+      [
+        "Project checks",
+        "Unavailable: invalid or incompatible recorded evidence; no complete result established."
+      ]
+    ]
   }
 ]
