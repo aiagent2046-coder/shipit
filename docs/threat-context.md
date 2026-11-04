@@ -2,9 +2,17 @@
 
 Drydock correlates existing dependency findings with a pinned CISA Known Exploited
 Vulnerabilities (KEV) snapshot. The result is separate `threat_context` evidence in the
-project-check report. It identifies CVEs for expedited remediation review; it does not
-create another vulnerability finding or alter severity, confidence, readiness scores,
-reachability claims or automatic-patch eligibility.
+project-check report. It identifies CVEs for expedited remediation review; the block
+itself does not create another vulnerability finding or alter confidence, readiness
+scores, reachability claims or automatic-patch eligibility.
+
+Severity is set elsewhere. The bundled advisory snapshot carries its own `cisa-kev`
+source, and a package/version match whose CVE is listed there is reported as
+`critical` with `claim_evidence.exploitation.status: listed`; see
+"Known exploitation (CISA KEV)" in `docs/sca-dependency-evidence.md`. The
+`threat_context` block records the same CVEs as expedited priority and does not change
+that severity again. The two mechanisms read the same CISA data and agree on the
+listed CVEs; neither establishes exploitation of the audited project.
 
 For example, a resolved package/version can already match CVE-X through CVE/GHSA/OSV.
 If CVE-X is in the pinned KEV snapshot, Drydock records the known-exploitation context,
