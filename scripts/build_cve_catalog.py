@@ -121,9 +121,30 @@ def encode_json(value: dict) -> bytes:
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-def build_snapshot(source: Path, ghsa_source: Path | None = None) -> tuple[bytes, bytes]:
+MAX_KEV_BYTES = 16 * 1024 * 1024
+
+
+def read_kev_feed(path: Path) -> tuple[dict, str]:
+    """The feed is a plain file, not a Git tree: its identity is the bytes' digest."""
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_KEV_BYTES + 1)
+    if len(raw) > MAX_KEV_BYTES:
+        raise ValueError("KEV feed exceeds size limit")
+    try:
+        feed = json.loads(raw)
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError(f"invalid JSON in KEV feed: {exc}") from exc
+    return feed, hashlib.sha256(raw).hexdigest()
+
+
+def build_snapshot(source: Path, ghsa_source: Path | None = None,
+                   kev_source: Path | None = None) -> tuple[bytes, bytes]:
     from app.scan.cve_catalog import build_catalog
     from app.scan.ghsa_catalog import merge_reviewed_ghsa
+    from app.scan.kev_feed import merge_kev
+
+    if kev_source is not None and ghsa_source is None:
+        raise ValueError("--kev-source requires --ghsa-source; KEV annotates the two-source snapshot")
 
     commit, generated_at = source_identity(source)
     blobs = source_blobs(source, commit)
@@ -156,6 +177,9 @@ def build_snapshot(source: Path, ghsa_source: Path | None = None) -> tuple[bytes
         )
         if _git(ghsa_source, "rev-parse", "HEAD").decode().strip() != ghsa_commit:
             raise ValueError("GHSA source HEAD changed during compilation")
+    if kev_source is not None:
+        feed, feed_sha256 = read_kev_feed(kev_source)
+        catalog = merge_kev(catalog, feed, feed_sha256=feed_sha256)
 
     if _git(source, "rev-parse", "HEAD").decode().strip() != commit:
         raise ValueError("CVE source HEAD changed during compilation")
@@ -183,6 +207,7 @@ def build_snapshot(source: Path, ghsa_source: Path | None = None) -> tuple[bytes
             "scope": (
                 "Explicit npm/PyPI identity; confirmed matches require supported "
                 "CVE constraints or OSV event ranges"
+                + ("; CISA KEV annotates matched CVEs with known exploitation" if kev_source else "")
             ),
             "unresolved_is_safe": False,
             "complete_vulnerability_database": False,
@@ -208,6 +233,10 @@ def main(argv: list[str] | None = None) -> int:
         "--ghsa-source", type=Path,
         help="clean local official github/advisory-database checkout; omit only for legacy CVE-only rebuilds",
     )
+    parser.add_argument(
+        "--kev-source", type=Path,
+        help="downloaded CISA known_exploited_vulnerabilities.json; annotates matched CVEs, requires --ghsa-source",
+    )
     parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "app/data/cve-catalog.json")
     parser.add_argument("--summary", type=Path, default=PROJECT_ROOT / "app/data/cve-learning.json")
     parser.add_argument("--check", action="store_true", help="verify all outputs match a rebuild; write nothing")
@@ -216,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         catalog, summary = build_snapshot(
             args.source.resolve(),
             args.ghsa_source.resolve() if args.ghsa_source else None,
+            args.kev_source.resolve() if args.kev_source else None,
         )
         digest = hashlib.sha256(catalog).hexdigest()
         outputs = {args.output: catalog, args.summary: summary,

@@ -5,7 +5,12 @@ const repositories: Record<string, string> = {
   cvelist: "https://github.com/CVEProject/cvelistV5",
   "github-reviewed": "https://github.com/github/advisory-database",
 };
-const labels: Record<string, string> = { cvelist: "CVE Program", "github-reviewed": "GitHub-reviewed GHSA" };
+const feeds: Record<string, string> = {
+  "cisa-kev": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+};
+const labels: Record<string, string> = { cvelist: "CVE Program", "github-reviewed": "GitHub-reviewed GHSA", "cisa-kev": "CISA KEV" };
+const kevScope = "Listing does not establish exploitation of this application; "
+  + "absence from KEV does not establish that a vulnerability is unexploited.";
 const gapLabels: Record<string, string> = {
   unsupported_bun_binary_lockfile: "Binary bun.lockb is unsupported; provide a text bun.lock",
 };
@@ -27,8 +32,14 @@ function date(value: unknown): number | null {
 
 type Metadata = { version: 1; mode: "bundled"; catalog_sha256: string | null;
   checked_at: string | null; retained_findings?: number };
-type Source = { repository: string; commit: string; generated_at: string };
+type RepositorySource = { repository: string; commit: string; generated_at: string };
+type FeedSource = { feed: string; catalog_version: string; generated_at: string; sha256: string };
+type Source = RepositorySource | FeedSource;
+type Exploitation = { status: "not_assessed" } | { status: "not_listed"; source: "cisa-kev"; snapshot: FeedSource }
+  | { status: "listed"; source: "cisa-kev"; snapshot: FeedSource; cve_id: string; date_added: string; due_date: string;
+    ransomware: "Known" | "Unknown" };
 type Coverage = { status: string; sources: Record<string, Source>; status_counts: Record<string, number>;
+  kev_listed_findings: number;
   dependencies_found: number; dependencies_checked: number; unknown_reason_counts: Record<string, number>;
   manifest_gap_reason_counts: Record<string, number>; incomplete_manifest_count: number;
   inventory_truncated: number; findings_truncated: number; evaluations_truncated: number };
@@ -41,6 +52,48 @@ export function snapshotMetadata(value: unknown): Metadata | null {
   if ("retained_findings" in value && !count(value.retained_findings)) return null;
   return { version: 1, mode: "bundled", catalog_sha256: digest as string | null, checked_at: checked as string | null,
     ...("retained_findings" in value ? { retained_findings: value.retained_findings as number } : {}) };
+}
+
+function feedSource(name: string, source: unknown): FeedSource | null {
+  if (!object(source) || source.feed !== feeds[name] || typeof source.catalog_version !== "string"
+    || !/^\d{4}\.\d{2}\.\d{2}$/.test(source.catalog_version) || typeof source.sha256 !== "string"
+    || !/^[0-9a-f]{64}$/.test(source.sha256) || date(source.generated_at) === null) return null;
+  return { feed: source.feed, catalog_version: source.catalog_version, generated_at: source.generated_at as string,
+    sha256: source.sha256 };
+}
+
+function sourceDetail(source: Source): string {
+  return "feed" in source
+    ? `${source.feed}; catalog version: ${source.catalog_version}; SHA-256: ${source.sha256}; released: ${source.generated_at}.`
+    : `${source.repository}; commit: ${source.commit}; generated: ${source.generated_at}.`;
+}
+
+// Mirrors exploitation_record: anything unreadable is null, never "not listed".
+export function exploitationRecord(value: unknown): Exploitation | null {
+  if (!object(value) || !["listed", "not_listed", "not_assessed"].includes(String(value.status))) return null;
+  if (value.status === "not_assessed") return { status: "not_assessed" };
+  const snapshot = feedSource("cisa-kev", value.snapshot);
+  if (value.source !== "cisa-kev" || !snapshot) return null;
+  if (value.status === "not_listed") return { status: "not_listed", source: "cisa-kev", snapshot };
+  const day = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  if (typeof value.cve_id !== "string" || !/^CVE-\d{4}-\d{4,19}$/.test(value.cve_id)
+    || !["Known", "Unknown"].includes(String(value.ransomware)) || !day(value.date_added) || !day(value.due_date)) return null;
+  return { status: "listed", source: "cisa-kev", snapshot, cve_id: value.cve_id, date_added: value.date_added,
+    due_date: value.due_date, ransomware: value.ransomware as "Known" | "Unknown" };
+}
+
+export function exploitationRows(value: unknown): [string, string][] {
+  const notAssessed: [string, string] = ["Known exploitation", "Not assessed; this finding's snapshot carried no exploitation source."];
+  if (value == null) return [notAssessed];
+  const record = exploitationRecord(value);
+  if (!record) return [["Known exploitation", "Recorded but unreadable; treat as not assessed."]];
+  if (record.status === "not_assessed") return [notAssessed];
+  const version = record.snapshot.catalog_version;
+  if (record.status === "not_listed") return [["Known exploitation",
+    `Not listed in CISA KEV catalog version ${version}. Absence does not establish that the vulnerability is unexploited.`]];
+  return [["Known exploitation", `Listed in the CISA Known Exploited Vulnerabilities catalog as ${record.cve_id}; `
+    + `added ${record.date_added}; federal due date ${record.due_date}; known ransomware campaign use: ${record.ransomware}. `
+    + `KEV catalog version ${version}. Exploitation elsewhere does not establish exploitation of this application.`]];
 }
 
 function reasons(value: unknown): Record<string, number> | null {
@@ -58,7 +111,8 @@ export function snapshotCoverage(value: unknown): Coverage | null {
   if (!object(counts) || !["affected", "unaffected", "unknown", "not_in_catalog"].every(k => count(counts[k]))
     || !["dependencies_found", "dependencies_checked"].every(k => count(value[k]))
     || !object(sources) || !Object.keys(sources).length
-    || Object.keys(sources).some(k => !Object.hasOwn(repositories, k))) return null;
+    || Object.keys(sources).some(k => !Object.hasOwn(repositories, k) && !Object.hasOwn(feeds, k))
+    || !count(value.kev_listed_findings ?? 0)) return null;
   const cleanSources: Record<string, Source> = {};
   for (const [name, repository] of Object.entries(repositories)) {
     if (!Object.hasOwn(sources, name)) continue;
@@ -67,6 +121,12 @@ export function snapshotCoverage(value: unknown): Coverage | null {
       || !/^[0-9a-f]{40}$/.test(source.commit) || date(source.generated_at) === null) return null;
     cleanSources[name] = { repository, commit: source.commit, generated_at: source.generated_at as string };
   }
+  for (const name of Object.keys(feeds)) {
+    if (!Object.hasOwn(sources, name)) continue;
+    const source = feedSource(name, sources[name]);
+    if (!source) return null;
+    cleanSources[name] = source;
+  }
   const unknown = reasons(value.unknown_reason_counts ?? {}), gaps = reasons(value.manifest_gap_reason_counts ?? {});
   const manifests = value.incomplete_manifests ?? {};
   if (!unknown || !gaps || !object(manifests)
@@ -74,6 +134,7 @@ export function snapshotCoverage(value: unknown): Coverage | null {
   const result: Coverage = {
     status: String(value.status), sources: cleanSources, status_counts: Object.fromEntries(
       ["affected", "unaffected", "unknown", "not_in_catalog"].map(k => [k, counts[k] as number])),
+    kev_listed_findings: (value.kev_listed_findings ?? 0) as number,
     dependencies_found: value.dependencies_found as number, dependencies_checked: value.dependencies_checked as number,
     unknown_reason_counts: unknown, manifest_gap_reason_counts: gaps, incomplete_manifest_count: Object.keys(manifests).length,
     inventory_truncated: (value.inventory_truncated ?? 0) as number,
@@ -105,8 +166,9 @@ export function snapshotRows(value: unknown, metadataValue?: unknown): [string, 
     ["Snapshot checked at", metadata?.checked_at || "Not recorded"], ["Snapshot scope", scope]];
   if (coverage.status === "unavailable") return rows;
   rows.push(["Snapshot freshness", freshness(coverage, metadata)]);
-  for (const [name, source] of Object.entries(coverage.sources)) rows.push([`Snapshot source: ${labels[name]}`,
-    `${source.repository}; commit: ${source.commit}; generated: ${source.generated_at}.`]);
+  for (const [name, source] of Object.entries(coverage.sources)) rows.push([`Snapshot source: ${labels[name]}`, sourceDetail(source)]);
+  if (Object.hasOwn(coverage.sources, "cisa-kev")) rows.push(["Snapshot known exploitation",
+    `${coverage.kev_listed_findings} reported matches are listed in CISA KEV. ${kevScope}`]);
   const counts = coverage.status_counts;
   rows.push(["Snapshot dependency coverage",
     `${coverage.dependencies_checked} of ${coverage.dependencies_found} dependency versions checked. `
@@ -154,5 +216,7 @@ export function snapshotFindingRows(value: unknown): [string, string][] {
     rows.push([`Finding snapshot source: ${labels[source.name]}`,
       `${source.repository}; commit: ${source.commit}; generated: ${source.generated_at}.`]);
   }
-  return rows.length ? rows : [["Finding snapshot source", "Not recorded or unreadable for this finding."]];
+  if (!rows.length) rows.push(["Finding snapshot source", "Not recorded or unreadable for this finding."]);
+  rows.push(...exploitationRows(value.exploitation));
+  return rows;
 }

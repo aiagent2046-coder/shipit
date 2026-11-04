@@ -280,6 +280,7 @@ def _dependency_task(findings: list[dict]) -> dict:
         versions = detail.get("matched_versions", [])
         advisories.append({
             "id": _short(detail.get("advisory_id"), 128), "url": _short(detail.get("url"), 400),
+            "known_exploited": (detail.get("exploitation") or {}).get("status") == "listed",
             "matched_ranges": [_range_preview(row) for row in ranges[:2]],
             "additional_ranges": max(0, len(ranges) - 2),
             "matched_versions": [_short(version, 128) for version in versions[:3]],
@@ -304,6 +305,8 @@ def _dependency_task(findings: list[dict]) -> dict:
             "additional_occurrences": max(0, len(locations) - 6),
             "occurrences_recorded": all(f["claim_evidence"].get("occurrences_recorded") is True
                                         for f in findings)} if locations else {}),
+        "known_exploited": any((f["claim_evidence"].get("exploitation") or {}).get("status") == "listed"
+                               for f in findings),
         "advisory_findings": len(findings), "advisory_ids": [_short(item, 128) for item in advisory_ids[:8]],
         "additional_advisory_ids": max(0, len(advisory_ids) - 8),
         "advisories": advisories, "additional_advisory_details": max(0, len(findings) - 5),

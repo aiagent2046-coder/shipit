@@ -634,5 +634,164 @@
       "Binary bun.lockb is unsupported; provide a text bun.lock",
       "0 of 0 dependency versions checked."
     ]
+  },
+  {
+    "name": "three-source-kev",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        },
+        "cisa-kev": {
+          "feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+          "catalog_version": "2026.11.03",
+          "generated_at": "2026-09-17T00:00:00Z",
+          "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0,
+      "kev_listed_findings": 1
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": "checked",
+    "notice_titles": [],
+    "fragments": [
+      "source age in days: cvelist: 2, github-reviewed: 3, cisa-kev: 1.",
+      "Snapshot source: CISA KEV",
+      "catalog version: 2026.11.03",
+      "1 reported matches are listed in CISA KEV. Listing does not establish exploitation of this application"
+    ]
+  },
+  {
+    "name": "kev-source-without-digest",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        },
+        "cisa-kev": {
+          "feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+          "catalog_version": "2026.11.03",
+          "generated_at": "2026-09-17T00:00:00Z"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0,
+      "kev_listed_findings": 1
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": null,
+    "notice_titles": [
+      "Dependency snapshot unreadable"
+    ],
+    "fragments": [
+      "Coverage not recorded or unreadable"
+    ]
+  },
+  {
+    "name": "kev-count-not-integer",
+    "coverage": {
+      "status": "checked",
+      "dependencies_found": 2,
+      "dependencies_checked": 2,
+      "status_counts": {
+        "affected": 1,
+        "unaffected": 2,
+        "unknown": 0,
+        "not_in_catalog": 0
+      },
+      "sources": {
+        "cvelist": {
+          "repository": "https://github.com/CVEProject/cvelistV5",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "generated_at": "2026-09-16T00:00:00Z"
+        },
+        "github-reviewed": {
+          "repository": "https://github.com/github/advisory-database",
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "generated_at": "2026-09-15T00:00:00Z"
+        },
+        "cisa-kev": {
+          "feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+          "catalog_version": "2026.11.03",
+          "generated_at": "2026-09-17T00:00:00Z",
+          "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      },
+      "unknown_reason_counts": {},
+      "manifest_gap_reason_counts": {},
+      "incomplete_manifests": {},
+      "inventory_truncated": 0,
+      "findings_truncated": 0,
+      "evaluations_truncated": 0,
+      "kev_listed_findings": "1"
+    },
+    "metadata": {
+      "version": 1,
+      "mode": "bundled",
+      "fingerprint": "private-cache-value",
+      "catalog_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "checked_at": "2026-09-18T00:00:00Z"
+    },
+    "status": null,
+    "notice_titles": [
+      "Dependency snapshot unreadable"
+    ],
+    "fragments": [
+      "Coverage not recorded or unreadable"
+    ]
   }
 ]

@@ -38,3 +38,31 @@ it("keeps a retained finding's original source provenance", () => {
   expect(JSON.stringify(claimEvidenceRows(finding))).toContain("d".repeat(40));
   expect(JSON.stringify(claimEvidenceRows(finding))).toContain("Application reachability was not checked.");
 });
+
+const kevSnapshot = { feed: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+  catalog_version: "2026.11.03", generated_at: "2026-11-03T20:00:24.8741Z", sha256: "e".repeat(64) };
+const kevListed = { status: "listed", source: "cisa-kev", cve_id: "CVE-2025-12345", date_added: "2026-10-01",
+  due_date: "2026-10-22", ransomware: "Known", snapshot: kevSnapshot };
+
+function dependencyFinding(exploitation?: unknown): Finding {
+  return { rule_id: "dependency-cve-match", source: "dependency", verification_method: "package_version_match",
+    claim_evidence: { version: 1, snapshot_sources: [{ name: "cvelist", repository: "https://github.com/CVEProject/cvelistV5",
+      commit: "a".repeat(40), generated_at: "2026-11-02T00:00:00Z" }],
+      ...(exploitation === undefined ? {} : { exploitation }) } } as unknown as Finding;
+}
+
+it.each([
+  [kevListed, "Listed in the CISA Known Exploited Vulnerabilities catalog as CVE-2025-12345; added 2026-10-01; "
+    + "federal due date 2026-10-22; known ransomware campaign use: Known. KEV catalog version 2026.11.03."],
+  [{ status: "not_listed", source: "cisa-kev", snapshot: kevSnapshot }, "Not listed in CISA KEV catalog version 2026.11.03. Absence does not establish"],
+  [{ status: "not_assessed" }, "Not assessed; this finding's snapshot carried no exploitation source."],
+  [undefined, "Not assessed; this finding's snapshot carried no exploitation source."],
+  [{ ...kevListed, ransomware: "Maybe" }, "Recorded but unreadable; treat as not assessed."],
+  [{ ...kevListed, snapshot: { ...kevSnapshot, sha256: "short" } }, "Recorded but unreadable; treat as not assessed."],
+  [{ status: "listed", source: "cisa-kev", snapshot: kevSnapshot }, "Recorded but unreadable; treat as not assessed."],
+  [{ status: "not_listed", source: "other", snapshot: kevSnapshot }, "Recorded but unreadable; treat as not assessed."],
+])("known exploitation row mirrors the Python report %#", (exploitation, fragment) => {
+  const rows = Object.fromEntries(claimEvidenceRows(dependencyFinding(exploitation)));
+  expect(rows["Known exploitation"]).toContain(fragment);
+  expect(evidenceLabel(dependencyFinding(exploitation))).toBe("Dependency version match — reachability unverified");
+});

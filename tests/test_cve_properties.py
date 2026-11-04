@@ -48,7 +48,8 @@ def _osv(lower, upper, closing="fixed"):
     }
 
 
-def _scan(ecosystem, version, entries):
+def _scan(ecosystem, version, entries, catalog=None):
+    catalog_transform = catalog
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
         if ecosystem == "npm":
@@ -73,7 +74,43 @@ def _scan(ecosystem, version, entries):
         },
         "packages": {f"{ecosystem}:widget": entries},
     }
-    return match_archive(stream.getvalue(), catalog)
+    return match_archive(stream.getvalue(), catalog if catalog_transform is None else catalog_transform(catalog))
+
+
+def _with_kev(catalog, listed):
+    annotated = json.loads(json.dumps(catalog))
+    annotated["schema_version"] = 3
+    annotated["sources"]["cisa-kev"] = {
+        "feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+        "catalog_version": "2026.11.03", "generated_at": "2026-11-03T20:00:24Z", "sha256": "c" * 64,
+    }
+    annotated["exploitation"] = {"cisa-kev": {
+        CVE_ID if listed else "CVE-2020-0001": {"date_added": "2026-10-01", "due_date": "2026-10-22",
+                                                "ransomware": "Unknown"}}}
+    return annotated
+
+
+@pytest.mark.parametrize("ecosystem", ["npm", "PyPI"])
+@pytest.mark.parametrize("listed", [True, False])
+@PROPERTY_SETTINGS
+@given(lower=RELEASES, width=st.integers(min_value=1, max_value=30), offset=st.integers(-1, 31))
+def test_kev_annotation_never_changes_membership_only_priority(ecosystem, listed, lower, width, offset):
+    upper = _release(lower + width)
+    entries = [_cve(ecosystem, _release(lower), upper), _osv(_release(lower), upper)]
+    target = _release(max(0, lower + offset))
+    plain = _scan(ecosystem, target, entries)
+    annotated = _scan(ecosystem, target, entries, catalog=lambda c: _with_kev(c, listed))
+    assert annotated["coverage"]["status_counts"] == plain["coverage"]["status_counts"]
+    assert annotated["coverage"]["details"] == plain["coverage"]["details"]
+    assert len(annotated["findings"]) == len(plain["findings"])
+    assert annotated["coverage"]["kev_listed_findings"] == (len(plain["findings"]) if listed else 0)
+    for before, after in zip(plain["findings"], annotated["findings"]):
+        assert after["severity"] == ("critical" if listed else "high")
+        assert before["severity"] == "high"
+        assert after["claim_evidence"]["exploitation"]["status"] == ("listed" if listed else "not_listed")
+        for key in ("advisory_id", "advisory_ids", "matched_ranges", "matched_versions", "remediation",
+                    "snapshot_sources", "installed_version", "package"):
+            assert after["claim_evidence"][key] == before["claim_evidence"][key]
 
 
 @pytest.mark.parametrize("ecosystem", ["npm", "PyPI"])

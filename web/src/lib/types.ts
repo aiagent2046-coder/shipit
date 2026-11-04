@@ -262,6 +262,8 @@ export interface Finding {
     sql_observation?: unknown;
     deserialization_observation?: unknown;
     snapshot_check_status?: "retained_not_reconfirmed";
+    exploitation?: { status: "listed" | "not_listed" | "not_assessed"; source?: "cisa-kev"; cve_id?: string;
+      date_added?: string; due_date?: string; ransomware?: "Known" | "Unknown"; snapshot?: Record<string, string> };
     source_check: { kind: "quote_match"; line_start: number; line_end: number }
       | { kind: "static_rule" | "not_recorded" };
     observation: string | null;

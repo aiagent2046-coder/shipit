@@ -202,10 +202,13 @@ def build_sarif(findings: list[dict], *, engine_version: str,
                 "consequenceStatus": record.get("consequence_status"),
             })
         if rule_id in DEPENDENCY_RULE_IDS:
+            exploitation = record.get("exploitation")
             results[-1].setdefault("properties", {}).update({
                 "dependencyEvidence": record,
                 "verificationStatus": finding.get("verification_status"),
                 "verificationMethod": finding.get("verification_method"),
+                # CISA KEV listing of the matched CVE; never a claim about this application.
+                "knownExploited": isinstance(exploitation, dict) and exploitation.get("status") == "listed",
             })
             # Origins share one assessment, so they add locations, never
             # results. Keep the representative first for existing consumers.
