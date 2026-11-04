@@ -113,6 +113,77 @@ def test_pnpm_incomplete_snapshots_preserve_gap():
     assert inv.incomplete_manifests == {'pnpm-lock.yaml': 'unresolved'}
 
 
+def package_manager_lockfile():
+    """pnpm 10+ writes the pinned package manager as its own lockfile document."""
+    return pnpm(
+        packages={'pnpm@12.11.2': {'resolution': {'integrity': 'sha512-example'}},
+                  '@pnpm/exe.linux-x64@12.11.2': {'resolution': {'integrity': 'sha512-example'}}},
+        importers={'.': {'packageManagerDependencies': {
+            'pnpm': {'specifier': '12.11.2', 'version': '12.11.2'}}}},
+        snapshots={'pnpm@12.11.2': {'optionalDependencies': {'@pnpm/exe.linux-x64': '12.11.2'}},
+                   '@pnpm/exe.linux-x64@12.11.2': {}})
+
+
+def test_pnpm_package_manager_document_and_project_lockfile_are_unioned():
+    text = '---\n' + package_manager_lockfile() + '---\n' + pnpm()
+    inv = collect_dependency_inventory(archive({'pnpm-lock.yaml': text}))
+    assert inv.incomplete_manifests == {}
+    assert {(d.name, d.version) for d in inv.dependencies} == {
+        ('pnpm', '12.11.2'), ('@pnpm/exe.linux-x64', '12.11.2'), ('lodash', '4.17.23')}
+    assert {d.name for d in inv.dependencies if d.direct} == {'pnpm', 'lodash'}
+
+
+def test_pnpm_bad_document_is_explicit_and_keeps_earlier_pins():
+    text = '---\n' + pnpm() + '---\n' + pnpm().replace("'9.0'", "'6.0'")
+    inv = collect_dependency_inventory(archive({'pnpm-lock.yaml': text}))
+    assert inv.incomplete_manifests == {'pnpm-lock.yaml': 'unsupported'}
+    assert [(d.name, d.version) for d in inv.dependencies] == [('lodash', '4.17.23')]
+    text = '---\n' + pnpm() + '---\n- not\n- a\n- lockfile\n'
+    inv = collect_dependency_inventory(archive({'pnpm-lock.yaml': text}))
+    assert inv.incomplete_manifests == {'pnpm-lock.yaml': 'malformed'}
+    assert [(d.name, d.version) for d in inv.dependencies] == [('lodash', '4.17.23')]
+
+
+def test_pnpm_gap_in_one_document_marks_whole_manifest():
+    project = pnpm(importers={'.': {
+        'dependencies': {'lodash': {'version': 'link:../local'}}}})
+    text = '---\n' + package_manager_lockfile() + '---\n' + project
+    inv = collect_dependency_inventory(archive({'pnpm-lock.yaml': text}))
+    assert inv.incomplete_manifests == {'pnpm-lock.yaml': 'unresolved'}
+    assert {(d.name, d.version) for d in inv.dependencies} == {
+        ('pnpm', '12.11.2'), ('@pnpm/exe.linux-x64', '12.11.2'), ('lodash', '4.17.23')}
+
+
+def test_pnpm_document_budget(monkeypatch):
+    from app.sca import resolved_locks
+    monkeypatch.setattr(resolved_locks, 'MAX_YAML_DOCUMENTS', 1)
+    text = '---\n' + package_manager_lockfile() + '---\n' + pnpm()
+    inv = collect_dependency_inventory(archive({'pnpm-lock.yaml': text}))
+    assert inv.incomplete_manifests == {'pnpm-lock.yaml': 'parser_limit'}
+    assert inv.dependencies == []
+
+
+def test_pnpm_empty_documents_are_skipped():
+    inv = collect_dependency_inventory(
+        archive({'pnpm-lock.yaml': '---\n---\n' + pnpm() + '---\n'}))
+    assert inv.incomplete_manifests == {}
+    assert [(d.name, d.version) for d in inv.dependencies] == [('lodash', '4.17.23')]
+
+
+def test_pnpm_catalog_specifiers_and_peer_suffixes_resolve():
+    packages = {'@rollup/plugin-alias@6.0.0': {'resolution': {'integrity': 'sha512-example'}},
+                'rollup@4.64.5': {'resolution': {'integrity': 'sha512-example'}}}
+    text = pnpm(packages, {'.': {'devDependencies': {
+        '@rollup/plugin-alias': {'specifier': 'catalog:', 'version': '6.0.0(rollup@4.64.5)'}}}},
+        {'@rollup/plugin-alias@6.0.0(rollup@4.64.5)': {'dependencies': {'rollup': '4.64.5'}},
+         'rollup@4.64.5': {}})
+    inv = collect_dependency_inventory(archive({'pnpm-lock.yaml': text}))
+    assert inv.incomplete_manifests == {}
+    assert {(d.name, d.version) for d in inv.dependencies} == {
+        ('@rollup/plugin-alias', '6.0.0'), ('rollup', '4.64.5')}
+    assert {d.name for d in inv.dependencies if d.direct} == {'@rollup/plugin-alias'}
+
+
 def test_uv_public_pins_normalization_markers_and_multiple_versions():
     text = uv() + '''
 [[package]]
