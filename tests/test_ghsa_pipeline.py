@@ -100,6 +100,44 @@ def test_two_pinned_sources_produce_one_digest_linked_catalog(sources):
     assert summary["coverage"]["sources"] == ["cvelist", "github-reviewed"]
 
 
+def kev_feed(cve_id="CVE-2026-12345"):
+    return {"title": "CISA Catalog of Known Exploited Vulnerabilities", "catalogVersion": "2026.11.03",
+            "dateReleased": "2026-11-03T20:00:24.8741Z", "count": 1, "vulnerabilities": [{
+                "cveID": cve_id, "vendorProject": "v", "product": "p", "vulnerabilityName": "n",
+                "dateAdded": "2026-11-01", "shortDescription": "d", "requiredAction": "a",
+                "dueDate": "2026-11-22", "knownRansomwareCampaignUse": "Unknown", "notes": "", "cwes": []}]}
+
+
+def test_kev_feed_annotates_the_two_source_snapshot_by_digest(sources, tmp_path):
+    cve, ghsa = sources
+    kev = tmp_path / "known_exploited_vulnerabilities.json"
+    kev.write_bytes(json.dumps(kev_feed()).encode())
+    first = pipeline.build_snapshot(cve, ghsa, kev)
+    assert pipeline.build_snapshot(cve, ghsa, kev) == first
+    catalog, summary = map(json.loads, first)
+    assert catalog["schema_version"] == 3
+    assert catalog["exploitation"]["cisa-kev"]["CVE-2026-12345"]["due_date"] == "2026-11-22"
+    assert catalog["sources"]["cisa-kev"]["sha256"] == pipeline.hashlib.sha256(kev.read_bytes()).hexdigest()
+    assert summary["sources"] == catalog["sources"]
+    assert summary["coverage"]["sources"] == ["cisa-kev", "cvelist", "github-reviewed"]
+    assert summary["stats"]["kev_in_catalog"] == 1
+    assert "CISA KEV" in summary["coverage"]["scope"]
+    # The two-source build is unchanged by the option's existence.
+    assert json.loads(pipeline.build_snapshot(cve, ghsa)[0])["schema_version"] == 2
+
+    output = tmp_path / "out" / "cve-catalog.json"
+    args = ["--source", str(cve), "--ghsa-source", str(ghsa), "--kev-source", str(kev),
+            "--output", str(output), "--summary", str(output.parent / "cve-learning.json")]
+    assert pipeline.main(args) == pipeline.main([*args, "--check"]) == 0
+    kev.write_bytes(json.dumps(kev_feed("CVE-2026-12346")).encode())
+    assert pipeline.main([*args, "--check"]) == 1
+    with pytest.raises(ValueError, match="requires --ghsa-source"):
+        pipeline.build_snapshot(cve, None, kev)
+    kev.write_bytes(b"not json")
+    with pytest.raises(ValueError, match="invalid JSON"):
+        pipeline.build_snapshot(cve, ghsa, kev)
+
+
 def test_ghsa_origin_cleanliness_and_reviewed_path_are_required(sources):
     cve, ghsa = sources
     (ghsa / "untracked.json").write_text("{}")
