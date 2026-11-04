@@ -15,18 +15,27 @@ import re
 import subprocess
 from urllib.parse import quote
 
-FILES = frozenset({
+# The builder stages all five files; a commit modifies the three advisory files whenever any source
+# moved and the two KEV context files only when the KEV checkout moved.
+ADVISORY_FILES = frozenset({
     'app/data/cve-catalog.json',
     'app/data/cve-catalog.json.sha256',
     'app/data/cve-learning.json',
 })
+KEV_FILES = frozenset({'app/data/kev-catalog.json', 'app/data/kev-catalog.json.sha256'})
+FILES = ADVISORY_FILES | KEV_FILES
 SUMMARY = 'app/data/cve-learning.json'
 PREFIX = 'automation/advisory-knowledge-'
-SOURCES = {'cvelist': 'CVEProject/cvelistV5', 'github-reviewed': 'github/advisory-database'}
+SOURCES = {'cvelist': 'CVEProject/cvelistV5', 'github-reviewed': 'github/advisory-database',
+           'cisa-kev': 'cisagov/kev-data'}
 REQUIRED = frozenset(f'.github/workflows/{name}.yml' for name in (
     'production-ci', 'browser-scan', 'web-build', 'db-postgres-smoke', 'local-package',
 ))
 SHA = re.compile(r'[0-9a-f]{40}')
+
+
+class UnsupportedProvenance(ValueError):
+    """A snapshot whose source identities this cleanup cannot compare; never a reason to close."""
 
 
 class GitHub:
@@ -67,13 +76,24 @@ def snapshot(api, repo, ref):
         raise ValueError('catalog provenance mismatch')
     sources = summary['sources']
     if set(sources) != set(SOURCES):
-        raise ValueError('expected both official sources')
+        raise UnsupportedProvenance('expected all three official sources')
     for name, repository in SOURCES.items():
         source = sources[name]
         if source.get('repository') != f'https://github.com/{repository}':
-            raise ValueError('unexpected source repository')
+            raise UnsupportedProvenance('unexpected source repository')
         if not SHA.fullmatch(source.get('commit', '')):
-            raise ValueError('invalid source SHA')
+            raise UnsupportedProvenance('invalid source SHA')
+    # kev-catalog.json is compiled from the same checkout in the same run; prove it, do not assume it.
+    context_raw = api.raw(repo, ref, 'app/data/kev-catalog.json')
+    context = json.loads(context_raw)
+    receipt = api.raw(repo, ref, 'app/data/kev-catalog.json.sha256').strip()
+    if receipt != hashlib.sha256(context_raw).hexdigest().encode():
+        raise ValueError('KEV context checksum mismatch')
+    pinned = context.get('source', {})
+    kev = sources['cisa-kev']
+    if (pinned.get('repository') != kev['repository'] or pinned.get('commit') != kev['commit']
+            or pinned.get('upstream_sha256') != kev.get('sha256')):
+        raise ValueError('KEV provenance mismatch between advisory snapshot and threat context')
     return sources
 
 
@@ -162,12 +182,19 @@ def cleanup(api, repo, branch, sha, apply=False):
         if not candidate(pr, repo, branch):
             continue
         files = api.pages(f'repos/{repo}/pulls/{number}/files')
-        if (len(files) != len(FILES) or {f['filename'] for f in files} != FILES
+        names = {f['filename'] for f in files}
+        if (len(files) != len(names) or names not in (ADVISORY_FILES, FILES)
                 or any(f['status'] != 'modified' for f in files)):
             result['skipped'].append(number)
             continue
-        old = snapshot(api, repo, pr['head']['sha'])
-        expected_branch = PREFIX + old['cvelist']['commit'][:12] + '-' + old['github-reviewed']['commit'][:12]
+        try:
+            old = snapshot(api, repo, pr['head']['sha'])
+        except UnsupportedProvenance:
+            # A proposal from an older compiler shape stays open for a maintainer; corruption still raises.
+            result['skipped'].append(number)
+            continue
+        expected_branch = (PREFIX + old['cvelist']['commit'][:12] + '-' + old['github-reviewed']['commit'][:12]
+                           + '-kev' + old['cisa-kev']['commit'][:12])
         if pr['head']['ref'] != expected_branch:
             result['skipped'].append(number)
             continue

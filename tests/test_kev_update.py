@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 import pytest
 import yaml
@@ -146,51 +145,38 @@ def test_pinned_repository_snapshot_receipt_matches_committed_bytes():
     assert catalog["entries"]
 
 
-@pytest.mark.parametrize("scenario, allowed", [
-    ("open_bot_update", True), ("already_merged", True), ("closed_unmerged", False),
-    ("human_commit", False), ("code_change", False), ("different_head", False),
-    ("human_pr", False), ("two_open_prs", False),
-])
-def test_update_guard_preserves_human_changes_and_rejected_proposals(tmp_path, scenario, allowed):
-    """Execute the actual workflow guard against real Git ancestry and PR metadata."""
-    repository = tmp_path / "repo"
-    repository.mkdir()
-    git(repository, "init", "--quiet")
-    (repository / "README.md").write_text("reviewed base\n")
-    commit(repository)
-    base = git(repository, "rev-parse", "HEAD")
-    data = repository / "app/data"
-    data.mkdir(parents=True)
-    (data / "kev-catalog.json").write_text("snapshot\n")
-    (data / "kev-catalog.json.sha256").write_text("receipt\n")
-    if scenario == "code_change":
-        (repository / "source.py").write_text("print('unexpected branch edit')\n")
-    git(repository, "add", ".")
-    git(repository, "-c", "user.name=github-actions[bot]",
-        "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-        "commit", "--quiet", "-m", "Bot update")
-    if scenario == "human_commit":
-        (data / "kev-catalog.json").write_text("human reviewed change\n")
-        commit(repository)
-    head = git(repository, "rev-parse", "HEAD")
-    if scenario != "already_merged":
-        git(repository, "checkout", "--quiet", "--detach", base)
-    pr = {"number": 1, "state": "OPEN", "mergedAt": None, "headRefOid": head,
-          "author": {"login": "app/github-actions"}, "isCrossRepository": False, "baseRefName": "main"}
-    if scenario in {"closed_unmerged", "already_merged"}:
-        pr["state"] = "CLOSED" if scenario == "closed_unmerged" else "MERGED"
-        pr["mergedAt"] = "2026-11-01T00:00:00Z" if scenario == "already_merged" else None
-    if scenario == "different_head":
-        pr["headRefOid"] = "a" * 40
-    if scenario == "human_pr":
-        pr["author"]["login"] = "maintainer"
-    prs = [pr, {**pr, "number": 2}] if scenario == "two_open_prs" else [pr]
-    (tmp_path / "kev-existing-prs.json").write_text(json.dumps(prs))
-    path = Path(__file__).resolve().parents[1] / ".github/workflows/update-kev-catalog.yml"
-    workflow = yaml.safe_load(path.read_text())
-    step = next(step for step in workflow["jobs"]["compile-and-propose"]["steps"]
-                if step.get("name") == "Maintain one reviewable KEV update PR")
-    guard = step["run"].split('OLD_HEAD="$old_head" python - <<\'PY\'\n', 1)[1].split("\nPY\n", 1)[0]
-    result = subprocess.run([sys.executable, "-c", guard], cwd=repository, capture_output=True, text=True,
-                            env={**os.environ, "OLD_HEAD": head, "RUNNER_TEMP": str(tmp_path), "BASE_BRANCH": "main"})
-    assert (result.returncode == 0) is allowed, result.stderr
+def test_bundled_advisory_snapshot_and_kev_context_share_one_pinned_source():
+    """Both artifacts must come from the same cisagov/kev-data commit and upstream blob."""
+    root = Path(__file__).resolve().parents[1]
+    context = decode_catalog((root / "app/data/kev-catalog.json").read_bytes(),
+                             (root / "app/data/kev-catalog.json.sha256").read_text().strip())[0]
+    kev = context["source"]
+    advisory = json.loads((root / "app/data/cve-learning.json").read_text())["sources"]["cisa-kev"]
+    catalog = json.loads((root / "app/data/cve-catalog.json").read_text())
+    assert catalog["sources"]["cisa-kev"] == advisory
+    assert advisory == {"repository": kev["repository"], "commit": kev["commit"],
+                        "generated_at": kev["source_committed_at"], "catalog_version": kev["catalog_version"],
+                        "sha256": kev["upstream_sha256"]}
+    # Same blob, same CVE population: neither artifact filters entries.
+    assert set(catalog["exploitation"]["cisa-kev"]) == set(context["entries"])
+
+
+def test_one_workflow_checks_out_kev_data_once_for_both_artifacts():
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / ".github/workflows/update-kev-catalog.yml").exists()
+    workflow = yaml.safe_load((root / ".github/workflows/update-cve-catalog.yml").read_text())
+    steps = workflow["jobs"]["compile-and-propose"]["steps"]
+    checkouts = [step for step in steps if step.get("with", {}).get("repository") == "cisagov/kev-data"]
+    assert len(checkouts) == 1
+    assert checkouts[0]["with"]["persist-credentials"] is False
+    assert checkouts[0]["with"]["path"] == "kev-source"
+    runs = "\n".join(step.get("run", "") for step in steps)
+    assert "cisa.gov" not in runs and "curl" not in runs
+    advisory = "build_cve_catalog.py --source cvelist-source --ghsa-source ghsa-source --kev-source kev-source"
+    assert advisory + "\n" in runs and advisory + " --check" in runs
+    assert "build_kev_catalog.py --source kev-source\n" in runs
+    assert "build_kev_catalog.py --source kev-source --check" in runs
+    staged = next(line for line in runs.splitlines() if line.strip().startswith("git add -- "))
+    assert set(staged.split()[3:]) == {"app/data/cve-catalog.json", "app/data/cve-catalog.json.sha256",
+                                       "app/data/cve-learning.json", "app/data/kev-catalog.json",
+                                       "app/data/kev-catalog.json.sha256"}
