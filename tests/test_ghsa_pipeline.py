@@ -108,16 +108,31 @@ def kev_feed(cve_id="CVE-2026-12345"):
                 "dueDate": "2026-11-22", "knownRansomwareCampaignUse": "Unknown", "notes": "", "cwes": []}]}
 
 
-def test_kev_feed_annotates_the_two_source_snapshot_by_digest(sources, tmp_path):
+@pytest.fixture
+def kev(tmp_path):
+    """An inert cisagov/kev-data checkout: the same input scripts/build_kev_catalog.py compiles."""
+    source = tmp_path / "kev"
+    source.mkdir()
+    git(source, "init", "--quiet")
+    git(source, "remote", "add", "origin", pipeline.OFFICIAL_KEV_REPOSITORY + ".git")
+    (source / pipeline.KEV_SOURCE_FILE).write_bytes(json.dumps(kev_feed()).encode())
+    commit(source, "KEV fixture")
+    return source
+
+
+def test_kev_checkout_annotates_the_two_source_snapshot_with_its_pinned_commit(sources, kev, tmp_path):
     cve, ghsa = sources
-    kev = tmp_path / "known_exploited_vulnerabilities.json"
-    kev.write_bytes(json.dumps(kev_feed()).encode())
     first = pipeline.build_snapshot(cve, ghsa, kev)
     assert pipeline.build_snapshot(cve, ghsa, kev) == first
     catalog, summary = map(json.loads, first)
     assert catalog["schema_version"] == 3
     assert catalog["exploitation"]["cisa-kev"]["CVE-2026-12345"]["due_date"] == "2026-11-22"
-    assert catalog["sources"]["cisa-kev"]["sha256"] == pipeline.hashlib.sha256(kev.read_bytes()).hexdigest()
+    # Identity is the Git provenance of the blob, exactly what kev-catalog.json records: no feed URL.
+    assert catalog["sources"]["cisa-kev"] == {
+        "repository": pipeline.OFFICIAL_KEV_REPOSITORY, "commit": git(kev, "rev-parse", "HEAD"),
+        "generated_at": git(kev, "show", "-s", "--format=%cI", "HEAD"), "catalog_version": "2026.11.03",
+        "sha256": pipeline.hashlib.sha256((kev / pipeline.KEV_SOURCE_FILE).read_bytes()).hexdigest(),
+    }
     assert summary["sources"] == catalog["sources"]
     assert summary["coverage"]["sources"] == ["cisa-kev", "cvelist", "github-reviewed"]
     assert summary["stats"]["kev_in_catalog"] == 1
@@ -129,12 +144,39 @@ def test_kev_feed_annotates_the_two_source_snapshot_by_digest(sources, tmp_path)
     args = ["--source", str(cve), "--ghsa-source", str(ghsa), "--kev-source", str(kev),
             "--output", str(output), "--summary", str(output.parent / "cve-learning.json")]
     assert pipeline.main(args) == pipeline.main([*args, "--check"]) == 0
-    kev.write_bytes(json.dumps(kev_feed("CVE-2026-12346")).encode())
+    (kev / pipeline.KEV_SOURCE_FILE).write_bytes(json.dumps(kev_feed("CVE-2026-12346")).encode())
+    # Worktree bytes are not a pinned input; only a committed change is.
+    with pytest.raises(ValueError, match="clean"):
+        pipeline.build_snapshot(cve, ghsa, kev)
+    commit(kev, "KEV update")
     assert pipeline.main([*args, "--check"]) == 1
     with pytest.raises(ValueError, match="requires --ghsa-source"):
         pipeline.build_snapshot(cve, None, kev)
-    kev.write_bytes(b"not json")
+
+
+def test_kev_checkout_must_be_official_and_carry_a_regular_json_blob(sources, kev, monkeypatch):
+    cve, ghsa = sources
+    git(kev, "remote", "set-url", "origin", "https://example.invalid/kev-data.git")
+    with pytest.raises(ValueError, match="official"):
+        pipeline.build_snapshot(cve, ghsa, kev)
+    git(kev, "remote", "set-url", "origin", pipeline.OFFICIAL_KEV_REPOSITORY)
+    (kev / pipeline.KEV_SOURCE_FILE).write_bytes(b"not json")
+    commit(kev, "Broken KEV")
     with pytest.raises(ValueError, match="invalid JSON"):
+        pipeline.build_snapshot(cve, ghsa, kev)
+    (kev / pipeline.KEV_SOURCE_FILE).chmod(0o755)
+    git(kev, "update-index", "--chmod=+x", pipeline.KEV_SOURCE_FILE)
+    git(kev, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "Executable")
+    with pytest.raises(ValueError, match="regular"):
+        pipeline.build_snapshot(cve, ghsa, kev)
+    git(kev, "rm", "--quiet", pipeline.KEV_SOURCE_FILE)
+    git(kev, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "Removed")
+    with pytest.raises(ValueError, match="regular"):
+        pipeline.build_snapshot(cve, ghsa, kev)
+    (kev / pipeline.KEV_SOURCE_FILE).write_bytes(json.dumps(kev_feed()).encode())
+    commit(kev, "Restored KEV")
+    monkeypatch.setattr(pipeline, "MAX_KEV_BYTES", 1)
+    with pytest.raises(ValueError, match="size limit"):
         pipeline.build_snapshot(cve, ghsa, kev)
 
 

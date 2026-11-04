@@ -7,9 +7,10 @@ const text = (v: unknown, max = 1024): v is string => typeof v === "string" && v
 const hash = (v: unknown, length = 64): v is string => typeof v === "string" && new RegExp(`^[0-9a-f]{${length}}$`).test(v);
 const count = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) >= 0;
 const repositories: Record<string, string> = { cvelist: "https://github.com/CVEProject/cvelistV5", "github-reviewed": "https://github.com/github/advisory-database" };
-// Feeds have no commit; their identity is the catalog version plus the digest of the downloaded bytes.
-const feeds: Record<string, string> = { "cisa-kev": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json" };
-const feedKeys = ["feed", "catalog_version", "generated_at", "sha256"];
+// KEV is pinned to the same cisagov/kev-data commit as kev-catalog.json; its identity adds the
+// upstream catalog version and the digest of the compiled blob to the usual repository pin.
+const annotations: Record<string, string> = { "cisa-kev": "https://github.com/cisagov/kev-data" };
+const annotationKeys = ["repository", "commit", "generated_at", "catalog_version", "sha256"];
 const states = new Set(["completed", "partial", "unavailable", "not_run", "not_applicable"]);
 const stage = (v: unknown): v is RecordValue => object(v) && typeof v.status === "string" && states.has(v.status);
 const label = (v: unknown) => String(v).replaceAll("_", " ");
@@ -40,10 +41,10 @@ export function projectChecksRows(value: unknown): ProjectCheckRows {
   if (deps.reason) rows.push(["Dependency check scope", String(deps.reason)]);
   rows.push(["Catalog SHA-256", String(deps.catalog_sha256 || "Not recorded")]);
   for (const [name, provenance] of Object.entries(deps.sources)) {
-    if (Object.hasOwn(feeds, name)) {
-      if (!object(provenance) || provenance.feed !== feeds[name] || !text(provenance.catalog_version, 80)
-        || !text(provenance.generated_at, 64) || !hash(provenance.sha256)) return unavailable;
-      rows.push([`Exploitation feed: ${name}`, feedKeys.map(key => `${key}: ${provenance[key]}`).join("; ")]);
+    if (Object.hasOwn(annotations, name)) {
+      if (!object(provenance) || provenance.repository !== annotations[name] || !hash(provenance.commit, 40)
+        || !text(provenance.generated_at, 64) || !text(provenance.catalog_version, 80) || !hash(provenance.sha256)) return unavailable;
+      rows.push([`Exploitation source: ${name}`, annotationKeys.map(key => `${key}: ${provenance[key]}`).join("; ")]);
       continue;
     }
     if (!Object.hasOwn(repositories, name) || !object(provenance) || provenance.repository !== repositories[name]

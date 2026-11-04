@@ -39,8 +39,8 @@ it("keeps a retained finding's original source provenance", () => {
   expect(JSON.stringify(claimEvidenceRows(finding))).toContain("Application reachability was not checked.");
 });
 
-const kevSnapshot = { feed: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
-  catalog_version: "2026.11.03", generated_at: "2026-11-03T20:00:24.8741Z", sha256: "e".repeat(64) };
+const kevSnapshot = { repository: "https://github.com/cisagov/kev-data", commit: "d".repeat(40),
+  generated_at: "2026-11-03T21:32:24Z", catalog_version: "2026.11.03", sha256: "e".repeat(64) };
 const kevListed = { status: "listed", source: "cisa-kev", cve_id: "CVE-2025-12345", date_added: "2026-10-01",
   due_date: "2026-10-22", ransomware: "Known", snapshot: kevSnapshot };
 
@@ -59,6 +59,7 @@ it.each([
   [undefined, "Not assessed; this finding's snapshot carried no exploitation source."],
   [{ ...kevListed, ransomware: "Maybe" }, "Recorded but unreadable; treat as not assessed."],
   [{ ...kevListed, snapshot: { ...kevSnapshot, sha256: "short" } }, "Recorded but unreadable; treat as not assessed."],
+  [{ ...kevListed, snapshot: { ...kevSnapshot, commit: "short" } }, "Recorded but unreadable; treat as not assessed."],
   [{ status: "listed", source: "cisa-kev", snapshot: kevSnapshot }, "Recorded but unreadable; treat as not assessed."],
   [{ status: "not_listed", source: "other", snapshot: kevSnapshot }, "Recorded but unreadable; treat as not assessed."],
 ])("known exploitation row mirrors the Python report %#", (exploitation, fragment) => {

@@ -12,9 +12,10 @@ SOURCE_REPOSITORIES = {
     "cvelist": "https://github.com/CVEProject/cvelistV5",
     "github-reviewed": "https://github.com/github/advisory-database",
 }
-FEED_SOURCES = {
-    "cisa-kev": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
-}
+# KEV is pinned like the advisory sources (same cisagov/kev-data commit as kev-catalog.json),
+# and additionally carries the upstream catalog version and the digest of the compiled blob.
+ANNOTATION_SOURCES = {"cisa-kev": "https://github.com/cisagov/kev-data"}
+ANNOTATION_KEYS = ("repository", "commit", "generated_at", "catalog_version", "sha256")
 SOURCE_LABELS = {"cvelist": "CVE Program", "github-reviewed": "GitHub-reviewed GHSA", "cisa-kev": "CISA KEV"}
 KEV_SCOPE = ("Listing does not establish exploitation of this application; "
              "absence from KEV does not establish that a vulnerability is unexploited.")
@@ -116,20 +117,21 @@ def _reasons(value: object) -> dict | None:
     return {k: v for k, v in sorted(value.items()) if v}
 
 
-def _feed_source(name: str, source: object) -> dict | None:
-    if (not isinstance(source, dict) or source.get("feed") != FEED_SOURCES[name]
+def _annotation_source(name: str, source: object) -> dict | None:
+    if (not isinstance(source, dict) or source.get("repository") != ANNOTATION_SOURCES[name]
+            or not isinstance(source.get("commit"), str) or not re.fullmatch(r"[0-9a-f]{40}", source["commit"])
             or not isinstance(source.get("catalog_version"), str)
             or not re.fullmatch(r"[0-9]{4}\.[0-9]{2}\.[0-9]{2}", source["catalog_version"])
             or not isinstance(source.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", source["sha256"])
             or _date(source.get("generated_at")) is None):
         return None
-    return {key: source[key] for key in ("feed", "catalog_version", "generated_at", "sha256")}
+    return {key: source[key] for key in ANNOTATION_KEYS}
 
 
 def _source_detail(source: dict) -> str:
-    if "feed" in source:
-        return (f"{source['feed']}; catalog version: {source['catalog_version']}; "
-                f"SHA-256: {source['sha256']}; released: {source['generated_at']}.")
+    if "catalog_version" in source:
+        return (f"{source['repository']}; commit: {source['commit']}; catalog version: {source['catalog_version']}; "
+                f"upstream SHA-256: {source['sha256']}; generated: {source['generated_at']}.")
     return f"{source['repository']}; commit: {source['commit']}; generated: {source['generated_at']}."
 
 
@@ -140,7 +142,7 @@ def exploitation_record(value: object) -> dict | None:
     status = value["status"]
     if status == "not_assessed":
         return {"status": status}
-    snapshot = _feed_source("cisa-kev", value.get("snapshot"))
+    snapshot = _annotation_source("cisa-kev", value.get("snapshot"))
     if value.get("source") != "cisa-kev" or snapshot is None:
         return None
     record = {"status": status, "source": "cisa-kev", "snapshot": snapshot}
@@ -189,7 +191,7 @@ def snapshot_coverage(value: object) -> dict | None:
         return None
     sources = value.get("sources")
     if (not isinstance(sources, dict) or not sources
-            or not set(sources) <= set(SOURCE_REPOSITORIES) | set(FEED_SOURCES)):
+            or not set(sources) <= set(SOURCE_REPOSITORIES) | set(ANNOTATION_SOURCES)):
         return None
     cleaned_sources = {}
     for name in SOURCE_REPOSITORIES:
@@ -202,10 +204,10 @@ def snapshot_coverage(value: object) -> dict | None:
                 or _date(source.get("generated_at")) is None):
             return None
         cleaned_sources[name] = {key: source[key] for key in ("repository", "commit", "generated_at")}
-    for name in FEED_SOURCES:
+    for name in ANNOTATION_SOURCES:
         if name not in sources:
             continue
-        cleaned_sources[name] = _feed_source(name, sources[name])
+        cleaned_sources[name] = _annotation_source(name, sources[name])
         if cleaned_sources[name] is None:
             return None
     if not _count(value.get("kev_listed_findings", 0)):

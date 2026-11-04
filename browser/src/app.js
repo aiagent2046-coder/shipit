@@ -607,15 +607,16 @@ function renderProjectChecks(value) {
   } else rows.push(['Source', unreadable]);
   const dependency = value.dependencies;
   const repositories = { cvelist: 'https://github.com/CVEProject/cvelistV5', 'github-reviewed': 'https://github.com/github/advisory-database' };
-  // Feeds have no commit; their identity is the catalog version plus the digest of the downloaded bytes.
-  const feeds = { 'cisa-kev': 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json' };
+  // KEV is pinned to the same cisagov/kev-data commit as kev-catalog.json; its identity adds the
+  // upstream catalog version and the digest of the compiled blob to the usual repository pin.
+  const annotations = { 'cisa-kev': 'https://github.com/cisagov/kev-data' };
   const sourcePins = record(dependency?.sources) ? Object.entries(dependency.sources) : null;
   const validPins = sourcePins && sourcePins.length <= 3 && sourcePins.every(([name, pin]) => record(pin) && (
-    Object.hasOwn(feeds, name)
-      ? pin.feed === feeds[name] && bounded(pin.catalog_version, 80) && bounded(pin.generated_at, 64) && digest(pin.sha256)
-      : Object.hasOwn(repositories, name) && pin.repository === repositories[name]
-        && typeof pin.commit === 'string' && /^[0-9a-f]{40}$/.test(pin.commit)
-        && bounded(pin.generated_at, 64)));
+    (Object.hasOwn(annotations, name) ? pin.repository === annotations[name]
+      && bounded(pin.catalog_version, 80) && digest(pin.sha256)
+      : Object.hasOwn(repositories, name) && pin.repository === repositories[name])
+    && typeof pin.commit === 'string' && /^[0-9a-f]{40}$/.test(pin.commit)
+    && bounded(pin.generated_at, 64)));
   if (record(dependency) && states.has(dependency.status)
       && ['offline_catalog', 'live_osv', 'not_run'].includes(dependency.mode)
       && count(dependency.findings) && (dependency.catalog_sha256 == null || digest(dependency.catalog_sha256))
@@ -623,7 +624,7 @@ function renderProjectChecks(value) {
     rows.push(['Vulnerability databases', `${label(dependency.status)} · ${label(dependency.mode)} · ${dependency.findings} findings${dependency.reason ? ` · ${label(dependency.reason)}` : ''}`]);
     details.push(['Catalog SHA-256', dependency.catalog_sha256 || 'Not recorded']);
     for (const [name, pin] of sourcePins) {
-      if (Object.hasOwn(feeds, name)) details.push([`Exploitation feed: ${name}`, `${pin.feed}; catalog version: ${pin.catalog_version}; SHA-256: ${pin.sha256}; released: ${pin.generated_at}`]);
+      if (Object.hasOwn(annotations, name)) details.push([`Exploitation source: ${name}`, `${pin.repository}; commit: ${pin.commit}; catalog version: ${pin.catalog_version}; upstream SHA-256: ${pin.sha256}; generated: ${pin.generated_at}`]);
       else details.push([`Advisory source: ${name}`, `${pin.repository}; commit: ${pin.commit}; generated: ${pin.generated_at}`]);
     }
   } else rows.push(['Vulnerability databases', unreadable]);

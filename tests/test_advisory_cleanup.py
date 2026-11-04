@@ -18,18 +18,32 @@ CHANGE = 'c' * 40
 MERGE = 'd' * 40
 OLD_CVE, NEW_CVE = '1' * 40, '2' * 40
 OLD_GHSA, NEW_GHSA = '3' * 40, '4' * 40
-FILES = ['app/data/cve-catalog.json', 'app/data/cve-catalog.json.sha256', 'app/data/cve-learning.json']
+OLD_KEV, NEW_KEV = '5' * 40, '6' * 40
+ADVISORY_FILES = ['app/data/cve-catalog.json', 'app/data/cve-catalog.json.sha256', 'app/data/cve-learning.json']
+KEV_FILES = ['app/data/kev-catalog.json', 'app/data/kev-catalog.json.sha256']
+FILES = ADVISORY_FILES + KEV_FILES
 
 
-def source_files(cve, ghsa):
+def branch(cve, ghsa, kev):
+    return f'automation/advisory-knowledge-{cve[:12]}-{ghsa[:12]}-kev{kev[:12]}'
+
+
+def source_files(cve, ghsa, kev, kev_context_commit=None):
     sources = {
         'cvelist': {'repository': 'https://github.com/CVEProject/cvelistV5', 'commit': cve},
         'github-reviewed': {'repository': 'https://github.com/github/advisory-database', 'commit': ghsa},
+        'cisa-kev': {'repository': 'https://github.com/cisagov/kev-data', 'commit': kev,
+                     'catalog_version': '2026.11.03', 'sha256': 'e' * 64},
     }
     data = json.dumps({'schema': 1, 'sources': sources, 'packages': {}}).encode()
     digest = hashlib.sha256(data).hexdigest()
     summary = {'schema': 1, 'kind': 'knowledge_compilation', 'sources': sources, 'catalog_sha256': digest}
-    return dict(zip(FILES, (data, f'{digest}  cve-catalog.json\n'.encode(), json.dumps(summary).encode())))
+    # kev-catalog.json is compiled from the same checkout; the cleanup proves that, not just the branch name.
+    context = json.dumps({'schema': 1, 'source': {'repository': 'https://github.com/cisagov/kev-data',
+                                                   'commit': kev_context_commit or kev, 'upstream_sha256': 'e' * 64},
+                          'entries': {}}).encode()
+    return dict(zip(FILES, (data, f'{digest}  cve-catalog.json\n'.encode(), json.dumps(summary).encode(),
+                            context, (hashlib.sha256(context).hexdigest() + '\n').encode())))
 
 
 class FakeGitHub:
@@ -47,7 +61,7 @@ class FakeGitHub:
         self.pull = {
             'number': 10, 'state': 'open', 'draft': False, 'merged_at': None, 'commits': 1,
             'user': {'login': 'github-actions[bot]'},
-            'head': {'sha': OLD, 'ref': f'automation/advisory-knowledge-{OLD_CVE[:12]}-{OLD_GHSA[:12]}',
+            'head': {'sha': OLD, 'ref': branch(OLD_CVE, OLD_GHSA, OLD_KEV),
                      'repo': {'full_name': REPO}},
             'base': {'ref': 'main', 'repo': {'full_name': REPO}},
         }
@@ -58,11 +72,12 @@ class FakeGitHub:
         }
         self.files = [{'filename': path, 'status': 'modified'} for path in FILES]
         self.blobs = [{'path': path, 'sha': str(i) * 40, 'type': 'file'} for i, path in enumerate(FILES, 1)]
-        self.content = {MAIN: source_files(NEW_CVE, NEW_GHSA), OLD: source_files(OLD_CVE, OLD_GHSA)}
+        self.content = {MAIN: source_files(NEW_CVE, NEW_GHSA, NEW_KEV), OLD: source_files(OLD_CVE, OLD_GHSA, OLD_KEV)}
         self.comparisons = {
             f'repos/{REPO}/compare/{MERGE}...{MAIN}?per_page=1': {'status': 'ahead'},
             f'repos/CVEProject/cvelistV5/compare/{OLD_CVE}...{NEW_CVE}?per_page=1': {'status': 'ahead'},
             f'repos/github/advisory-database/compare/{OLD_GHSA}...{NEW_GHSA}?per_page=1': {'status': 'ahead'},
+            f'repos/cisagov/kev-data/compare/{OLD_KEV}...{NEW_KEV}?per_page=1': {'status': 'ahead'},
         }
         self.main_reads = 0
         self.pull_reads = 0
@@ -218,6 +233,7 @@ def test_catalog_must_be_from_a_merged_pr_reachable_in_main(api, case):
 @pytest.mark.parametrize('upstream,old,new', [
     ('CVEProject/cvelistV5', OLD_CVE, NEW_CVE),
     ('github/advisory-database', OLD_GHSA, NEW_GHSA),
+    ('cisagov/kev-data', OLD_KEV, NEW_KEV),
 ])
 @pytest.mark.parametrize('relation', ['behind', 'diverged'])
 def test_newer_or_diverged_source_preserves_candidate(api, upstream, old, new, relation):
@@ -227,9 +243,48 @@ def test_newer_or_diverged_source_preserves_candidate(api, upstream, old, new, r
 
 
 def test_same_source_snapshot_is_not_treated_as_older(api):
-    api.content[OLD] = source_files(NEW_CVE, NEW_GHSA)
-    api.pull['head']['ref'] = f'automation/advisory-knowledge-{NEW_CVE[:12]}-{NEW_GHSA[:12]}'
+    api.content[OLD] = source_files(NEW_CVE, NEW_GHSA, NEW_KEV)
+    api.pull['head']['ref'] = branch(NEW_CVE, NEW_GHSA, NEW_KEV)
     assert run(api)['closed'] == api.closed == []
+
+
+def test_advisory_only_update_leaves_kev_files_untouched_and_is_still_superseded(api):
+    """When only CVE/GHSA moved, the bot commit modifies three files; KEV stays identical."""
+    api.content[OLD] = source_files(OLD_CVE, OLD_GHSA, NEW_KEV)
+    api.pull['head']['ref'] = branch(OLD_CVE, OLD_GHSA, NEW_KEV)
+    api.files = [{'filename': path, 'status': 'modified'} for path in ADVISORY_FILES]
+    assert run(api)['closed'] == [10] == api.closed
+
+
+@pytest.mark.parametrize('case', ['kev-receipt-missing', 'kev-only', 'legacy-feed-identity', 'legacy-branch'])
+def test_partial_or_legacy_kev_snapshots_are_preserved(api, case):
+    if case == 'kev-receipt-missing':
+        api.files = [f for f in api.files if f['filename'] != 'app/data/kev-catalog.json.sha256']
+    elif case == 'kev-only':
+        api.files = [{'filename': path, 'status': 'modified'} for path in KEV_FILES]
+    elif case == 'legacy-feed-identity':
+        legacy = source_files(OLD_CVE, OLD_GHSA, OLD_KEV)
+        data = json.loads(legacy['app/data/cve-catalog.json'])
+        data['sources']['cisa-kev'] = {'feed': 'https://www.cisa.gov/kev.json', 'sha256': 'e' * 64}
+        raw = json.dumps(data).encode()
+        summary = json.loads(legacy['app/data/cve-learning.json'])
+        summary.update(sources=data['sources'], catalog_sha256=hashlib.sha256(raw).hexdigest())
+        legacy.update({'app/data/cve-catalog.json': raw, 'app/data/cve-learning.json': json.dumps(summary).encode(),
+                       'app/data/cve-catalog.json.sha256': f'{summary["catalog_sha256"]}  cve-catalog.json\n'.encode()})
+        api.content[OLD] = legacy
+    else:
+        api.pull['head']['ref'] = f'automation/advisory-knowledge-{OLD_CVE[:12]}-{OLD_GHSA[:12]}-kev2026.11.03'
+    assert run(api)['closed'] == api.closed == []
+    assert api.pull['state'] == 'open'
+
+
+@pytest.mark.parametrize('ref', [MAIN, OLD])
+def test_kev_context_must_come_from_the_same_commit_as_the_advisory_snapshot(api, ref):
+    cve, ghsa, kev = (NEW_CVE, NEW_GHSA, NEW_KEV) if ref == MAIN else (OLD_CVE, OLD_GHSA, OLD_KEV)
+    api.content[ref] = source_files(cve, ghsa, kev, kev_context_commit='9' * 40)
+    with pytest.raises(ValueError, match='KEV provenance'):
+        run(api)
+    assert api.closed == []
 
 
 @pytest.mark.parametrize('case', ['manual-author', 'foreign-repo', 'wrong-base', 'fourth-file', 'extra-commit',
@@ -250,7 +305,7 @@ def test_unrelated_or_modified_pull_requests_are_preserved(api, case):
     elif case == 'unrelated-branch':
         api.pull['head']['ref'] = 'feature/catalog-improvement'
     elif case == 'wrong-pins':
-        api.pull['head']['ref'] = f'automation/advisory-knowledge-{NEW_CVE[:12]}-{NEW_GHSA[:12]}'
+        api.pull['head']['ref'] = branch(NEW_CVE, NEW_GHSA, NEW_KEV)
     else:
         api.files[0]['status'] = 'renamed'
     assert run(api)['closed'] == api.closed == []

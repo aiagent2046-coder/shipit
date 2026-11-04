@@ -85,8 +85,11 @@ The browser bundle contains only the standard-library evidence normalizer.
 ## Known exploitation (CISA KEV)
 
 The bundled snapshot (schema 3) carries a third source, `cisa-kev`: the CISA
-Known Exploited Vulnerabilities feed compiled by `scripts/build_cve_catalog.py
---kev-source`. KEV is an annotation, not an advisory source. It never adds,
+Known Exploited Vulnerabilities catalog, read by `scripts/build_cve_catalog.py
+--kev-source <checkout>` from a pinned commit of
+[`cisagov/kev-data`](https://github.com/cisagov/kev-data), the same checkout
+that compiles the `app/data/kev-catalog.json` threat context (see
+`docs/threat-context.md`). KEV is an annotation, not an advisory source. It never adds,
 removes or re-evaluates a package/version match; it is consulted only after a
 match exists, by the CVE ID of the match or the CVE aliases of a GHSA record.
 
@@ -106,9 +109,12 @@ recipe and its source binding are unchanged. Coverage reports
 `kev_listed_findings`; HTML, web and SARIF show a "Known exploitation" row, and
 SARIF results carry `properties.knownExploited`.
 
-The feed has no version history. The source identity is therefore its
-`catalogVersion`, `dateReleased` and the SHA-256 of the downloaded bytes, not a
-commit. A malformed feed fails the whole snapshot build; a schema-3 catalog
+The `cisa-kev` source identity is a repository pin like the other two sources
+(`repository`, `commit`, `generated_at` = source commit time) plus the upstream
+`catalog_version` and the `sha256` of the upstream JSON blob; these equal the
+`commit` and `upstream_sha256` recorded in `kev-catalog.json`, so one provenance
+chain covers both the per-finding annotation and the threat context. A
+malformed catalog fails the whole snapshot build; a schema-3 catalog
 with a malformed index is `unavailable`, never silently downgraded. Because
 the catalog bytes are part of the bundled-snapshot fingerprint, a KEV refresh
 re-annotates saved results through the existing snapshot refresh without a

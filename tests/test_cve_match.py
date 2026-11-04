@@ -388,8 +388,8 @@ def test_cve_alias_deduplicates_matching_sources_and_disagreement_is_unknown():
     assert result["coverage"]["details"][0]["reason"] == "conflicting_advisory_sources"
 
 
-KEV_SOURCE = {"feed": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
-              "catalog_version": "2026.11.03", "generated_at": "2026-11-03T20:00:24.8741Z", "sha256": "c" * 64}
+KEV_SOURCE = {"repository": "https://github.com/cisagov/kev-data", "commit": "d" * 40,
+              "generated_at": "2026-11-03T21:32:24Z", "catalog_version": "2026.11.03", "sha256": "c" * 64}
 KEV_RECORD = {"date_added": "2026-10-01", "due_date": "2026-10-22", "ransomware": "Known"}
 
 
@@ -450,8 +450,11 @@ def test_not_listed_and_not_assessed_stay_distinct():
 @pytest.mark.parametrize("break_catalog", [
     lambda c: c.pop("exploitation"),
     lambda c: c["sources"].pop("cisa-kev"),
-    lambda c: c["sources"]["cisa-kev"].update(feed="https://example.invalid/kev.json"),
+    lambda c: c["sources"]["cisa-kev"].update(repository="https://example.invalid/kev-data"),
+    lambda c: c["sources"]["cisa-kev"].update(commit="short"),
+    lambda c: c["sources"]["cisa-kev"].pop("commit"),
     lambda c: c["sources"]["cisa-kev"].update(sha256="short"),
+    lambda c: c["sources"]["cisa-kev"].update(generated_at="2026-11-03T21:32:24"),
     lambda c: c["sources"]["cisa-kev"].update(catalog_version="v1"),
     lambda c: c["exploitation"].update(other={}),
     lambda c: c["exploitation"]["cisa-kev"].update({"CVE-2025-12345": {**KEV_RECORD, "ransomware": "Maybe"}}),

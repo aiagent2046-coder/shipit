@@ -5,9 +5,9 @@ const repositories: Record<string, string> = {
   cvelist: "https://github.com/CVEProject/cvelistV5",
   "github-reviewed": "https://github.com/github/advisory-database",
 };
-const feeds: Record<string, string> = {
-  "cisa-kev": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
-};
+// KEV is pinned like the advisory sources (same cisagov/kev-data commit as kev-catalog.json),
+// and additionally carries the upstream catalog version and the digest of the compiled blob.
+const annotations: Record<string, string> = { "cisa-kev": "https://github.com/cisagov/kev-data" };
 const labels: Record<string, string> = { cvelist: "CVE Program", "github-reviewed": "GitHub-reviewed GHSA", "cisa-kev": "CISA KEV" };
 const kevScope = "Listing does not establish exploitation of this application; "
   + "absence from KEV does not establish that a vulnerability is unexploited.";
@@ -33,10 +33,10 @@ function date(value: unknown): number | null {
 type Metadata = { version: 1; mode: "bundled"; catalog_sha256: string | null;
   checked_at: string | null; retained_findings?: number };
 type RepositorySource = { repository: string; commit: string; generated_at: string };
-type FeedSource = { feed: string; catalog_version: string; generated_at: string; sha256: string };
-type Source = RepositorySource | FeedSource;
-type Exploitation = { status: "not_assessed" } | { status: "not_listed"; source: "cisa-kev"; snapshot: FeedSource }
-  | { status: "listed"; source: "cisa-kev"; snapshot: FeedSource; cve_id: string; date_added: string; due_date: string;
+type AnnotationSource = RepositorySource & { catalog_version: string; sha256: string };
+type Source = RepositorySource | AnnotationSource;
+type Exploitation = { status: "not_assessed" } | { status: "not_listed"; source: "cisa-kev"; snapshot: AnnotationSource }
+  | { status: "listed"; source: "cisa-kev"; snapshot: AnnotationSource; cve_id: string; date_added: string; due_date: string;
     ransomware: "Known" | "Unknown" };
 type Coverage = { status: string; sources: Record<string, Source>; status_counts: Record<string, number>;
   kev_listed_findings: number;
@@ -54,17 +54,19 @@ export function snapshotMetadata(value: unknown): Metadata | null {
     ...("retained_findings" in value ? { retained_findings: value.retained_findings as number } : {}) };
 }
 
-function feedSource(name: string, source: unknown): FeedSource | null {
-  if (!object(source) || source.feed !== feeds[name] || typeof source.catalog_version !== "string"
+function annotationSource(name: string, source: unknown): AnnotationSource | null {
+  if (!object(source) || source.repository !== annotations[name] || typeof source.commit !== "string"
+    || !/^[0-9a-f]{40}$/.test(source.commit) || typeof source.catalog_version !== "string"
     || !/^\d{4}\.\d{2}\.\d{2}$/.test(source.catalog_version) || typeof source.sha256 !== "string"
     || !/^[0-9a-f]{64}$/.test(source.sha256) || date(source.generated_at) === null) return null;
-  return { feed: source.feed, catalog_version: source.catalog_version, generated_at: source.generated_at as string,
-    sha256: source.sha256 };
+  return { repository: source.repository, commit: source.commit, generated_at: source.generated_at as string,
+    catalog_version: source.catalog_version, sha256: source.sha256 };
 }
 
 function sourceDetail(source: Source): string {
-  return "feed" in source
-    ? `${source.feed}; catalog version: ${source.catalog_version}; SHA-256: ${source.sha256}; released: ${source.generated_at}.`
+  return "catalog_version" in source
+    ? `${source.repository}; commit: ${source.commit}; catalog version: ${source.catalog_version}; `
+      + `upstream SHA-256: ${source.sha256}; generated: ${source.generated_at}.`
     : `${source.repository}; commit: ${source.commit}; generated: ${source.generated_at}.`;
 }
 
@@ -72,7 +74,7 @@ function sourceDetail(source: Source): string {
 export function exploitationRecord(value: unknown): Exploitation | null {
   if (!object(value) || !["listed", "not_listed", "not_assessed"].includes(String(value.status))) return null;
   if (value.status === "not_assessed") return { status: "not_assessed" };
-  const snapshot = feedSource("cisa-kev", value.snapshot);
+  const snapshot = annotationSource("cisa-kev", value.snapshot);
   if (value.source !== "cisa-kev" || !snapshot) return null;
   if (value.status === "not_listed") return { status: "not_listed", source: "cisa-kev", snapshot };
   const day = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -111,7 +113,7 @@ export function snapshotCoverage(value: unknown): Coverage | null {
   if (!object(counts) || !["affected", "unaffected", "unknown", "not_in_catalog"].every(k => count(counts[k]))
     || !["dependencies_found", "dependencies_checked"].every(k => count(value[k]))
     || !object(sources) || !Object.keys(sources).length
-    || Object.keys(sources).some(k => !Object.hasOwn(repositories, k) && !Object.hasOwn(feeds, k))
+    || Object.keys(sources).some(k => !Object.hasOwn(repositories, k) && !Object.hasOwn(annotations, k))
     || !count(value.kev_listed_findings ?? 0)) return null;
   const cleanSources: Record<string, Source> = {};
   for (const [name, repository] of Object.entries(repositories)) {
@@ -121,9 +123,9 @@ export function snapshotCoverage(value: unknown): Coverage | null {
       || !/^[0-9a-f]{40}$/.test(source.commit) || date(source.generated_at) === null) return null;
     cleanSources[name] = { repository, commit: source.commit, generated_at: source.generated_at as string };
   }
-  for (const name of Object.keys(feeds)) {
+  for (const name of Object.keys(annotations)) {
     if (!Object.hasOwn(sources, name)) continue;
-    const source = feedSource(name, sources[name]);
+    const source = annotationSource(name, sources[name]);
     if (!source) return null;
     cleanSources[name] = source;
   }
