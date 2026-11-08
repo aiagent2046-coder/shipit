@@ -96,6 +96,16 @@ def require_active(contract_id: str) -> Authorization:
     return auth
 
 
+def revoke(contract_id: str) -> bool:
+    """Remove an authorization record by validated contract id."""
+    cid = _validate_contract_id(contract_id)
+    path = AUTH_DIR / f"{cid}.json"
+    if path.is_file():
+        path.unlink()
+        return True
+    return False
+
+
 def enforce_passive_http(method: str) -> None:
     if method.upper() not in PASSIVE_METHODS:
         raise ActiveModeUnauthorised(

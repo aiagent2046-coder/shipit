@@ -7,11 +7,18 @@ import sys
 from pathlib import Path
 
 ENV_ROOT = "SCOUT_SHIPIT_ROOT"
+IN_TREE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ROOT = Path.home() / "shipit"
 
 
 def shipit_root() -> Path:
-    root = Path(os.environ.get(ENV_ROOT, DEFAULT_ROOT)).resolve()
+    env = os.environ.get(ENV_ROOT)
+    if env:
+        root = Path(env).resolve()
+    elif (IN_TREE_ROOT / "app" / "scan" / "cve_match.py").is_file():
+        root = IN_TREE_ROOT
+    else:
+        root = DEFAULT_ROOT.resolve()
     if not (root / "app" / "scan" / "cve_match.py").is_file():
         raise FileNotFoundError(
             f"shipit checkout not found at {root}; set {ENV_ROOT} to the repo root"

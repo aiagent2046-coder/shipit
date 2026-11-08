@@ -10,6 +10,7 @@ from scout.guard import (
     activate,
     enforce_passive_http,
     require_active,
+    revoke,
 )
 
 
@@ -128,12 +129,25 @@ def test_select_into_is_refused_like_a_write() -> None:
 
 
 def test_contract_ids_cannot_walk_the_filesystem(tmp_path) -> None:
-    for bad in ("../../pwned", "a/b", "..", "x y", "id.json/.."):
+    victim = tmp_path / "victim.json"
+    victim.write_text('{"keep": true}')
+    for bad in ("../../pwned", "../victim", "a/b", "..", "x y", "id.json/..", ""):
         with pytest.raises(ActiveModeUnauthorised, match="contract_id"):
             activate(bad, ["db"], hours=1)
         with pytest.raises(ActiveModeUnauthorised, match="contract_id"):
             require_active(bad)
-    assert not list(tmp_path.rglob("*.json"))  # nothing was written anywhere
+        with pytest.raises(ActiveModeUnauthorised, match="contract_id"):
+            revoke(bad)
+    assert victim.is_file()
+    assert not list((tmp_path / "authorizations").rglob("*.json"))
+
+
+def test_revoke_removes_record_and_returns_status() -> None:
+    activate("contract-rm", ["db"], hours=1)
+    assert revoke("contract-rm") is True
+    assert revoke("contract-rm") is False
+    with pytest.raises(ActiveModeUnauthorised):
+        require_active("contract-rm")
 
 
 def test_contract_id_with_safe_punctuation_still_works() -> None:

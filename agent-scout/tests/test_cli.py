@@ -40,7 +40,6 @@ def sent_registry_isolated(tmp_path, monkeypatch):
 def auth_dir(monkeypatch, tmp_path):
     path = tmp_path / "authorizations"
     monkeypatch.setattr(guard, "AUTH_DIR", path)
-    monkeypatch.setattr(cli, "AUTH_DIR", path)
     return path
 
 
@@ -142,6 +141,14 @@ def test_auth_add_list_rm(auth_dir, capsys):
 
 def test_auth_add_requires_scope(auth_dir):
     assert cli.main(["auth", "add", "--contract", "c-2"]) == 3
+
+
+def test_auth_rm_refuses_path_traversal_and_leaves_files_intact(auth_dir, tmp_path, capsys):
+    victim = tmp_path / "victim.json"
+    victim.write_text('{"keep": true}')
+    assert cli.main(["auth", "rm", "--contract", "../victim"]) == 3
+    assert "refused" in capsys.readouterr().err
+    assert victim.is_file()
 
 
 def test_hunt_kev_targets_ranked_and_clean_skipped(tmp_path, monkeypatch):
@@ -594,6 +601,24 @@ def test_audit_reports_failed_llm_honestly(auth_dir, tmp_path, monkeypatch,
     assert "llm:      failed: 402" in capsys.readouterr().out
 
 
+def test_audit_reports_partial_llm_failure_honestly(auth_dir, tmp_path,
+                                                    monkeypatch, capsys):
+    guard.activate("c-1", scope=["db.example"], hours=24)
+    monkeypatch.setattr(recon, "github_manifests",
+                        lambda o, r: {"requirements.txt": b"x\n"})
+
+    def fake_run_audit(contract_id, files, **kwargs):
+        return {"contract_id": contract_id, "target": "t", "engine_commit": "x",
+                "result": {"findings": [], "score": {},
+                           "llm": {"failure": "cost_cap_exceeded", "prompts": 2},
+                           "llm_usage": None, "sca": {}}}
+    import scout.audit as audit_mod
+    monkeypatch.setattr(audit_mod, "run_audit", fake_run_audit)
+    assert cli.main(["audit", "--contract", "c-1", "--repo", "o/r",
+                     "--out", str(tmp_path)]) == 0
+    assert "llm:      partial - cost_cap_exceeded" in capsys.readouterr().out
+
+
 def test_audit_writes_deep_report(auth_dir, tmp_path, monkeypatch, capsys):
     guard.activate("c-1", scope=["db.example"], hours=24)
     monkeypatch.setattr(recon, "github_manifests",
@@ -643,6 +668,66 @@ def test_audit_accepts_customer_archive(auth_dir, tmp_path, monkeypatch, capsys)
     assert seen["app/main.py"] == b"print('hello')\n"
     assert "app/" not in seen  # directory entries are not artifacts
     assert seen["_target"] == "customer-repo"
+
+
+def test_audit_archive_and_repo_merges_files(auth_dir, tmp_path, monkeypatch):
+    import zipfile
+    guard.activate("c-1", scope=["customer"], hours=24)
+    archive = tmp_path / "customer-repo.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("app/main.py", "print('hello')\n")
+    monkeypatch.setattr(recon, "github_manifests",
+                        lambda o, r: {"requirements.txt": b"flask==3.0.0\n"})
+    seen = {}
+
+    def fake_run_audit(contract_id, files, **kwargs):
+        seen.update(files)
+        return {"contract_id": contract_id, "target": kwargs.get("target"),
+                "engine_commit": "x",
+                "result": {"findings": [], "score": {},
+                           "llm": {"skipped_reason": "no_providers_configured"},
+                           "llm_usage": None, "sca": {}}}
+    import scout.audit as audit_mod
+    monkeypatch.setattr(audit_mod, "run_audit", fake_run_audit)
+    assert cli.main(["audit", "--contract", "c-1", "--archive", str(archive),
+                     "--repo", "o/r", "--out", str(tmp_path)]) == 0
+    assert "app/main.py" in seen
+    assert "requirements.txt" in seen
+
+
+def test_audit_unreadable_archive_and_db_evidence_fail_cleanly(auth_dir, tmp_path,
+                                                               monkeypatch, capsys):
+    guard.activate("c-1", scope=["customer"], hours=24)
+    missing = tmp_path / "missing.zip"
+    assert cli.main(["audit", "--contract", "c-1", "--archive", str(missing),
+                     "--out", str(tmp_path)]) == 1
+    assert "unreadable archive" in capsys.readouterr().err
+
+    corrupt = tmp_path / "corrupt.zip"
+    corrupt.write_bytes(b"not a zip archive")
+    assert cli.main(["audit", "--contract", "c-1", "--archive", str(corrupt),
+                     "--out", str(tmp_path)]) == 1
+    assert "unreadable archive" in capsys.readouterr().err
+
+    monkeypatch.setattr(recon, "github_manifests",
+                        lambda o, r: {"requirements.txt": b"x\n"})
+    import scout.audit as audit_mod
+    monkeypatch.setattr(audit_mod, "run_audit", lambda cid, files, **kw: {
+        "contract_id": cid, "target": "t", "engine_commit": "x",
+        "result": {"findings": [], "score": {},
+                   "llm": {"skipped_reason": "no_providers_configured"},
+                   "llm_usage": None, "sca": {}}})
+    bad_ev = tmp_path / "bad.json"
+    bad_ev.write_text("{broken")
+    assert cli.main(["audit", "--contract", "c-1", "--repo", "o/r",
+                     "--db-evidence", str(bad_ev), "--out", str(tmp_path)]) == 1
+    assert "unreadable --db-evidence" in capsys.readouterr().err
+
+    dict_ev = tmp_path / "dict.json"
+    dict_ev.write_text('{"not": "a list"}')
+    assert cli.main(["audit", "--contract", "c-1", "--repo", "o/r",
+                     "--db-evidence", str(dict_ev), "--out", str(tmp_path)]) == 1
+    assert "must be a JSON list" in capsys.readouterr().err
 
 
 def test_audit_refuses_oversized_archive(auth_dir, tmp_path, monkeypatch, capsys):
@@ -708,7 +793,7 @@ def test_db_query_runs_and_audits(auth_dir, tmp_path, monkeypatch, capsys):
         def close(self):
             pass
     monkeypatch.setattr(db_mod, "postgres_connect", lambda dsn: lambda: Conn())
-    assert cli.main(["db", "query", "--contract", "c-4",
+    assert cli.main(["db", "query", "--contract", "  c-4  ",
                      "--target", "db.example", "SELECT 1"]) == 0
     out = capsys.readouterr().out
     assert "(1, 'row-a')" in out and "(2, 'row-b')" in out

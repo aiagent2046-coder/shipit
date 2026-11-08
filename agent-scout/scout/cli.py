@@ -21,9 +21,9 @@ import urllib.parse
 from pathlib import Path
 
 from scout import engine as engine_mod
-from scout import recon, refresh
+from scout import guard, recon, refresh
 from scout.active import ReadOnlyViolation
-from scout.guard import AUTH_DIR, ActiveModeUnauthorised, activate
+from scout.guard import ActiveModeUnauthorised, activate, revoke
 from scout.registry import RegistryError
 
 MAX_ARCHIVE_MEMBERS = 10_000
@@ -222,14 +222,13 @@ def cmd_auth(args: argparse.Namespace) -> int:
               f"until {auth.expires_at:.0f} (scope: {', '.join(auth.scope)})")
         return 0
     if args.action == "list":
-        for path in sorted(AUTH_DIR.glob("*.json")) if AUTH_DIR.is_dir() else []:
+        for path in sorted(guard.AUTH_DIR.glob("*.json")) if guard.AUTH_DIR.is_dir() else []:
             print(path.read_text())
         return 0
     if args.action == "rm":
-        path = AUTH_DIR / f"{args.contract}.json"
-        if path.is_file():
-            path.unlink()
-            print(f"removed {args.contract}")
+        cid = args.contract.strip()
+        if revoke(args.contract):
+            print(f"removed {cid}")
         return 0
     return 2
 
@@ -365,7 +364,7 @@ def cmd_db(args: argparse.Namespace) -> int:
     runner = ReadOnlyQueryRunner(
         auth=session.auth, connect=connect,
         statement_timeout_ms=args.timeout_ms,
-        audit_path=AUDIT_LOG_DIR / f"{args.contract}.jsonl")
+        audit_path=AUDIT_LOG_DIR / f"{session.auth.contract_id}.jsonl")
     rows = runner.query(args.sql)
     for row in rows[:50]:
         print(row)
@@ -388,24 +387,40 @@ def cmd_audit(args: argparse.Namespace) -> int:
     target = args.url or args.repo or ""
     if args.archive:
         import zipfile
-        with zipfile.ZipFile(args.archive) as zf:
-            infos = zf.infolist()
-            total = sum(info.file_size for info in infos)
-            if len(infos) > MAX_ARCHIVE_MEMBERS or total > MAX_ARCHIVE_BYTES:
-                print(f"error: archive exceeds the audit bound "
-                      f"({len(infos)} members / {total} bytes; max "
-                      f"{MAX_ARCHIVE_MEMBERS} / {MAX_ARCHIVE_BYTES})",
-                      file=sys.stderr)
-                return 1
-            files = {name: zf.read(name) for name in zf.namelist()
-                     if not name.endswith("/")}
+        try:
+            with zipfile.ZipFile(args.archive) as zf:
+                infos = zf.infolist()
+                total = sum(info.file_size for info in infos)
+                if len(infos) > MAX_ARCHIVE_MEMBERS or total > MAX_ARCHIVE_BYTES:
+                    print(f"error: archive exceeds the audit bound "
+                          f"({len(infos)} members / {total} bytes; max "
+                          f"{MAX_ARCHIVE_MEMBERS} / {MAX_ARCHIVE_BYTES})",
+                          file=sys.stderr)
+                    return 1
+                read_bytes = 0
+                for name in zf.namelist():
+                    if name.endswith("/"):
+                        continue
+                    data = zf.read(name)
+                    read_bytes += len(data)
+                    if read_bytes > MAX_ARCHIVE_BYTES:
+                        print(f"error: archive exceeds the audit bound "
+                              f"({read_bytes} unpacked bytes; max "
+                              f"{MAX_ARCHIVE_BYTES})",
+                              file=sys.stderr)
+                        return 1
+                    files[name] = data
+        except (OSError, zipfile.BadZipFile) as exc:
+            print(f"error: unreadable archive {args.archive!r}: {exc}",
+                  file=sys.stderr)
+            return 1
         target = Path(args.archive).stem
     if args.repo:
         owner, _, repo = args.repo.partition("/")
         if not owner or not repo:
             print("error: --repo expects owner/name", file=sys.stderr)
             return 2
-        files = recon.manifest_archive(recon.github_manifests(owner, repo))
+        files.update(recon.manifest_archive(recon.github_manifests(owner, repo)))
         target = f"github.com/{owner}/{repo}"
     if args.url:
         files.update(recon.manifest_archive(recon.manifests_from_site(args.url)))
@@ -420,16 +435,30 @@ def cmd_audit(args: argparse.Namespace) -> int:
     result = report["result"]
     llm = result.get("llm")
     if isinstance(llm, dict):
-        llm_status = f"skipped ({llm.get('skipped_reason')})" \
-            if llm.get("skipped_reason") else "ran"
+        if llm.get("failure"):
+            llm_status = f"partial - {llm['failure']}"
+        elif llm.get("skipped_reason"):
+            llm_status = f"skipped ({llm['skipped_reason']})"
+        else:
+            llm_status = "ran"
     else:
         llm_status = str(llm)
     stem = re.sub(r"[^\w.-]", "_", target.split("//")[-1])
     path = _out_path(args, f"{stem}-audit.json")
     path.write_text(json.dumps(report, indent=1, default=str))
     from scout.report import render_deep_report
-    evidence = json.loads(Path(args.db_evidence).read_text()) \
-        if args.db_evidence else None
+    evidence = None
+    if args.db_evidence:
+        try:
+            evidence = json.loads(Path(args.db_evidence).read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"error: unreadable --db-evidence {args.db_evidence!r}: {exc}",
+                  file=sys.stderr)
+            return 1
+        if not isinstance(evidence, list):
+            print(f"error: --db-evidence {args.db_evidence!r} must be a JSON list",
+                  file=sys.stderr)
+            return 1
     deep_path = _out_path(args, f"{stem}-deep-report.md")
     deep_path.write_text(render_deep_report(report, evidence))
     print(f"audit:    contract {report['contract_id']} engine {report['engine_commit']}")

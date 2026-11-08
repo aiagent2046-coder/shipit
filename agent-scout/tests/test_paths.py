@@ -59,3 +59,13 @@ def test_engine_commit_git_failure_is_none(checkout, monkeypatch):
 def test_engine_commit_empty_output_is_none(checkout, monkeypatch):
     monkeypatch.setattr(paths.subprocess, "run", lambda *a, **k: completed("  \n"))
     assert paths.engine_commit() is None
+
+
+def test_shipit_root_resolves_in_tree_before_home_default(monkeypatch, tmp_path):
+    monkeypatch.delenv(paths.ENV_ROOT, raising=False)
+    monkeypatch.setattr(paths, "DEFAULT_ROOT", tmp_path / "missing-home-shipit")
+    assert paths.shipit_root() == paths.IN_TREE_ROOT
+
+    monkeypatch.setattr(paths, "IN_TREE_ROOT", tmp_path / "missing-in-tree")
+    with pytest.raises(FileNotFoundError):
+        paths.shipit_root()

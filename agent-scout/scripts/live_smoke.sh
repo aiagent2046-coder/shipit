@@ -13,11 +13,20 @@
 set -u
 
 REAL_HOME="${HOME}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCOUT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCOUT_DIR/.." && pwd)"
 SMOKE_HOME="$(mktemp -d /tmp/scout-smoke.XXXXXX)"
 export HOME="$SMOKE_HOME"
-export SCOUT_SHIPIT_ROOT="${SCOUT_SHIPIT_ROOT:-$REAL_HOME/shipit}"
-SCOUT="$REAL_HOME/agent-scout/.venv/bin/scout"
-cd "$REAL_HOME/agent-scout" || exit 1
+export SCOUT_SHIPIT_ROOT="${SCOUT_SHIPIT_ROOT:-$REPO_ROOT}"
+if [ -x "$SCOUT_DIR/.venv/bin/scout" ]; then
+  SCOUT="$SCOUT_DIR/.venv/bin/scout"
+elif [ -x "$REPO_ROOT/.venv/bin/python" ]; then
+  SCOUT="$REPO_ROOT/.venv/bin/python -m scout.cli"
+else
+  SCOUT="python3 -m scout.cli"
+fi
+cd "$SCOUT_DIR" || exit 1
 
 SMOKE_URL="${SMOKE_URL:-https://www.mozilla.org}"
 SMOKE_REPO="${SMOKE_REPO:-hoppscotch/hoppscotch}"
@@ -49,17 +58,17 @@ step() {
 }
 
 step "scan --url: profile + security.txt + source maps" \
-  "report:" rc1-ok "$SCOUT" scan --url "$SMOKE_URL" --out "$OUT"
+  "report:" rc1-ok $SCOUT scan --url "$SMOKE_URL" --out "$OUT"
 step "scan --repo: manifest probes + engine" \
-  "findings:" strict "$SCOUT" scan --repo "$SMOKE_REPO" --out "$OUT"
+  "findings:" strict $SCOUT scan --repo "$SMOKE_REPO" --out "$OUT"
 step "hunt --source gitlab: candidate search + manifests" \
-  "hunt report:" strict "$SCOUT" hunt --query "$SMOKE_QUERY" --limit 1 --source gitlab --out "$OUT"
+  "hunt report:" strict $SCOUT hunt --query "$SMOKE_QUERY" --limit 1 --source gitlab --out "$OUT"
 step "registry list" \
-  "drafted" strict "$SCOUT" registry list
+  "drafted" strict $SCOUT registry list
 step "registry refresh --re-record: refetch + verify + contact backfill" \
-  "refresh:" strict "$SCOUT" registry refresh --re-record
+  "refresh:" strict $SCOUT registry refresh --re-record
 step "outreach send --dry-run: quota machinery" \
-  "nothing sent|nothing to deliver" strict "$SCOUT" outreach send --dry-run
+  "nothing sent|nothing to deliver" strict $SCOUT outreach send --dry-run
 
 echo "----"
 echo "sandbox: $SMOKE_HOME (operator registry untouched: $REAL_HOME/.agent-scout)"
