@@ -51,7 +51,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "f266475015dee399"
+PROMPT_FINGERPRINT = "f0c173c42450c13b"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -1160,12 +1160,15 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
         str(llm_scan.MAX_TOTAL_CHARS),
         str(llm_scan.RELEVANCE_BUDGET_SHARE),
         str(llm_scan.SUPPORT_BUDGET_SHARE),
+        str(llm_scan.IMPORT_CONTEXT_BUDGET_SHARE),
+        str(llm_scan.IMPORT_CONTEXT_ANCHOR_FILES),
         repr(sorted(llm_scan._PROJECT_METADATA)),
         repr(sorted(llm_scan._LLM_DEPENDENCY_LOCKFILES)),
         inspect.getsource(llm_scan.is_dependency_lockfile),
         inspect.getsource(llm_scan.has_application_source),
         inspect.getsource(prompt_context),
         inspect.getsource(llm_scan._select_ranked_files),
+        inspect.getsource(llm_scan._select_imported_production_files),
         # How fine the relevance reserve is sliced per file. getsource sees
         # only the NAME inside select_files, so changing this number would
         # otherwise move no guard at all while changing every narrow-window

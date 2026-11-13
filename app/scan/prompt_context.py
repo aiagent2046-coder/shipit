@@ -140,26 +140,16 @@ def _module_stem(path: str) -> str:
     return ""
 
 
-def related_test(path: str, production_paths: Iterable[str], text: str = "") -> bool:
-    """Exact module-name or static-import evidence, never rubric keyword overlap."""
-    if not is_non_production_path(path):
-        return False
-    sources = {p for p in production_paths if not is_non_production_path(p)}
-    stems = {_module_stem(p) for p in sources} - {"", "index", "__init__", "main"}
-    stem = _module_stem(path)
-    normalized = re.sub(r"^(?:test_|spec_)", "", stem)
-    normalized = re.sub(r"(?:_test|_spec|\.test|\.spec)$", "", normalized)
-    if normalized != stem and normalized in stems:
-        return True
+def _static_import_references(path: str, text: str) -> set[str]:
+    """Extract normalized module reference stems from anchored static imports."""
     if not text:
-        return False
+        return set()
     references: set[str] = set()
-    modules = {str(PurePosixPath(p).with_suffix("")) for p in sources}
     if path.endswith(".py"):
         try:
             tree = ast.parse(text)
         except (SyntaxError, ValueError, RecursionError):
-            return False
+            return set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 references.update(alias.name.replace(".", "/") for alias in node.names)
@@ -178,9 +168,62 @@ def related_test(path: str, production_paths: Iterable[str], text: str = "") -> 
         # or require() spellings embedded in comments or string literals.
         for match in re.finditer(r"(?m)^\s*import\s+(?:[^\n;]*?\s+from\s+)?['\"]([^'\"\n]+)['\"]", text):
             reference = match.group(1)
-            if not reference.startswith("."):
+            if reference.startswith("."):
+                module = posixpath.normpath(posixpath.join(str(PurePosixPath(path).parent), reference))
+            elif reference.startswith(("@/", "~/")):
+                module = posixpath.normpath(reference[2:])
+            else:
                 continue
-            module = posixpath.normpath(posixpath.join(str(PurePosixPath(path).parent), reference))
             references.add(str(PurePosixPath(module).with_suffix("")) if _module_stem(module) else module)
-    return any(source == reference or source.endswith("/" + reference)
-               for source in modules for reference in references if reference)
+    return {ref for ref in references if ref and ref != "."}
+
+
+def _matches_module_reference(candidate_module: str, reference: str) -> bool:
+    for target in (candidate_module,
+                   candidate_module[:-len("/index")] if candidate_module.endswith("/index") else "",
+                   candidate_module[:-len("/__init__")] if candidate_module.endswith("/__init__") else ""):
+        if target and (target == reference or target.endswith("/" + reference)):
+            return True
+    return False
+
+
+def imported_production_files(
+    selected_sources: Iterable[tuple[str, str]],
+    candidate_files: Iterable[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Return 1-hop statically imported production files not yet in selected_sources."""
+    selected_list = list(selected_sources)
+    selected_names = {name for name, _ in selected_list}
+    references: set[str] = set()
+    for name, text in selected_list:
+        if not is_non_production_path(name):
+            references.update(_static_import_references(name, text))
+    if not references:
+        return []
+    linked: list[tuple[str, str]] = []
+    for path, text in candidate_files:
+        if path in selected_names or is_non_production_path(path) or not _module_stem(path):
+            continue
+        mod = str(PurePosixPath(path).with_suffix(""))
+        if any(_matches_module_reference(mod, ref) for ref in references):
+            linked.append((path, text))
+    return sorted(linked, key=lambda item: (len(item[1]), item[0]))
+
+
+def related_test(path: str, production_paths: Iterable[str], text: str = "") -> bool:
+    """Exact module-name or static-import evidence, never rubric keyword overlap."""
+    if not is_non_production_path(path):
+        return False
+    sources = {p for p in production_paths if not is_non_production_path(p)}
+    stems = {_module_stem(p) for p in sources} - {"", "index", "__init__", "main"}
+    stem = _module_stem(path)
+    normalized = re.sub(r"^(?:test_|spec_)", "", stem)
+    normalized = re.sub(r"(?:_test|_spec|\.test|\.spec)$", "", normalized)
+    if normalized != stem and normalized in stems:
+        return True
+    if not text:
+        return False
+    references = _static_import_references(path, text)
+    modules = {str(PurePosixPath(p).with_suffix("")) for p in sources}
+    return any(_matches_module_reference(source, reference)
+               for source in modules for reference in references)

@@ -1,7 +1,13 @@
 """Offline coverage and coordinate contracts for context compaction."""
 import re
 
-from app.scan.prompt_context import PromptExcerpt, numbered_lines, python_excerpt, related_test
+from app.scan.prompt_context import (
+    PromptExcerpt,
+    imported_production_files,
+    numbered_lines,
+    python_excerpt,
+    related_test,
+)
 
 
 KEYWORDS = re.compile(r"auth|password|session|jwt|token", re.I)
@@ -114,3 +120,33 @@ def test_related_test_requires_exact_module_or_import_not_keywords():
     assert not related_test("repo/tests/index.test.ts", paths)
     assert not related_test("repo/app/auth.py", paths)
     assert not related_test("repo/migrations/test_auth.py", paths)
+
+
+def test_imported_production_files_resolves_relative_and_alias_imports_without_keywords():
+    route_ts = (
+        "import { Button } from '@/components/ui/button';\n"
+        "import { checkOwner } from '../../lib/ownership';\n"
+        "export async function POST(req: Request) {\n"
+        "  const session = req.headers.get('x-session');\n"
+        "  return checkOwner(session);\n"
+        "}\n"
+    )
+    button_tsx = (
+        "export const Button = (p: { loading?: boolean; disabled?: boolean }) => "
+        "<button disabled={p.disabled || p.loading} />;\n"
+    )
+    ownership_ts = "export const checkOwner = (id: string | null) => Boolean(id);\n"
+    unrelated_ts = "export const noop = () => 42;\n"
+    candidates = [
+        ("repo/src/app/api/route.ts", route_ts),
+        ("repo/src/components/ui/button.tsx", button_tsx),
+        ("repo/src/lib/ownership/index.ts", ownership_ts),
+        ("repo/src/lib/unrelated.ts", unrelated_ts),
+        ("repo/tests/ownership.test.ts", "export const t = 1;\n"),
+    ]
+    linked = imported_production_files([("repo/src/app/api/route.ts", route_ts)], candidates)
+    assert [name for name, _ in linked] == [
+        "repo/src/lib/ownership/index.ts",
+        "repo/src/components/ui/button.tsx",
+    ]
+
