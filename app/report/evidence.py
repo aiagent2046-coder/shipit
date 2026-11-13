@@ -141,6 +141,7 @@ RULE_COVERAGE_LABELS = {
     "insecure_randomness": "Insecure randomness",
     "command_injection": "Shell commands",
     "archive_extraction": "Archive extraction",
+    "llm_browser_client": "Browser LLM SDK clients",
 }
 RULE_EXCLUSION_LABELS = {
     "unsupported_extension": "unsupported file types",

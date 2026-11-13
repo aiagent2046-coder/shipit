@@ -1,0 +1,9 @@
+class LocalClient {
+  constructor(options: Record<string, unknown>) {
+    void options;
+  }
+}
+
+export const client = new LocalClient({
+  dangerouslyAllowBrowser: true,
+});

@@ -1,0 +1,10 @@
+{
+  "description": "Groq SDK client receives a local options object enabling dangerouslyAllowBrowser.",
+  "expect": [
+    {
+      "rule_id": "llm-client-browser-exposed",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

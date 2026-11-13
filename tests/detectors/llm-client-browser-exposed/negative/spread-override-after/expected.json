@@ -1,0 +1,7 @@
+{
+  "description": "A trailing object spread after dangerouslyAllowBrowser makes the final option value unresolved.",
+  "expect": [],
+  "forbid": [
+    "llm-client-browser-exposed"
+  ]
+}

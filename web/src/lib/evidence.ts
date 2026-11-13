@@ -404,6 +404,7 @@ const ruleCoverageLabels: Record<StaticCoverageRule, string> = {
   insecure_randomness: "Insecure randomness",
   command_injection: "Shell commands",
   archive_extraction: "Archive extraction",
+  llm_browser_client: "Browser LLM SDK clients",
 };
 const ruleExclusionLabels = {
   unsupported_extension: "unsupported file types",
@@ -508,6 +509,7 @@ const staticCheckIds = new Set([
   "error_boundary", "auth_read_consistency", "auth_write_consistency", "http_success",
   "sql_injection", "sql_injection_js", "outbound_url", "tls_verification",
   "unsafe_deserialization", "unsafe_xml_parse", "path_traversal", "session_cookie", "archive_extraction",
+  "llm_browser_client",
 ]);
 
 function normalizedCheckFailures(value: unknown): { check: string; reason: string }[] {

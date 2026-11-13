@@ -1,0 +1,7 @@
+import { Groq } from "groq-sdk";
+
+const clientOptions = {
+  dangerouslyAllowBrowser: true,
+};
+
+export const groq = new Groq(clientOptions);

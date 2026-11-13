@@ -1,0 +1,7 @@
+{
+  "description": "Server-side OpenAI SDK client initialized without dangerouslyAllowBrowser.",
+  "expect": [],
+  "forbid": [
+    "llm-client-browser-exposed"
+  ]
+}

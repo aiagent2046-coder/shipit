@@ -42,7 +42,7 @@ def test_real_scan_records_the_unread_tail_for_each_bounded_rule():
     # limit; the JS/TS rule has nothing to read in a Python-only archive, so it
     # is complete over zero eligible files rather than partial.
     for key, record in counts.items():
-        if key in {"xss", "sql_injection_js"}:
+        if key in {"xss", "sql_injection_js", "llm_browser_client"}:
             assert record["eligible_files"] == 0 and record["partial"] is False
         else:
             assert record == partial_record()

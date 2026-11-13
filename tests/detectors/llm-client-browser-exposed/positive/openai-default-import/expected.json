@@ -1,0 +1,10 @@
+{
+  "description": "OpenAI SDK client initialized in browser-facing TypeScript with dangerouslyAllowBrowser: true.",
+  "expect": [
+    {
+      "rule_id": "llm-client-browser-exposed",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

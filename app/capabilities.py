@@ -412,6 +412,22 @@ CAPABILITIES: tuple[Capability, ...] = (
         "positional flag arguments, unknown option spreads, and any option whose value "
         "is a variable rather than a literal",
     ),
+    Capability(
+        "llm_browser_client",
+        "An LLM SDK client explicitly enabled for browser execution",
+        ("llm-client-browser-exposed",),
+        "At most 400 JavaScript/TypeScript/JSX/TSX files up to 400 KB each, 20,000 syntax nodes "
+        "and depth 100, with at most 32 findings. Recognized test/example/documentation paths, "
+        "vendor, dependency trees and generated build directories (.next, dist, build) are excluded "
+        "before the file limit. Reports constructor calls to import- or require-resolved OpenAI, "
+        "AzureOpenAI, Anthropic, AnthropicBedrock, AnthropicVertex, Groq and Mistral SDK clients "
+        "that pass a literal dangerouslyAllowBrowser: true (or a one-hop stable boolean constant / "
+        "options object in the same lexical scope). Local class/function/variable shadowing, "
+        "non-boolean or false values, trailing object spreads, computed keys, unknown wrappers and "
+        "cross-file configuration remain silent. Missing native grammars withhold the check; "
+        "malformed or oversized source is reported in coverage. Whether the file is bundled for "
+        "the browser or holds a live credential is not verified.",
+    ),
 )
 
 # The checks the static stage reports running, in stable report order.
