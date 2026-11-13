@@ -15,6 +15,7 @@ import re
 NARRATIVE_REVIEW_PREMISES = {
     "sql_table_literal_source": "sql_table_external_control",
     "cors_nonempty_origin_guard": "cors_all_origins_allowed",
+    "fastapi_route_identity_dependency": "fastapi_route_missing_authentication",
     "navigation_pending_outcome_unverified": "navigation_pending_outcome_unverified",
     "verified_user_operation_scope": "verified_user_operation_scope",
     "matched_peer_operation_scope": "matched_peer_operation_scope",

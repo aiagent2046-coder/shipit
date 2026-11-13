@@ -220,3 +220,65 @@ def test_sql_summary_separates_source_review_without_changing_saved_severity():
     assert '1 source interpretations need review' in html
     assert '1 high' not in html
     assert 'No source observations recorded' not in html
+
+
+FASTAPI_AUTH_SOURCE = '''from fastapi import APIRouter, Depends
+
+router = APIRouter()
+
+
+@router.post("/orders")
+async def create_order(payload: dict, current_user=Depends(get_current_user)):
+    return {"owner": current_user.id, "item": payload.get("item")}
+'''
+
+
+def fastapi_raw(source=FASTAPI_AUTH_SOURCE, title="Order creation route lacks authentication check"):
+    line = next(i for i, text in enumerate(source.splitlines(), 1) if "async def create_order" in text)
+    return {
+        "file": "app/auth_routes.py",
+        "line_start": line,
+        "line_end": line + 1,
+        "evidence": source.splitlines()[line - 1],
+        "severity": "high",
+        "confidence": 0.85,
+        "title": title,
+        "explanation": "Anyone can call POST /orders without signing in.",
+        "fix_hint": "Add a Depends(get_current_user) authentication dependency.",
+    }, {"app/auth_routes.py": source}
+
+
+def test_fastapi_identity_dependency_counterevidence_projects_narrative_and_preserves_original():
+    raw, sources = fastapi_raw()
+    findings, stats = run_llm_scan(archive(sources), Responses([[raw]]), rubrics=("auth",))
+    assert stats.verified == len(findings) == 1
+    finding = findings[0]
+    assert "declares an identity dependency" in finding.title
+    assert "conflicts with its declared signature or decorator" in finding.explanation
+    assert len(narrative_review_checks(finding.claim_evidence)) == 1
+    saved = narrative_projection(asdict(finding))
+    assert saved is not None
+    assert saved["original"]["title"] == raw["title"]
+
+
+@pytest.mark.parametrize(
+    "source,title",
+    [
+        (
+            FASTAPI_AUTH_SOURCE.replace("Depends(get_current_user)", "Depends(get_db_session)"),
+            "Order creation route lacks authentication check",
+        ),
+        (
+            FASTAPI_AUTH_SOURCE,
+            "Order creation route lacks ownership check on payload tenant",
+        ),
+        (
+            FASTAPI_AUTH_SOURCE.replace("from fastapi import APIRouter, Depends\n", ""),
+            "Order creation route lacks authentication check",
+        ),
+    ],
+)
+def test_storage_only_dependency_or_ownership_concern_does_not_gain_fastapi_counterevidence(source, title):
+    raw, sources = fastapi_raw(source, title)
+    assert review.ReviewCounterevidence(archive(sources)).checks_for(raw) == []
+
