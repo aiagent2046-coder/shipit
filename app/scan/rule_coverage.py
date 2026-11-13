@@ -15,7 +15,7 @@ from app.scan.secrets import is_non_production_path
 
 RULE_COVERAGE_KEYS = ("outbound_url", "tls_verification", "unsafe_deserialization", "path_traversal",
                       "xss", "open_redirect", "insecure_randomness", "unsafe_xml_parse", "command_injection",
-                      "archive_extraction", "sql_injection", "sql_injection_js")
+                      "archive_extraction", "sql_injection", "sql_injection_js", "llm_browser_client")
 EXCLUSION_REASONS = ("unsupported_extension", "non_production_path", "dependency_tree", "generated_build",
                      "symlink", "git_metadata")
 SKIP_REASONS = (

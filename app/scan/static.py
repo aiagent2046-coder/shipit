@@ -44,6 +44,7 @@ from app.scan.check_failure_scoring import failed_check_categories
 scan_cookie_flags = optional_native_function("app.scan.cookie_flags", "scan_cookie_flags")
 scan_sql_injection_js = optional_native_function("app.scan.sql_injection_js", "scan_sql_injection_js")
 scan_tls_verification = optional_native_function("app.scan.tls_verification", "scan_tls_verification")
+scan_llm_browser_client = optional_native_function("app.scan.llm_browser_client", "scan_llm_browser_client")
 collect_source_facts = optional_native_function("app.scan.source_facts", "collect_source_facts")
 prepare_recommendation = optional_native_function("app.scan.recommendations", "prepare_recommendation")
 
@@ -270,6 +271,16 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
             ))
 
     fileobj.seek(0)
+    with attempt("llm_browser_client"):
+        for m in list(scan_llm_browser_client(fileobj, coverage=rule_coverage["llm_browser_client"])):
+            findings.append(ScoredFinding(
+                rule_id=m.rule_id, title=m.title, severity=m.severity,
+                confidence=m.confidence, category=m.category, file=m.file,
+                line=m.line, explanation=m.explanation, fix_hint=m.fix_hint,
+                claim_evidence=static_claim_evidence(),
+            ))
+
+    fileobj.seek(0)
     with attempt("project_files"):
         for c in list(run_checks(fileobj)):
             findings.append(ScoredFinding(
@@ -430,6 +441,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                      "insecure_randomness": SCOPE["insecure_randomness"],
                      "command_injection": SCOPE["command_injection"],
                      "session_cookie": SCOPE["session_cookie"],
+                     "llm_browser_client": SCOPE["llm_browser_client"],
                      "http_success": HTTP_SUCCESS_SCOPE_PREFIX
                      + "Parser limits: "
                      + (", ".join((source_facts.get("react_async") or {}).get("limitations", [])) or "none")},
