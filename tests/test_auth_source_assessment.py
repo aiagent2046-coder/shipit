@@ -465,3 +465,70 @@ def test_other_sender_verification_claims_and_negation_remain_observations(title
 def test_callback_prior_authentication_client_also_rejects_intermediate_alias_mutation(mutation):
     source = CALLBACK_SOURCE.replace("  const { data: { user }", "  " + mutation + "\n  const { data: { user }")
     assert callback_check(source) == []
+
+
+HELPER_AUTH_SOURCE = """import { createClient } from '@supabase/supabase-js';
+async function authed(req) {
+  const token = req.headers.get('authorization');
+  if (!token) return { error: forbidden() };
+  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const { data: { user }, error: userErr } = await supabase.auth.getUser(token);
+  if (userErr || !user) return { error: forbidden() };
+  return { supabase, user };
+}
+export async function PATCH(req) {
+  const a = await authed(req);
+  if (a.error) return a.error;
+  const { supabase, user } = a;
+  const { id, value } = await req.json();
+  const { data: updated } = await supabase
+    .from('agent_context')
+    .update({ value })
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .select('id')
+    .maybeSingle();
+  return updated;
+}
+"""
+
+
+def test_one_hop_same_file_auth_helper_tracks_verified_user_filter_and_flags_absent_ownership_title():
+    f = raw(
+        HELPER_AUTH_SOURCE,
+        needle=".from('agent_context')",
+        title="Missing ownership check in agent_context PATCH",
+        explanation="The PATCH handler filters only by id and lacks a user_id filter.",
+    )
+    (check,) = AuthSourceVerifier(archive({f["file"]: HELPER_AUTH_SOURCE})).checks_for(f)
+    assert check["kind"] == "verified_user_operation_scope"
+    assert check["result"] == "observed"
+    assert check["narrative_review"]["status"] == "required"
+    binding = check["source_binding"]
+    assert binding["client"] == "supabase"
+    assert binding["user"] == "user"
+    assert binding["operations"][0]["table"] == "agent_context"
+    assert binding["operations"][0]["operation"] == "UPDATE"
+    assert binding["operations"][0]["binding"] == "user_id_equals_verified_user_id"
+    assert binding["operations"][0]["selected_columns"] == ["id"]
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("if (a.error) return a.error;", ""),
+        ("if (userErr || !user) return { error: forbidden() };", ""),
+        (".eq('user_id', user.id)", ""),
+        ("return { supabase, user };", "return { supabase, user: other };"),
+        ("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY"),
+    ],
+)
+def test_one_hop_same_file_auth_helper_rejects_broken_guard_or_unverified_user(old, new):
+    mutated = HELPER_AUTH_SOURCE.replace(old, new)
+    f = raw(
+        mutated,
+        needle=".from('agent_context')",
+        title="Missing ownership check in agent_context PATCH",
+        explanation="The PATCH handler filters only by id and lacks a user_id filter.",
+    )
+    assert AuthSourceVerifier(archive({f["file"]: mutated})).checks_for(f) == []
