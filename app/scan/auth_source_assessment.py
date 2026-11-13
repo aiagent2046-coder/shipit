@@ -183,6 +183,8 @@ def _safe_objects(fn, names, *, allowed=(), terminal_client="", allow_terminal_e
     # Shorthand aliases are not identifier nodes in the TS grammar.
     for node in nodes:
         if node.type == "shorthand_property_identifier" and g._text(node) in names:
+            if node in allowed:
+                continue
             if not (allow_terminal_escapes and g._text(node) == terminal_client and _terminal_client_escape(node, fn)):
                 return False
     return True
@@ -212,6 +214,176 @@ def _auth(root, fn, client_dec):
         if not guards or not _safe_objects(fn, {user, client}, terminal_client=client, allow_terminal_escapes=True):
             continue
         return {"client": client, "user": user, "auth": dec, "guard": guards[0], "client_dec": client_dec}
+    return None
+
+
+def _top_level_function(root, name: str):
+    if not name or g._bindings(list(g._walk(root, g._SKIP)))[name] != 1:
+        return None
+    matches = []
+    for stmt in g._children(root):
+        target = stmt.child_by_field_name("declaration") if stmt.type == "export_statement" else stmt
+        if target and target.type == "function_declaration" and g._name(target.child_by_field_name("name")) == name:
+            matches.append(target)
+        elif target and target.type == "lexical_declaration" and any(c.type == "const" for c in target.children):
+            for dec in g._children(target):
+                val = g._unwrap(dec.child_by_field_name("value"))
+                if (
+                    dec.type == "variable_declarator"
+                    and g._name(dec.child_by_field_name("name")) == name
+                    and val
+                    and val.type in {"arrow_function", "function_expression"}
+                ):
+                    matches.append(val)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _helper_object_return_fields(helper_fn, inner_client: str, inner_user: str) -> tuple[bool, tuple[object, ...]]:
+    body = helper_fn.child_by_field_name("body")
+    if not body or body.type != "statement_block":
+        return False, ()
+    returns = [n for n in g._children(body) if n.type == "return_statement" and len(g._children(n)) == 1]
+    if not returns:
+        return False, ()
+    last_ret = returns[-1]
+    obj = g._unwrap(g._children(last_ret)[0])
+    if not obj or obj.type != "object":
+        return False, ()
+    mapped = {}
+    allowed_nodes = []
+    for prop in g._children(obj):
+        if prop.type == "shorthand_property_identifier":
+            mapped[g._text(prop)] = g._text(prop)
+            allowed_nodes.append(prop)
+        elif prop.type == "pair":
+            k = prop.child_by_field_name("key")
+            v = g._unwrap(prop.child_by_field_name("value"))
+            if k and k.type == "property_identifier" and v and v.type == "identifier":
+                mapped[g._text(k)] = g._text(v)
+                allowed_nodes.append(v)
+        else:
+            return False, ()
+    ok = mapped.get(inner_client) == inner_client and mapped.get(inner_user) == inner_user
+    return ok, tuple(allowed_nodes) if ok else ()
+
+
+def _helper_auth(root, fn):
+    """Resolve one-hop same-file auth helper returning { supabase, user }."""
+    body = fn.child_by_field_name("body")
+    if not body:
+        return None
+    declarations = o._const_declarations(body)
+    fn_counts = g._bindings(list(g._walk(fn)))
+    for call_dec in declarations:
+        call = o._awaited(call_dec)
+        if not call or call.type != "call_expression" or any(n.type == "?." for n in call.children):
+            continue
+        helper_name = g._name(call.child_by_field_name("function"))
+        if not helper_name or fn_counts[helper_name]:
+            continue
+        helper_fn = _top_level_function(root, helper_name)
+        if not helper_fn or helper_fn == fn:
+            continue
+        helper_body = helper_fn.child_by_field_name("body")
+        if not helper_body or helper_body.type != "statement_block":
+            continue
+        helper_candidates = [n for n in o._const_declarations(helper_body) if _service_key(n, root)]
+        if len(helper_candidates) != 1:
+            continue
+        inner_client_dec = helper_candidates[0]
+        inner_client = g._name(inner_client_dec.child_by_field_name("name"))
+        helper_counts = g._bindings(list(g._walk(helper_fn)))
+        if (
+            not inner_client
+            or helper_counts[inner_client] != 1
+            or not o._trusted_client(root, inner_client_dec, helper_counts)
+        ):
+            continue
+        inner_auth_dec = None
+        inner_user = ""
+        inner_guard = None
+        for dec in o._const_declarations(helper_body):
+            u, err = o._data_binding(dec, user=True)
+            c_call = o._awaited(dec)
+            receiver, args = g._method(c_call, "getUser")
+            if (
+                not u
+                or not _member(receiver, inner_client, "auth")
+                or len(args) != 1
+                or not g._name(args[0])
+                or dec.start_byte <= inner_client_dec.end_byte
+                or any(n.type == "?." for n in c_call.children)
+            ):
+                continue
+            guards = [
+                n for n in g._children(helper_body) if dec.end_byte < n.start_byte and o._missing_return(n, u, err)
+            ]
+            ok_ret, ret_nodes = _helper_object_return_fields(helper_fn, inner_client, u)
+            if (
+                guards
+                and ok_ret
+                and _safe_objects(
+                    helper_fn,
+                    {u, inner_client},
+                    allowed=ret_nodes,
+                    terminal_client=inner_client,
+                    allow_terminal_escapes=False,
+                )
+            ):
+                inner_auth_dec, inner_user, inner_guard = dec, u, guards[0]
+                break
+        if not inner_auth_dec or not inner_guard:
+            continue
+        # Caller side: either `const a = await authed(req); if (a.error) return ...; const { supabase, user } = a;`
+        # or `const { supabase, user, error } = await authed(req); if (error || !user) return ...;`
+        lhs = call_dec.child_by_field_name("name")
+        if lhs and lhs.type == "identifier":
+            holder = g._name(lhs)
+            if not holder or fn_counts[holder] != 1:
+                continue
+            err_guards = [
+                n
+                for n in g._children(body)
+                if call_dec.end_byte < n.start_byte
+                and g._exit(n)
+                and (
+                    _member(g._unwrap(n.child_by_field_name("condition")), holder, "error")
+                    or o._not_name(g._unwrap(n.child_by_field_name("condition")), holder)
+                )
+            ]
+            if not err_guards:
+                continue
+            unpack_decs = [
+                d
+                for d in declarations
+                if d.start_byte > err_guards[0].end_byte
+                and g._name(g._unwrap(d.child_by_field_name("value"))) == holder
+            ]
+            if len(unpack_decs) != 1:
+                continue
+            fields = o._pattern_fields(unpack_decs[0].child_by_field_name("name"))
+            if not fields or inner_client not in fields or inner_user not in fields:
+                continue
+            caller_client = o._binding(fields[inner_client])
+            caller_user = o._binding(fields[inner_user])
+            if (
+                not caller_client
+                or not caller_user
+                or fn_counts[caller_client] != 1
+                or fn_counts[caller_user] != 1
+                or not _safe_objects(
+                    fn, {caller_user, caller_client}, terminal_client=caller_client, allow_terminal_escapes=True
+                )
+            ):
+                continue
+            return {
+                "client": caller_client,
+                "user": caller_user,
+                "auth": inner_auth_dec,
+                "guard": unpack_decs[0],
+                "client_dec": inner_client_dec,
+                "selected": call_dec,
+            }
     return None
 
 
@@ -273,6 +445,7 @@ def _direct_user_operations(fn, auth):
             "limit",
             "single",
             "maybeSingle",
+            *(["select"] if op in {"update", "delete"} else []),
         }:
             eqs = [
                 args
@@ -331,6 +504,19 @@ def _future_bypass(text):
     return False
 
 
+def _absent_ownership_claim(text):
+    return bool(
+        re.search(r"\b(?:missing|lacks?|without|no|id-only)\b", text, re.I)
+        and re.search(r"\b(?:ownership|user_id|cross[- ]?user)\b", text, re.I)
+        and not re.search(
+            r"\b(?:no (?:claim|evidence|risk)|not (?:a |an )?(?:claim|bypass)|"
+            r"correctly checked|relies on rls|explicit user_id filter)\b",
+            text,
+            re.I,
+        )
+    )
+
+
 class AuthSourceVerifier:
     def __init__(self, archive):
         self.loader = i.ImportedErrorVerifier(archive)
@@ -363,24 +549,30 @@ class AuthSourceVerifier:
         candidates = [n for n in o._const_declarations(body) if _service_key(n, root)]
         intersect = [n for n in candidates if g._line(n) <= end and start <= n.end_point[0] + 1]
         candidates = intersect or candidates
-        if len(candidates) != 1:
+        if len(candidates) == 1:
+            auth = _auth(root, fn, candidates[0])
+            selected_node = candidates[0]
+        elif not candidates:
+            auth = _helper_auth(root, fn)
+            selected_node = auth["selected"] if auth else None
+        else:
             return []
-        auth = _auth(root, fn, candidates[0])
-        if not auth:
+        if not auth or selected_node is None:
             return []
         operations, unresolved = _direct_user_operations(fn, auth)
         records = []
         if operations:
+            title_absent = _absent_ownership_claim(str(text).splitlines()[0] if text else "")
             records.append(
                 self._record(
                     KINDS[0],
                     path,
-                    candidates[0],
+                    selected_node,
                     "The recorded SDK getUser call and missing-user return precede these specific operations. "
                     "Their explicit user_id filter/insert value refers to that returned user's id. These local "
                     "checks are counterevidence to treating privileged-client presence alone as a current "
                     "cross-user access path; other operations and hypothetical future filter changes are separate.",
-                    review=_future_bypass(text),
+                    review=_future_bypass(text) or title_absent,
                     auth_call=c._loc(auth["auth"]),
                     auth_return=c._loc(auth["guard"]),
                     client=auth["client"],
@@ -703,7 +895,13 @@ class AuthSourceVerifier:
 
     def checks_for(self, finding):
         text = c._narrative(finding)
-        service = bool(re.search(r"service[ _-]?role", text, re.I))
+        service = bool(
+            re.search(r"service[ _-]?role", text, re.I)
+            or (
+                re.search(r"\b(?:ownership|cross[- ]?user|user_id|id-only)\b", text, re.I)
+                and re.search(r"\b(?:filter|missing|lacks?|without|bypasses)\b", text, re.I)
+            )
+        )
         callback = bool(
             re.search(r"auto.reply|background|callback", text, re.I)
             and re.search(r"sender|participant|ownership|authoriz", text, re.I)

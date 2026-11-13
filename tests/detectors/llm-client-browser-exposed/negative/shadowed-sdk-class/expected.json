@@ -1,0 +1,7 @@
+{
+  "description": "A local class shadowing the imported OpenAI identifier is not resolved as the SDK constructor.",
+  "expect": [],
+  "forbid": [
+    "llm-client-browser-exposed"
+  ]
+}

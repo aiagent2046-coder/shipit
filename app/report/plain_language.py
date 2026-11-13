@@ -20,6 +20,17 @@ TIERS = {
 
 # rule_id -> (what it is, what can go wrong, what to do)
 PLAIN: dict[str, tuple[str, str, str]] = {
+    "llm-client-browser-exposed": (
+        "An LLM SDK client explicitly enables browser execution.",
+        "OpenAI, Anthropic, Groq and Mistral SDKs block browser instantiation by default because "
+        "bundling the client into frontend code exposes its API credential or lets any visitor issue "
+        "billed requests against the account. Passing dangerouslyAllowBrowser: true disables that "
+        "safeguard. Whether this module is bundled for the browser, whether the credential is a live "
+        "server key, and whether a proxy restricts requests have not been verified.",
+        "Move the LLM SDK call to a server route or backend worker that reads the API key from server "
+        "environment variables, and remove dangerouslyAllowBrowser: true. If the client is intentionally "
+        "used with a visitor-supplied key (BYOK), ensure no server secret is passed.",
+    ),
     "unsafe-xml-parse": (
         "An XML parse explicitly enables entity resolution.",
         "If the XML is untrusted, resolve_entities=True can allow external entity access. "

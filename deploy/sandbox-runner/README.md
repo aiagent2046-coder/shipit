@@ -90,6 +90,11 @@ backend (shipit-ops, /opt/shipit)               runner (shipit-runner, /opt/ship
    SUBNET=$(docker network inspect shipit-preview -f '{{(index .IPAM.Config 0).Subnet}}')
    iptables -I DOCKER-USER -s "$SUBNET" ! -d "$SUBNET" -j DROP
    ```
+   *(Optional: to enforce the Squid proxy at the network layer for Fix Pack
+   install containers in addition to container-side `--dns=127.0.0.1`, create a
+   dedicated bridge `shipit-install`, allow only `tcp/3128` to the bridge
+   gateway in `DOCKER-USER`, drop all other egress from that subnet, and set
+   `FIXPACK_INSTALL_NETWORK=shipit-install` in `/opt/shipit-runner/.env.runner`.)*
 
 6. **Install the build-step egress allowlist** (host admin; the Squid that
    `DEPLOYPACK_BUILD_PROXY_URL`/`FIXPACK_INSTALL_PROXY_URL` point at):

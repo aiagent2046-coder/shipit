@@ -58,6 +58,7 @@ WIRED_SCANNERS = (
     "scan_error_boundary",
     "scan_http_success",
     "scan_insecure_randomness",
+    "scan_llm_browser_client",
     "scan_open_redirect",
     "scan_outbound_url",
     "scan_path_traversal",
@@ -95,6 +96,7 @@ EMITTED_RULE_IDS = (
     "insecure-randomness",
     "insecure-session-cookie-attributes",
     "jwt-in-code",
+    "llm-client-browser-exposed",
     "missing-error-boundary",
     "no-ci",
     "no-dockerfile",
@@ -127,7 +129,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-11-03-2"
+ENGINE_VERSION_FOR_THAT_SET = "2026-11-13-3"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

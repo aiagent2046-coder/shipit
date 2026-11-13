@@ -11,20 +11,39 @@ import re
 import zipfile
 
 from app.scan import guard_context as g
+from app.scan.auth_read import _dependency_role
 from app.scan.consequence_evidence import _loc
 from app.scan.imported_error_context import ImportedErrorVerifier, _source_path
 from app.scan.python_sql_identity import PythonSQLResolver, sql_table_claim, _table_slot
 
 SQL_KIND = "sql_table_literal_source"
 CORS_KIND = "cors_nonempty_origin_guard"
+FASTAPI_DEPENDS_KIND = "fastapi_route_identity_dependency"
 MAX_CHECKS = 40
 MAX_WORK = 400_000
 _CORS = re.compile(r"CORS origin check allows all origins when (?P<env>[A-Z_][A-Z_0-9]*) is not configured")
+_UNAUTH_ROUTE: re.Pattern[str] = re.compile(
+    r"\b(?:missing|no|lacks?|without|unauthenticated)\b.*\b(?:authentication|auth|session|identity)\b"
+    r"|\b(?:authentication|auth|session|identity)\b.*\b(?:missing|absent|not\s+checked|not\s+verified)\b",
+    re.I,
+)
+_OTHER_CONCERN = re.compile(
+    r"\b(?:ownership|idor|bola|cross.?tenant|tenant|sql|injection|csrf|rate.?limit|race|ssrf|xss)\b",
+    re.I,
+)
+_ROUTE_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
 _CLAIMS = {
     SQL_KIND: "The cited table-name slot is fed by a literal-only loop iterable on the checked source path.",
     CORS_KIND: "The cited callback contains a nonempty-Origin mismatch rejection before its next call.",
+    FASTAPI_DEPENDS_KIND: (
+        "The cited FastAPI route declares an identity-shaped Depends() guard in its signature or decorator."
+    ),
 }
-_PREMISES = {SQL_KIND: "sql_table_external_control", CORS_KIND: "cors_all_origins_allowed"}
+_PREMISES = {
+    SQL_KIND: "sql_table_external_control",
+    CORS_KIND: "cors_all_origins_allowed",
+    FASTAPI_DEPENDS_KIND: "fastapi_route_missing_authentication",
+}
 
 
 def _record(kind, binding):
@@ -112,14 +131,27 @@ class ReviewCounterevidence:
         if (not isinstance(path, str) or type(start) is not int or type(end) is not int
                 or not 1 <= start <= end or self.checks >= MAX_CHECKS):
             return []
+        title = str(finding.get("title", ""))[:2000]
         sql = path.endswith(".py") and sql_table_claim(finding)
-        cors = _CORS.fullmatch(str(finding.get("title", ""))[:2000]) if _source_path(path) else None
-        if not sql and not cors:
+        cors = _CORS.fullmatch(title) if _source_path(path) else None
+        fastapi_auth = (
+            path.endswith(".py")
+            and not sql
+            and not finding.get("premises")
+            and bool(_UNAUTH_ROUTE.search(title))
+            and not _OTHER_CONCERN.search(title)
+        )
+        if not sql and not cors and not fastapi_auth:
             return []
         self.checks += 1
         try:
-            binding = self._sql(finding) if sql else self._cors(path, start, end, cors["env"])
-            return [_record(SQL_KIND if sql else CORS_KIND, binding)] if binding else []
+            if sql:
+                binding, kind = self._sql(finding), SQL_KIND
+            elif cors:
+                binding, kind = self._cors(path, start, end, cors["env"]), CORS_KIND
+            else:
+                binding, kind = self._fastapi_depends(path, start, end), FASTAPI_DEPENDS_KIND
+            return [_record(kind, binding)] if binding else []
         except (UnicodeError, ValueError, TypeError, SyntaxError, RecursionError, RuntimeError,
                 OSError, zipfile.BadZipFile):
             return []
@@ -298,3 +330,131 @@ class ReviewCounterevidence:
                                 "nonempty_origin_predicate": True, "missing_origin_predicate": False,
                                 "response_status": 403, "runtime_policy": "not_checked"})
         return matches[0] if len(matches) == 1 else None
+
+    def _fastapi_depends(self, path, start, end):
+        doc = self.sql._document(path)
+        if doc is None:
+            return None
+        nodes, offsets, digest = doc
+        self.work -= len(nodes)
+        if self.work < 0 or end > len(offsets) - 1:
+            return None
+
+        def loc(node):
+            first = min([node.lineno, *(d.lineno for d in getattr(node, "decorator_list", []))])
+            first_col = (
+                node.decorator_list[0].col_offset - 1
+                if getattr(node, "decorator_list", None) and node.decorator_list[0].col_offset > 0
+                else (node.decorator_list[0].col_offset if getattr(node, "decorator_list", None) else node.col_offset)
+            )
+            return {
+                "line_start": first,
+                "line_end": node.end_lineno,
+                "span": [offsets[first - 1] + first_col, offsets[node.end_lineno - 1] + node.end_col_offset],
+            }
+
+        def node_loc(node):
+            return {
+                "line_start": node.lineno,
+                "line_end": node.end_lineno,
+                "span": [
+                    offsets[node.lineno - 1] + node.col_offset,
+                    offsets[node.end_lineno - 1] + node.end_col_offset,
+                ],
+            }
+
+        depends_aliases: set[str] = set()
+        fastapi_modules: set[str] = set()
+        for node in nodes:
+            if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module in {"fastapi", "fastapi.params"}:
+                for alias in node.names:
+                    if alias.name in {"Depends", "Security"}:
+                        depends_aliases.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "fastapi":
+                        fastapi_modules.add(alias.asname or alias.name)
+        if not depends_aliases and not fastapi_modules:
+            return None
+        for node in nodes:
+            if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                depends_aliases.discard(node.id)
+                fastapi_modules.discard(node.id)
+
+        def is_depends_call(call: ast.Call) -> str | None:
+            fn = call.func
+            is_dep = (
+                (isinstance(fn, ast.Name) and fn.id in depends_aliases)
+                or (
+                    isinstance(fn, ast.Attribute)
+                    and isinstance(fn.value, ast.Name)
+                    and fn.value.id in fastapi_modules
+                    and fn.attr in {"Depends", "Security"}
+                )
+            )
+            if not is_dep or len(call.args) != 1 or call.keywords:
+                return None
+            target = call.args[0]
+            dep_name = (
+                target.id
+                if isinstance(target, ast.Name)
+                else (target.attr if isinstance(target, ast.Attribute) else "")
+            )
+            if dep_name and _dependency_role(dep_name) == "identity":
+                return dep_name
+            return None
+
+        candidates = []
+        for node in nodes:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.decorator_list:
+                continue
+            route_decs = [
+                dec
+                for dec in node.decorator_list
+                if isinstance(dec, ast.Call)
+                and isinstance(dec.func, ast.Attribute)
+                and dec.func.attr in _ROUTE_METHODS
+            ]
+            if not route_decs:
+                continue
+            fn_span = loc(node)
+            if fn_span["line_start"] <= end and start <= fn_span["line_end"]:
+                candidates.append((node, route_decs[0], fn_span))
+        if len(candidates) != 1:
+            return None
+        route_fn, route_dec, route_span = candidates[0]
+
+        guards: list[tuple[ast.Call, str]] = []
+        for default in [*route_fn.args.defaults, *(d for d in route_fn.args.kw_defaults if d is not None)]:
+            if isinstance(default, ast.Call):
+                dep = is_depends_call(default)
+                if dep:
+                    guards.append((default, dep))
+        for dec in route_fn.decorator_list:
+            if not isinstance(dec, ast.Call):
+                continue
+            for kw in dec.keywords:
+                if kw.arg == "dependencies" and isinstance(kw.value, (ast.List, ast.Tuple)):
+                    for elt in kw.value.elts:
+                        if isinstance(elt, ast.Call):
+                            dep = is_depends_call(elt)
+                            if dep:
+                                guards.append((elt, dep))
+        if not guards:
+            return None
+        guard_call, _ = guards[0]
+        return {
+            "file": path,
+            "source_sha256": digest,
+            "line_start": 1,
+            "line_end": len(offsets) - 1,
+            "span": [0, offsets[-1]],
+            "route": route_span,
+            "decorator": node_loc(route_dec),
+            "dependency_guard": node_loc(guard_call),
+            "dependency_role": "identity",
+            "guard_count": len(guards),
+            "runtime_enforcement": "not_checked",
+            "ownership_policy": "not_checked",
+        }
+

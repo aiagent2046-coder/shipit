@@ -12,6 +12,7 @@ CHECK_CATEGORIES = {
     'path_traversal': {'Security'},
     'xss': {'Security'}, 'open_redirect': {'Security'}, 'insecure_randomness': {'Security'},
     'command_injection': {'Security'}, 'session_cookie': {'Security'},
+    'llm_browser_client': {'Security'},
     'project_files': {'Security', 'Testing', 'Deploy'},
     'ci_deploy_source': {'Deploy'}, 'service_role': {'Auth'},
     'auth_read_consistency': {'Auth'}, 'auth_write_consistency': {'Auth'},
