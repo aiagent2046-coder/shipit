@@ -42,6 +42,7 @@ from app.scan.llm_scan import (
     relevance,
     run_llm_scan,
     select_files,
+    system_prompt_for,
     verify_finding,
 )
 from app.scan.pipeline import AUDIT_ENGINE_VERSION
@@ -51,7 +52,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "f266475015dee399"
+PROMPT_FINGERPRINT = "5361c5ec9179d415"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -346,7 +347,7 @@ def test_run_llm_scan_keeps_verified_drops_hallucinated():
         prompts=1, raw_findings=2, verified=1, discarded=1,
         calls=1, input_tokens=100, output_tokens=20, model="fake-model",
         successful_model_usage={"fake-model": {"input_tokens": 100, "output_tokens": 20}},
-        prompt_chars=len(SYSTEM_PROMPT) + len(llm.prompts[0]),
+        prompt_chars=len(system_prompt_for("auth")) + len(llm.prompts[0]),
         rubrics_ran=("auth",),
         rejected_items=[dict(response=1, rubric="auth", item=2,
                              reason="source_quote_or_location_mismatch", detail="unknown_file",
@@ -405,7 +406,7 @@ def test_a_full_prompt_fits_the_window_it_is_sent_to():
         files = [(f"src/auth/h{i}.ts", "jwt token session " * 4000)
                  for i in range(400)]
         selected = select_files(files, "auth", budget)
-        sent = len(SYSTEM_PROMPT) + len(build_prompt(selected, "auth"))
+        sent = len(system_prompt_for("auth")) + len(build_prompt(selected, "auth"))
         assert sent <= client_mod.input_char_budget(model), model
 
 
@@ -427,7 +428,7 @@ def test_run_llm_scan_sends_prompts_that_fit_the_configured_model():
     run_llm_scan(buf, llm, rubrics=("auth",))
 
     assert llm.prompts, "the rubric must have run for this to prove anything"
-    assert max(len(SYSTEM_PROMPT) + len(p) for p in llm.prompts) <= \
+    assert max(len(system_prompt_for("auth")) + len(p) for p in llm.prompts) <= \
         client_mod.input_char_budget("claude-haiku-4.5")
 
 
@@ -628,7 +629,7 @@ def test_prompt_chars_counts_the_system_prompt_too():
     llm = SizedLLM("[]", 3.0)
     _, stats = run_llm_scan(_big_auth_zip(), llm, rubrics=("auth",))
     assert stats.prompt_chars == sum(
-        len(SYSTEM_PROMPT) + len(p) for p in llm.prompts)
+        len(system_prompt_for("auth")) + len(p) for p in llm.prompts)
 
 
 # --- client fallback chain ---
@@ -1143,7 +1144,8 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
     """
     surface = "|".join([
         SYSTEM_PROMPT,
-        *(name + RUBRICS[name]["instructions"] for name in sorted(RUBRICS)),
+        *(name + RUBRICS[name]["instructions"] + RUBRICS[name].get("system_rules", "") for name in sorted(RUBRICS)),
+        inspect.getsource(llm_scan.system_prompt_for),
         # WHICH rubrics are asked, not only what each one says. Missing here
         # until "web" shipped without being run: its text was in the surface,
         # so the fingerprint moved and the engine version was bumped, while
@@ -2020,3 +2022,32 @@ def test_unreadable_model_response_is_partial_and_not_cached_as_complete():
     assert scan["score"]["scan_manifest"]["model_findings"][0]["invalid_responses"] == 1
     assert scan["llm_usage"]["calls"] == 1
     assert "Auth" in scan["score"]["unexamined"]
+
+
+def test_system_prompt_for_isolates_rubric_specific_rules_and_keeps_core():
+    assert system_prompt_for() == SYSTEM_PROMPT
+    assert system_prompt_for("unknown") == SYSTEM_PROMPT
+
+    web_sys = system_prompt_for("web")
+    auth_sys = system_prompt_for("auth")
+    sec_sys = system_prompt_for("security")
+    money_sys = system_prompt_for("money")
+
+    assert web_sys.startswith(SYSTEM_PROMPT)
+    assert "fetch resolves on HTTP errors" in web_sys
+    assert "sql_table_interpolation" not in web_sys
+    assert "ownership_guard_absent" not in web_sys
+    assert "duplicate paid calls" not in web_sys
+
+    assert "ownership_guard_absent" in auth_sys
+    assert "anon plus user JWT" in auth_sys
+    assert "fetch resolves on HTTP errors" not in auth_sys
+    assert "sql_table_interpolation" not in auth_sys
+
+    assert "sql_table_interpolation" in sec_sys
+    assert "ownership_guard_absent" not in sec_sys
+
+    assert "duplicate paid calls" in money_sys
+    assert "query_limit_unbounded" in money_sys
+    assert "sql_table_interpolation" not in money_sys
+
