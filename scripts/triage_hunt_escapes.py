@@ -156,6 +156,9 @@ SPECS: dict[str, Spec] = {
                  r"\b(?:marshal|pickle|dill|jsonpickle)\.",),
         imports={r"\byaml\.": r"^\s*(?:import yaml\b|from yaml import\b)"},
     ),
+    "llm-client-browser-exposed": Spec(
+        markers=(r"dangerouslyAllowBrowser", r"\bnew\b"),
+    ),
 }
 
 REVIEW = "review"
