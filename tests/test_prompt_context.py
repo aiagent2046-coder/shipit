@@ -1,7 +1,14 @@
 """Offline coverage and coordinate contracts for context compaction."""
 import re
 
-from app.scan.prompt_context import PromptExcerpt, numbered_lines, python_excerpt, related_test
+from app.scan.prompt_context import (
+    PromptExcerpt,
+    numbered_lines,
+    python_excerpt,
+    related_test,
+    source_excerpt,
+    ts_excerpt,
+)
 
 
 KEYWORDS = re.compile(r"auth|password|session|jwt|token", re.I)
@@ -114,3 +121,66 @@ def test_related_test_requires_exact_module_or_import_not_keywords():
     assert not related_test("repo/tests/index.test.ts", paths)
     assert not related_test("repo/app/auth.py", paths)
     assert not related_test("repo/migrations/test_auth.py", paths)
+
+
+def ts_unrelated():
+    return "export function unrelatedHelper() {\n  return '" + ("x" * 3000) + "';\n}\n"
+
+
+def test_ts_excerpt_late_relevant_function_and_arrow_component_preserve_coordinates():
+    source = (
+        "import { verifyJwt } from './crypto';\n"
+        "const AUTH_HEADER = 'authorization';\n"
+        + ts_unrelated()
+        + "const checkHeader = (raw: string) => verifyJwt(raw);\n"
+        "export const LoginButton = (props: { token: string }) => {\n"
+        "  if (!props.token) {\n"
+        "    return null;\n"
+        "  }\n"
+        "  return <button>{checkHeader(props.token)}</button>;\n"
+        "};\n"
+    )
+    excerpt = ts_excerpt("src/components/Login.tsx", source, KEYWORDS, 600)
+    assert isinstance(excerpt, PromptExcerpt)
+    assert "export function unrelatedHelper" not in excerpt
+    for expected in ("import { verifyJwt }", "const AUTH_HEADER", "const checkHeader", "export const LoginButton"):
+        assert expected in excerpt
+    assert len(excerpt) < 600
+    rendered = numbered_lines(excerpt)
+    for number, line in enumerate(source.splitlines(), 1):
+        if "checkHeader(props.token)" in line or "AUTH_HEADER" in line:
+            assert f"{number}\t{line}" in rendered
+    assert "omitted original lines 3-5" in rendered
+    assert source_excerpt("src/components/Login.tsx", source, KEYWORDS, 600) == excerpt
+
+
+def test_ts_excerpt_ignores_comments_and_follows_recursive_local_closure():
+    source = (
+        "function noise() {\n"
+        "  // auth password session token jwt\n"
+        "  /* block comment with token and password */\n"
+        "  return '" + ("y" * 3000) + "';\n"
+        "}\n"
+        "const stepTwo = (val: string) => val.trim();\n"
+        "function stepOne(val: string) {\n"
+        "  return stepTwo(val);\n"
+        "}\n"
+        "export async function authenticateRequest(req: Request) {\n"
+        "  const session = req.headers.get('x-session');\n"
+        "  return stepOne(session ?? '');\n"
+        "}\n"
+    )
+    excerpt = ts_excerpt("src/api/auth.ts", source, KEYWORDS, 600)
+    assert excerpt is not None
+    assert "function noise" not in excerpt
+    for expected in ("const stepTwo", "function stepOne", "export async function authenticateRequest"):
+        assert expected in excerpt
+
+
+def test_ts_excerpt_falls_back_on_syntax_error_same_line_statements_or_over_budget():
+    assert ts_excerpt("src/auth.ts", "export function broken(\n" * 100, KEYWORDS, 100) is None
+    assert ts_excerpt("src/auth.py", ts_unrelated(), KEYWORDS, 100) is None
+    same_line = ts_unrelated() + "function a() { return 1; } function authenticate() { return a(); }\n"
+    assert ts_excerpt("src/auth.ts", same_line, KEYWORDS, 300) is None
+    huge_cfg = "const CFG = '" + ("z" * 1000) + "';\n" + ts_unrelated() + "export function auth() { return CFG; }\n"
+    assert ts_excerpt("src/auth.ts", huge_cfg, KEYWORDS, 500) is None

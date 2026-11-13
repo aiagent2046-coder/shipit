@@ -86,6 +86,20 @@ def test_late_source_quote_keeps_its_original_coordinate_and_partial_scope():
     assert [a["excerpt_files"] for a in stats.provider_attempts] == [1, 1]
 
 
+def test_late_ts_source_quote_keeps_its_original_coordinate_and_partial_scope():
+    source = (
+        "export function unrelated() {\n  return '" + ("x" * 50_000) + "';\n}\n\n"
+        "export function authenticate(token: string) {\n  return jwt.decode(token);\n}\n"
+    )
+    path = "src/auth.ts"
+    selected = llm_scan.select_files([(path, source)], "auth")
+    assert isinstance(selected[0][1], PromptExcerpt)
+    assert "6\t  return jwt.decode(token);" in llm_scan.build_prompt(selected, "auth")
+    finding = dict(file=path, line_start=6, line_end=6, evidence="jwt.decode(token)",
+                   severity="high", confidence=.8, title="Review decoder", explanation="Verify signature checking")
+    assert llm_scan.verify_finding(finding, {path: source})
+
+
 def test_private_diagnostics_distinguish_embedded_empty_from_direct_array():
     _, stats = llm_scan.run_llm_scan(archive({"src/auth.py": "token = 1\n"}),
                                    client("Private answer text: []"), rubrics=("auth",))
