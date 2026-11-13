@@ -159,6 +159,17 @@ SPECS: dict[str, Spec] = {
     "llm-client-browser-exposed": Spec(
         markers=(r"dangerouslyAllowBrowser", r"\bnew\b"),
     ),
+    "insecure-session-cookie-attributes": Spec(
+        markers=(
+            r"\b(?:set_cookie|cookie|set|session|cookieSession|cookie_session|expressSession|"
+            r"sessionMiddleware|SESSION_COOKIE_HTTPONLY|SESSION_COOKIE_SAMESITE)\b|document\.cookie",
+        ),
+    ),
+    "python-outbound-request-unvalidated-url": Spec(
+        markers=(
+            r"\b(?:get|post|put|delete|patch|head|options|request|urlopen|urlretrieve|stream|send)\b",
+        ),
+    ),
 }
 
 REVIEW = "review"
