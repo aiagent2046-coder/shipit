@@ -327,6 +327,21 @@ RUBRICS: dict[str, dict] = {
             "a list of things to repair. Silence is the correct output for "
             "code that is already right."
         ),
+        "system_rules": (
+            "For access control, distinguish intended operator privileges from user "
+            "ownership; show how an unauthorized caller could cross that boundary. "
+            "Distinguish a locally caught Intl error and a nonempty parsed-string guard from other "
+            "validation or authorization claims; counterevidence for one premise does not settle the others. "
+            "Before recommending anon plus user JWT, inspect the target tables' read and write "
+            "policies and required ownership behavior. Name any missing policy prerequisites; "
+            "do not assume that replacing an administrative client preserves application behavior. "
+            "Supported premise kinds for this rubric: ownership_guard_absent, intl_catch_absent, "
+            "required_nested_objects_absent, sql_update_where. "
+            "Supply the schema/clamped binding, SQL table or inserted resource and its source coordinates; "
+            "ownership_guard_absent selects a missing participant check before a message insert, "
+            "not RLS or race safety. "
+            "sql_update_where selects a claim that an UPDATE lacks WHERE, not that its business effect is wrong."
+        ),
     },
     "security": {
         "category": "Security",
@@ -340,6 +355,21 @@ RUBRICS: dict[str, dict] = {
             "overly permissive CORS with credentials, secrets read client-side "
             "(NEXT_PUBLIC_* misuse), SSRF via user-controlled URLs, missing "
             "signature checks on webhooks."
+        ),
+        "system_rules": (
+            "Distinguish a locally caught Intl error and a nonempty parsed-string guard from other "
+            "validation or authorization claims; counterevidence for one premise does not settle the others. "
+            "For a finding solely about a Python SQL table identifier being interpolated, also include "
+            "operation_claim: {kind: \"sql_table_interpolation\", target: the interpolated local variable name, "
+            "line_start: the SQL call's start line, line_end: the SQL call's end line}. "
+            "Keep that range inside the finding's cited range. This selects only the table-name slot, "
+            "not query values, authorization, missing WHERE, or a second operation. Omit operation_claim "
+            "for other or compound claims. It is an untrusted selector checked against source syntax, "
+            "not evidence of external control, injection, or safety. Titles may use natural wording. "
+            "Supported premise kinds for this rubric: intl_catch_absent, required_nested_objects_absent, "
+            "sql_update_where, http_status_guard_absent, json_rejection_uncaught. "
+            "Supply the response/schema/clamped binding or SQL table and its source coordinates; "
+            "sql_update_where selects a claim that an UPDATE lacks WHERE, not that its business effect is wrong."
         ),
     },
     # The third axis. Both rubrics above look for an attacker; this one looks
@@ -452,6 +482,24 @@ RUBRICS: dict[str, dict] = {
             "this rubric: the owner loses no money, no data and pays no bill "
             "for them, and reporting them here spends the reader's attention "
             "on the one finding they will not act on."
+        ),
+        "system_rules": (
+            "Before alleging a missing limit or guard, trace the cited value into its actual consumer and "
+            "inspect the supplied helper and schema context. A collection slice can cap that consumer's "
+            "item count without bounding the preceding database read, total prompt bytes or cost. "
+            "For repeated external calls, bind the claimed retry to its callback and error classifier. "
+            "HTTP checks or JSON parsing after an awaited retry invocation do not re-enter that callback. "
+            "Count total attempts separately from retries; poll sleeps alone do not bound elapsed time. "
+            "Trace duplicate-key early returns before claiming a second dispatch. For concurrent INSERT "
+            "and COUNT paths, state ordering and database visibility assumptions instead of assuming both "
+            "counts see one. Provider 429 rate-limit responses do not establish a missing local limiter. "
+            "For duplicate paid calls, show an interleaving consistent with awaited inserts, "
+            "unique constraints and returned-row guards; a duplicate-result constraint after "
+            "the paid call cannot prevent that call's cost. A metadata GET is not an inference run. "
+            "Supported premise kinds for this rubric: query_limit_unbounded, sql_update_where, "
+            "http_status_guard_absent, json_rejection_uncaught, required_nested_objects_absent. "
+            "Supply the response/schema/clamped binding or SQL table and its source coordinates; "
+            "sql_update_where selects a claim that an UPDATE lacks WHERE, not that its business effect is wrong."
         ),
     },
     "web": {
@@ -655,6 +703,12 @@ RUBRICS: dict[str, dict] = {
             "about code that turned out to be correct. If it is not one of the "
             "six, it is not a finding."
         ),
+        "system_rules": (
+            "A catch reset and a successful navigation are different from an uncaught network failure. "
+            "Check HTTP status before a success indicator: fetch resolves on HTTP errors. "
+            "Supported premise kinds for this rubric: http_status_guard_absent, json_rejection_uncaught. "
+            "Supply the response binding and its source coordinates."
+        ),
     },
 }
 
@@ -750,47 +804,14 @@ SYSTEM_PROMPT = (
     "sink or other source-supported exposure path before alleging leakage. Proxy configuration "
     "and hypothetical future misconfiguration are not evidence of an actual exposure; keep "
     "unresolved routing separate from the observed authentication operation. "
-    "Before alleging a missing limit or guard, trace the cited value into its actual consumer and "
-    "inspect the supplied helper and schema context. A collection slice can cap that consumer's "
-    "item count without bounding the preceding database read, total prompt bytes or cost. "
-    "Distinguish a locally caught Intl error and a nonempty parsed-string guard from other "
-    "validation or authorization claims; counterevidence for one premise does not settle the others. "
-    "For repeated external calls, bind the claimed retry to its callback and error classifier. "
-    "HTTP checks or JSON parsing after an awaited retry invocation do not re-enter that callback. "
-    "Count total attempts separately from retries; poll sleeps alone do not bound elapsed time. "
-    "Trace duplicate-key early returns before claiming a second dispatch. For concurrent INSERT "
-    "and COUNT paths, state ordering and database visibility assumptions instead of assuming both "
-    "counts see one. Provider 429 rate-limit responses do not establish a missing local limiter. "
-    "For access control, distinguish intended operator privileges from user "
-    "ownership; show how an unauthorized caller could cross that boundary. "
     "Keep each finding about one cause; separate independent causes even at the same line. "
-    "Use premises to identify specific source claims separately from the narrative. Supported kinds: "
-    "http_status_guard_absent, json_rejection_uncaught, intl_catch_absent, "
-    "required_nested_objects_absent, query_limit_unbounded, sql_update_where, ownership_guard_absent. "
-    "Supply the response/schema/clamped binding, SQL table or inserted resource and its source coordinates; "
-    "sql_update_where selects a claim that an UPDATE lacks WHERE, not that its business effect is wrong. "
-    "ownership_guard_absent selects a missing participant check before a message insert, not RLS or race safety. "
-    "Use an empty array for unsupported premises. "
-    "For a finding solely about a Python SQL table identifier being interpolated, also include "
-    "operation_claim: {kind: \"sql_table_interpolation\", target: the interpolated local variable name, "
-    "line_start: the SQL call's start line, line_end: the SQL call's end line}. "
-    "Keep that range inside the finding's cited range. This selects only the table-name slot, "
-    "not query values, authorization, missing WHERE, or a second operation. Omit operation_claim "
-    "for other or compound claims. It is an untrusted selector checked against source syntax, "
-    "not evidence of external control, injection, or safety. Titles may use natural wording. "
+    "Use premises to identify specific source claims separately from the narrative; "
+    "use an empty array for unsupported premises. "
     "These selectors do not verify anything; never assign a premise a verification status. "
     "Write \"fix_hint\" as a verification step followed by a conditional fix. "
     "Existing checks are evidence: trace the guarded operation, clamp, schema rejection "
     "and imported helper before reporting a missing control. Do not infer weak entropy "
     "from the absence of an entropy test or treat a protocol constant as a leaked key. "
-    "A catch reset and a successful navigation are different from an uncaught network failure. "
-    "Check HTTP status before a success indicator: fetch resolves on HTTP errors. "
-    "For duplicate paid calls, show an interleaving consistent with awaited inserts, "
-    "unique constraints and returned-row guards; a duplicate-result constraint after "
-    "the paid call cannot prevent that call's cost. A metadata GET is not an inference run. "
-    "Before recommending anon plus user JWT, inspect the target tables' read and write "
-    "policies and required ownership behavior. Name any missing policy prerequisites; "
-    "do not assume that replacing an administrative client preserves application behavior. "
     "Never recommend weakening a guard or removing a public setting solely "
     "because it is visible. Report at most 20 findings. If the SAME issue "
     "pattern occurs in multiple files (e.g. the same kind of hardcoded "
@@ -810,6 +831,14 @@ SYSTEM_PROMPT = (
     "is wrong, respond with []. Never invent files or lines: evidence "
     "must be copied exactly from the provided content."
 )
+
+
+def system_prompt_for(rubric: str | None = None) -> str:
+    """Return the shared core system contract plus any rubric-specific rules."""
+    if not rubric or rubric not in RUBRICS:
+        return SYSTEM_PROMPT
+    extra = RUBRICS[rubric].get("system_rules", "").strip()
+    return f"{SYSTEM_PROMPT}\n\n{extra}" if extra else SYSTEM_PROMPT
 
 
 @dataclass
@@ -1035,7 +1064,7 @@ _TRUNCATION_RATIO = 4.5
 _TRUNCATION_MIN_CHARS = 50_000
 
 
-def content_budget(client: object) -> int:
+def content_budget(client: object, rubric: str | None = None) -> int:
     """Characters of FILE CONTENT one rubric may spend on this client.
 
     The smaller of our own MAX_TOTAL_CHARS and what the model's context window
@@ -1052,7 +1081,12 @@ def content_budget(client: object) -> int:
     """
     if not hasattr(client, "input_char_budget"):
         return MAX_TOTAL_CHARS
-    room = int(client.input_char_budget() / _PROMPT_OVERHEAD) - len(SYSTEM_PROMPT)
+    sys_chars = (
+        len(system_prompt_for(rubric))
+        if rubric is not None
+        else max(len(system_prompt_for(r)) for r in RUBRICS)
+    )
+    room = int(client.input_char_budget() / _PROMPT_OVERHEAD) - sys_chars
     return max(0, min(MAX_TOTAL_CHARS, room))
 
 
@@ -1487,13 +1521,14 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
               _record_ran(rubric)
               continue
           usage = None
+          sys_prompt = system_prompt_for(rubric)
           for _shrink in range(_MAX_SHRINKS + 1):
               stats.prompts += 1
               source_context = facts_prompt(
-                  source_facts, min(16_000, max(0, (request_limit - len(SYSTEM_PROMPT)) // 5)))
+                  source_facts, min(16_000, max(0, (request_limit - len(sys_prompt)) // 5)))
               selected, prompt = fit_to_window(
-                  selected, rubric, request_limit - len(SYSTEM_PROMPT), source_context)
-              sent = len(SYSTEM_PROMPT) + len(prompt)
+                  selected, rubric, request_limit - len(sys_prompt), source_context)
+              sent = len(sys_prompt) + len(prompt)
               prompt_metadata = {
                   "prompt_chars": sent,
                   "selected_files": len(selected),
@@ -1511,7 +1546,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                   stats.partially_submitted_files = tuple(sorted(
                       set(stats.partially_submitted_files)
                       | {n for n, t in selected if isinstance(t, PromptExcerpt) or t != files_by_name[n]}))
-                  raw, usage = client.complete(SYSTEM_PROMPT, prompt,
+                  raw, usage = client.complete(sys_prompt, prompt,
                                                max_tokens=RUBRIC_MAX_TOKENS)
                   stats.provider_attempts.extend(
                       {**attempt, **prompt_metadata, "rubric": rubric, "pass": _pass + 1,
