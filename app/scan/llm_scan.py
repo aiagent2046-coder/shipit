@@ -22,7 +22,7 @@ from typing import BinaryIO
 from app.llm.accounting import estimate_stats_cost
 from app.llm.client import LLMClient, LLMError
 from app.llm.response_diagnostics import response_diagnostics
-from app.scan.prompt_context import PromptExcerpt, numbered_lines, python_excerpt, related_test
+from app.scan.prompt_context import PromptExcerpt, numbered_lines, related_test, source_excerpt
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
 from app.scan.claim_narrative import project_claim_narrative
 from app.scan.fact_projection_grouping import group_fact_projections
@@ -1140,7 +1140,7 @@ def _select_ranked_files(files: list[tuple[str, str]], rubric: str,
     file_cap = min(MAX_FILE_CHARS, reserve // RELEVANCE_RESERVE_FILES)
     matched = []
     for name, text in files:
-        excerpt = python_excerpt(name, text, kw, file_cap)
+        excerpt = source_excerpt(name, text, kw, file_cap)
         matched.append((name, excerpt if excerpt is not None else truncate_at_line(text, file_cap)))
 
     selected: list[tuple[str, str]] = []

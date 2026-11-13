@@ -13,10 +13,44 @@ import re
 import tokenize
 from typing import Iterable
 
+from tree_sitter import Language, Parser
+import tree_sitter_typescript
+
 from app.scan.secrets import is_non_production_path
 
 
 MAX_EXCERPT_SOURCE_CHARS = 2_000_000
+MAX_TS_EXCERPT_NODES = 80_000
+_TS_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_TS_PARSERS = {
+    False: Parser(Language(tree_sitter_typescript.language_typescript())),
+    True: Parser(Language(tree_sitter_typescript.language_tsx())),
+}
+_TS_DECLARATION_TYPES = frozenset({
+    "function_declaration",
+    "generator_function_declaration",
+    "class_declaration",
+    "abstract_class_declaration",
+})
+_TS_CALLABLE_VALUES = frozenset({
+    "arrow_function",
+    "function_expression",
+    "generator_function",
+    "class",
+})
+_TS_WRAPPED_VALUES = frozenset({
+    "parenthesized_expression",
+    "as_expression",
+    "satisfies_expression",
+    "type_assertion",
+    "non_null_expression",
+})
+_TS_REF_IDENTIFIERS = frozenset({
+    "identifier",
+    "type_identifier",
+    "shorthand_property_identifier",
+    "shorthand_property_identifier_pattern",
+})
 OMITTED_MARKER = "[... omitted original lines {start}-{end}; omitted code may contain guards or dependencies ...]"
 EXCERPT_NOTICE = (
     "[Partial source excerpt: original line numbers are preserved. Never infer "
@@ -130,6 +164,192 @@ def python_excerpt(path: str, text: str, keywords: re.Pattern[str],
     if len(content) > limit:
         return None
     return PromptExcerpt(content, numbers, tuple(omitted))
+
+
+def _ts_unwrap_value(node):
+    while node and node.type in _TS_WRAPPED_VALUES:
+        children = [c for c in node.named_children if c.type != "comment"]
+        if not children:
+            break
+        node = children[0]
+    return node
+
+
+def _ts_is_callable_init(node) -> bool:
+    node = _ts_unwrap_value(node)
+    if node is None:
+        return False
+    if node.type in _TS_CALLABLE_VALUES:
+        return True
+    if node.type == "call_expression":
+        stack = [node]
+        while stack:
+            cur = stack.pop()
+            if cur.type in _TS_CALLABLE_VALUES:
+                return True
+            stack.extend(cur.named_children)
+    return False
+
+
+def _ts_definition_name(stmt) -> str | None:
+    target = stmt
+    if target.type == "export_statement":
+        decl = target.child_by_field_name("declaration")
+        if decl is not None:
+            target = decl
+        else:
+            non_dec = [c for c in target.named_children if c.type not in {"decorator", "comment"}]
+            if len(non_dec) == 1 and non_dec[0].type in (_TS_DECLARATION_TYPES | _TS_CALLABLE_VALUES):
+                name_node = non_dec[0].child_by_field_name("name")
+                return name_node.text.decode("utf-8", "replace") if name_node is not None else "<default>"
+            return None
+    if target.type in _TS_DECLARATION_TYPES:
+        name_node = target.child_by_field_name("name")
+        if name_node is None:
+            for c in target.named_children:
+                if c.type in {"identifier", "type_identifier"}:
+                    name_node = c
+                    break
+        return name_node.text.decode("utf-8", "replace") if name_node is not None else None
+    if target.type in {"lexical_declaration", "variable_declaration"}:
+        declarators = [c for c in target.named_children if c.type == "variable_declarator"]
+        if len(declarators) != 1:
+            return None
+        dec = declarators[0]
+        name_node = dec.child_by_field_name("name")
+        val_node = dec.child_by_field_name("value")
+        if name_node is not None and name_node.type == "identifier" and _ts_is_callable_init(val_node):
+            return name_node.text.decode("utf-8", "replace")
+    return None
+
+
+def _ts_code_tokens(node) -> str:
+    tokens: list[str] = []
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if cur.type == "comment":
+            continue
+        if not cur.children:
+            tokens.append(cur.text.decode("utf-8", "replace"))
+        else:
+            stack.extend(reversed(cur.children))
+    return " ".join(tokens)
+
+
+def _ts_referenced_names(node) -> set[str]:
+    names: set[str] = set()
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if cur.type == "comment":
+            continue
+        if cur.type in _TS_REF_IDENTIFIERS and len(cur.text) <= 128:
+            names.add(cur.text.decode("utf-8", "replace"))
+        stack.extend(cur.named_children)
+    return names
+
+
+def ts_excerpt(path: str, text: str, keywords: re.Pattern[str],
+               limit: int) -> PromptExcerpt | None:
+    """Keep complete relevant top-level TS/JS definitions and their local name closure.
+
+    Mirrors ``python_excerpt`` for TypeScript, JavaScript, TSX and JSX modules:
+    imports, module-level constants/types/guards and dispatch statements are
+    preserved, while unrelated top-level functions, classes and callable
+    component declarations are omitted with explicit line-range markers.
+    """
+    if (not path.endswith(_TS_SUFFIXES) or len(text) <= limit
+            or len(text) > MAX_EXCERPT_SOURCE_CHARS or limit <= 0
+            or "\n" not in text):
+        return None
+    parser = _TS_PARSERS[path.endswith((".tsx", ".jsx"))]
+    tree = parser.parse(text.encode("utf-8", errors="replace"))
+    root = tree.root_node
+    if root.has_error:
+        return None
+    node_count = 0
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        node_count += 1
+        if node_count > MAX_TS_EXCERPT_NODES:
+            return None
+        stack.extend(cur.children)
+
+    statements = [c for c in root.named_children if c.type != "comment"]
+    if not statements:
+        return None
+    spans: list[tuple[int, int]] = []
+    for stmt in statements:
+        start_line = stmt.start_point[0] + 1
+        end_line = stmt.end_point[0] + 1 if stmt.end_point[1] > 0 else max(start_line, stmt.end_point[0])
+        if spans and start_line <= spans[-1][1]:
+            return None
+        spans.append((start_line, end_line))
+
+    definitions: dict[int, tuple[object, str]] = {}
+    for index, stmt in enumerate(statements):
+        def_name = _ts_definition_name(stmt)
+        if def_name is not None:
+            definitions[index] = (stmt, def_name)
+    if not definitions:
+        return None
+
+    selected = set(range(len(statements))) - set(definitions)
+    relevant = {
+        index for index, (stmt, _) in definitions.items()
+        if keywords.search(_ts_code_tokens(stmt))
+    }
+    if not relevant:
+        return None
+    selected.update(relevant)
+    while True:
+        names = {
+            name for index in selected
+            for name in _ts_referenced_names(statements[index])
+        }
+        closure = {
+            index for index, (_, def_name) in definitions.items()
+            if def_name in names
+        }
+        if closure <= selected:
+            break
+        selected.update(closure)
+
+    lines = text.splitlines()
+    retained = {
+        number for index in selected
+        for number in range(spans[index][0], min(len(lines), spans[index][1]) + 1)
+    }
+    if not retained or len(retained) == len(lines):
+        return None
+    retained.update(number for number, line in enumerate(lines, 1) if not line.strip())
+    omitted: list[tuple[int, int]] = []
+    for number in range(1, len(lines) + 1):
+        if number in retained:
+            continue
+        if omitted and omitted[-1][1] == number - 1:
+            omitted[-1] = (omitted[-1][0], number)
+        else:
+            omitted.append((number, number))
+    if not omitted:
+        return None
+    numbers = tuple(sorted(retained))
+    content = "\n".join(lines[number - 1] for number in numbers) + "\n"
+    if len(content) > limit:
+        return None
+    return PromptExcerpt(content, numbers, tuple(omitted))
+
+
+def source_excerpt(path: str, text: str, keywords: re.Pattern[str],
+                   limit: int) -> PromptExcerpt | None:
+    """Dispatch to the language-appropriate AST excerpt builder, or None."""
+    if path.endswith(".py"):
+        return python_excerpt(path, text, keywords, limit)
+    if path.endswith(_TS_SUFFIXES):
+        return ts_excerpt(path, text, keywords, limit)
+    return None
 
 
 def _module_stem(path: str) -> str:
