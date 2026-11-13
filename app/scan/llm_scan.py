@@ -22,7 +22,13 @@ from typing import BinaryIO
 from app.llm.accounting import estimate_stats_cost
 from app.llm.client import LLMClient, LLMError
 from app.llm.response_diagnostics import response_diagnostics
-from app.scan.prompt_context import PromptExcerpt, numbered_lines, related_test, source_excerpt
+from app.scan.prompt_context import (
+    PromptExcerpt,
+    imported_production_files,
+    numbered_lines,
+    related_test,
+    source_excerpt,
+)
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
 from app.scan.claim_narrative import project_claim_narrative
 from app.scan.fact_projection_grouping import group_fact_projections
@@ -86,6 +92,8 @@ MAX_FILE_CHARS = 48_000
 # measured, not presumed equivalent to the larger selection.
 MAX_TOTAL_CHARS = 450_000
 SUPPORT_BUDGET_SHARE = 0.1
+IMPORT_CONTEXT_BUDGET_SHARE = 0.1
+IMPORT_CONTEXT_ANCHOR_FILES = 12
 _PROJECT_METADATA = frozenset({"pyproject.toml", "package.json", "tsconfig.json"})
 # Exact generated dependency inventories, including nested project roots. Keep
 # manifests/configuration and the original archive available to static checks.
@@ -1213,6 +1221,39 @@ def has_application_source(files: list[tuple[str, str]]) -> bool:
                and name.rsplit("/", 1)[-1] not in _PROJECT_METADATA for name, _ in files)
 
 
+def _select_imported_production_files(
+    selected: list[tuple[str, str]],
+    eligible_production: list[tuple[str, str]],
+    rubric: str,
+    budget: int,
+    full_budget: int,
+) -> list[tuple[str, str]]:
+    """Select 1-hop statically imported production helpers within budget."""
+    if budget <= 0 or not selected:
+        return []
+    raw_by_name = dict(eligible_production)
+    anchors = [
+        (name, raw_by_name.get(name, text))
+        for name, text in selected[:IMPORT_CONTEXT_ANCHOR_FILES]
+    ]
+    candidates = imported_production_files(anchors, eligible_production)
+    if not candidates:
+        return []
+    kw = RUBRICS[rubric]["keywords"]
+    reserve = int(full_budget * RELEVANCE_BUDGET_SHARE)
+    file_cap = min(MAX_FILE_CHARS, reserve // RELEVANCE_RESERVE_FILES)
+    chosen: list[tuple[str, str]] = []
+    used = 0
+    for name, text in candidates:
+        excerpt = source_excerpt(name, text, kw, file_cap)
+        prepared = excerpt if excerpt is not None else truncate_at_line(text, file_cap)
+        if used + len(prepared) > budget:
+            continue
+        chosen.append((name, prepared))
+        used += len(prepared)
+    return chosen
+
+
 def select_files(files: list[tuple[str, str]], rubric: str,
                  budget: int = MAX_TOTAL_CHARS) -> list[tuple[str, str]]:
     """Prioritise application code; use at most 10% for related support files.
@@ -1224,27 +1265,38 @@ def select_files(files: list[tuple[str, str]], rubric: str,
     if budget <= 0:
         return []
     kw = RUBRICS[rubric]["keywords"]
-    matched = [(n, t) for n, t in files
-               if not is_binary_evidence_path(n) and not is_dependency_lockfile(n) and (kw.search(n) or kw.search(t))]
+    eligible = [(n, t) for n, t in files
+                if not is_binary_evidence_path(n) and not is_dependency_lockfile(n)]
+    matched = [(n, t) for n, t in eligible if (kw.search(n) or kw.search(t))]
     production = [(n, t) for n, t in matched if not is_non_production_path(n)]
+    eligible_production = [(n, t) for n, t in eligible if not is_non_production_path(n)]
     support = [(n, t) for n, t in matched if is_non_production_path(n)]
     if not has_application_source(files) and any(is_non_production_path(n) for n, _ in files):
         return _select_ranked_files(support, rubric, budget)
     selected = _select_ranked_files(production, rubric, budget)
-    names = [n for n, _ in selected]
+    import_budget = int(budget * IMPORT_CONTEXT_BUDGET_SHARE)
+    imported = _select_imported_production_files(
+        selected, eligible_production, rubric, import_budget, budget)
+    names = [n for n, _ in selected] + [n for n, _ in imported]
     linked = [(n, t) for n, t in support if related_test(n, names, t)]
-    if not linked:
+    if not linked and not imported:
         return selected
     support_budget = int(budget * SUPPORT_BUDGET_SHARE)
-    selected_support = _select_ranked_files(linked, rubric, support_budget)
-    # Reserve only the support actually selected, returning unused capacity to
-    # application code. Recheck links against the final application selection;
-    # head truncation/excerpts must not erase imports used to establish a link.
-    selected = _select_ranked_files(production, rubric, budget - sum(len(t) for _, t in selected_support))
-    names = [n for n, _ in selected]
+    selected_support = _select_ranked_files(linked, rubric, support_budget) if linked else []
+    # Reserve only the 1-hop imports and support actually selected, returning
+    # unused capacity to application code. Recheck links against the final
+    # application selection; head truncation/excerpts must not erase imports.
+    app_budget = budget - sum(len(t) for _, t in selected_support) - sum(len(t) for _, t in imported)
+    selected = _select_ranked_files(production, rubric, app_budget)
+    imported = _select_imported_production_files(
+        selected, eligible_production, rubric,
+        min(import_budget, budget - sum(len(t) for _, t in selected) - sum(len(t) for _, t in selected_support)),
+        budget,
+    )
+    names = [n for n, _ in selected] + [n for n, _ in imported]
     support_sources = dict(linked)
     selected_support = [(n, t) for n, t in selected_support if related_test(n, names, support_sources[n])]
-    return selected + selected_support
+    return selected + imported + selected_support
 
 
 def build_prompt(selected: list[tuple[str, str]], rubric: str, source_context: str = "") -> str:

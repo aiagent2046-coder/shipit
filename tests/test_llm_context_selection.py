@@ -100,6 +100,31 @@ def test_late_ts_source_quote_keeps_its_original_coordinate_and_partial_scope():
     assert llm_scan.verify_finding(finding, {path: source})
 
 
+def test_select_files_pulls_one_hop_imported_helpers_without_rubric_keywords():
+    route = (
+        "src/app/api/orders/route.ts",
+        "import { assertWorkspaceMember } from '@/lib/guards';\n"
+        "export async function POST(req: Request) {\n"
+        "  const token = req.headers.get('authorization');\n"
+        "  return assertWorkspaceMember(token);\n"
+        "}\n",
+    )
+    helper = (
+        "src/lib/guards.ts",
+        "export function assertWorkspaceMember(val: string | null) {\n"
+        "  if (!val) throw new Error('denied');\n"
+        "  return true;\n"
+        "}\n",
+    )
+    unrelated = ("src/lib/math.ts", "export const add = (a: number, b: number) => a + b;\n")
+    assert not llm_scan.RUBRICS["auth"]["keywords"].search(helper[0])
+    assert not llm_scan.RUBRICS["auth"]["keywords"].search(helper[1])
+
+    selected = llm_scan.select_files([route, helper, unrelated], "auth", 10_000)
+    names = [n for n, _ in selected]
+    assert names == ["src/app/api/orders/route.ts", "src/lib/guards.ts"]
+
+
 def test_private_diagnostics_distinguish_embedded_empty_from_direct_array():
     _, stats = llm_scan.run_llm_scan(archive({"src/auth.py": "token = 1\n"}),
                                    client("Private answer text: []"), rubrics=("auth",))

@@ -3,6 +3,7 @@ import re
 
 from app.scan.prompt_context import (
     PromptExcerpt,
+    imported_production_files,
     numbered_lines,
     python_excerpt,
     related_test,
@@ -130,7 +131,7 @@ def ts_unrelated():
 def test_ts_excerpt_late_relevant_function_and_arrow_component_preserve_coordinates():
     source = (
         "import { verifyJwt } from './crypto';\n"
-        "const AUTH_HEADER = 'authorization';\n"
+        "const AUTH_HEADER: string = 'authorization';\n"
         + ts_unrelated()
         + "const checkHeader = (raw: string) => verifyJwt(raw);\n"
         "export const LoginButton = (props: { token: string }) => {\n"
@@ -184,3 +185,32 @@ def test_ts_excerpt_falls_back_on_syntax_error_same_line_statements_or_over_budg
     assert ts_excerpt("src/auth.ts", same_line, KEYWORDS, 300) is None
     huge_cfg = "const CFG = '" + ("z" * 1000) + "';\n" + ts_unrelated() + "export function auth() { return CFG; }\n"
     assert ts_excerpt("src/auth.ts", huge_cfg, KEYWORDS, 500) is None
+
+
+def test_imported_production_files_resolves_relative_and_alias_imports_without_keywords():
+    route_ts = (
+        "import { Button } from '@/components/ui/button';\n"
+        "import { checkOwner } from '../../lib/ownership';\n"
+        "export async function POST(req: Request) {\n"
+        "  const session = req.headers.get('x-session');\n"
+        "  return checkOwner(session);\n"
+        "}\n"
+    )
+    button_tsx = (
+        "export const Button = (p: { loading?: boolean; disabled?: boolean }) => "
+        "<button disabled={p.disabled || p.loading} />;\n"
+    )
+    ownership_ts = "export const checkOwner = (id: string | null) => Boolean(id);\n"
+    unrelated_ts = "export const noop = () => 42;\n"
+    candidates = [
+        ("repo/src/app/api/route.ts", route_ts),
+        ("repo/src/components/ui/button.tsx", button_tsx),
+        ("repo/src/lib/ownership/index.ts", ownership_ts),
+        ("repo/src/lib/unrelated.ts", unrelated_ts),
+        ("repo/tests/ownership.test.ts", "export const t = 1;\n"),
+    ]
+    linked = imported_production_files([("repo/src/app/api/route.ts", route_ts)], candidates)
+    assert [name for name, _ in linked] == [
+        "repo/src/lib/ownership/index.ts",
+        "repo/src/components/ui/button.tsx",
+    ]
