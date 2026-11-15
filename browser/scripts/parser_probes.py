@@ -10,7 +10,7 @@ PARSER_VERSIONS = {
     "tree-sitter": "0.26.0",
     "tree-sitter-typescript": "0.23.2",
     "tree-sitter-javascript": "0.25.0",
-    "pglast": "8.4",
+    "pglast": "8.7",
 }
 
 TREE_SOURCES = {
