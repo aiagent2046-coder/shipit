@@ -157,18 +157,102 @@ def test_different_content_gets_its_own_job(audit_queue):
     assert len(audit_queue.rows) == 2
 
 
-def test_explicit_idempotency_key_header_overrides_the_derived_one(audit_queue):
-    # Two DIFFERENT payloads under one client-chosen key: the second joins the
-    # first, which the content-derived default would never have done. That is
-    # the header doing the work, not the digest.
+def test_explicit_key_never_joins_different_anonymous_content(audit_queue):
+    # A client label is not a capability to read someone else's pending audit.
     first = _post_zip({"package.json": NEXT_PKG, "a.ts": b"const x=1\n"},
                       headers={"Idempotency-Key": "client-chosen-key-1"})
     second = _post_zip({"package.json": NEXT_PKG, "a.ts": b"const x=2\n"},
                        headers={"Idempotency-Key": "client-chosen-key-1"})
 
-    assert second.json()["job_id"] == first.json()["job_id"]
+    assert first.status_code == second.status_code == 202
+    assert second.json()["job_id"] != first.json()["job_id"]
+    assert second.json()["access_token"] != first.json()["access_token"]
+    assert len(audit_queue.rows) == 2
+    assert all(row["idempotency_key"] != "client-chosen-key-1" for row in audit_queue.enqueued)
+
+
+def test_explicit_key_preserves_identical_retry_without_restaging(audit_queue, monkeypatch):
+    first = _post_zip(headers={"Idempotency-Key": "shared-client-label"})
+
+    def must_not_restage(*args):
+        raise AssertionError("retry rewrote a live worker payload")
+
+    monkeypatch.setattr("app.main.stage_archive", must_not_restage)
+    second = _post_zip(headers={"Idempotency-Key": "shared-client-label"})
+    assert first.status_code == second.status_code == 202
+    assert second.json() == first.json()
     assert len(audit_queue.rows) == 1
-    assert audit_queue.enqueued[0]["idempotency_key"] == "client-chosen-key-1"
+
+
+def test_explicit_key_isolates_accounts_even_for_identical_content(audit_queue, monkeypatch):
+    from tests.conftest import force_pro_account
+
+    force_pro_account(monkeypatch, "11111111-1111-1111-1111-111111111111")
+    first = _post_zip(headers={"Idempotency-Key": "shared-client-label"})
+    force_pro_account(monkeypatch, "22222222-2222-2222-2222-222222222222")
+    second = _post_zip(headers={"Idempotency-Key": "shared-client-label"})
+    assert first.status_code == second.status_code == 202
+    assert second.json()["job_id"] != first.json()["job_id"]
+    assert second.json()["access_token"] != first.json()["access_token"]
+    assert len(audit_queue.rows) == 2
+
+
+def test_explicit_key_isolates_changed_content_within_account(audit_queue, monkeypatch):
+    from tests.conftest import force_pro_account
+
+    force_pro_account(monkeypatch)
+    first = _post_zip({"package.json": NEXT_PKG, "a.ts": b"const x=1\n"},
+                      headers={"Idempotency-Key": "shared-client-label"})
+    second = _post_zip({"package.json": NEXT_PKG, "a.ts": b"const x=2\n"},
+                       headers={"Idempotency-Key": "shared-client-label"})
+    assert first.status_code == second.status_code == 202
+    assert first.json()["job_id"] != second.json()["job_id"]
+
+
+def test_explicit_key_does_not_join_different_repository_sources(audit_queue):
+    app.dependency_overrides[get_repo_fetcher] = lambda: (
+        lambda owner, repo, **kw: make_zip({"package.json": NEXT_PKG}).getvalue()
+    )
+    try:
+        responses = [client.post("/v1/audits", data={"repo_url": f"https://github.com/acme/{name}"},
+                                 headers={"Idempotency-Key": "shared-client-label"})
+                     for name in ("first", "second")]
+    finally:
+        app.dependency_overrides.pop(get_repo_fetcher, None)
+    assert [response.status_code for response in responses] == [202, 202]
+    assert responses[0].json()["job_id"] != responses[1].json()["job_id"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("account_id", "11111111-1111-1111-1111-111111111111"),
+    ("content_hash", "different-content"),
+    ("engine_version", "different-engine"),
+    ("source_kind", "repo_url"),
+])
+def test_unexpected_repository_collision_never_exposes_token(audit_queue, monkeypatch, field, value):
+    first = _post_zip(headers={"Idempotency-Key": "shared-client-label"})
+    original = dict(audit_queue.only)
+
+    async def wrong_row(**kwargs):
+        return {**original, field: value, "inserted": False}
+
+    monkeypatch.setattr(audit_queue, "enqueue", wrong_row)
+    second = _post_zip(headers={"Idempotency-Key": "shared-client-label"})
+    assert second.status_code == 409
+    assert second.json() == {"detail": {"reason": "idempotency_conflict"}}
+    assert first.json()["access_token"] not in second.text
+
+
+def test_database_collision_is_a_conflict_without_disclosing_identity(audit_queue, monkeypatch):
+    from app.db import AuditJobIdempotencyConflict
+
+    async def conflict(**kwargs):
+        raise AuditJobIdempotencyConflict("private row detail must not escape")
+
+    monkeypatch.setattr(audit_queue, "enqueue", conflict)
+    response = _post_zip(headers={"Idempotency-Key": "shared-client-label"})
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"reason": "idempotency_conflict"}}
 
 
 def test_derived_idempotency_key_is_scoped_to_content_and_engine(audit_queue):

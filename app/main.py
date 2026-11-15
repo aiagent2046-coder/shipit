@@ -12,6 +12,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import io
+import json
 import logging
 import os
 import time
@@ -20,6 +21,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 
+import httpx
 from fastapi import (
     Depends, FastAPI, Form, Header, HTTPException, Request, UploadFile,
 )
@@ -57,6 +59,7 @@ from app.routes.storefront import router as storefront_router
 from app.routes.yookassa import router as yookassa_router
 from app.db import (
     AccountRepository,
+    AuditJobIdempotencyConflict,
     AuditJobRepository,
     AuditRepository,
     FixOutcomeRepository,
@@ -76,8 +79,11 @@ from app.sca.snapshot import baseline_is_current, snapshot_is_current
 from app.sca.refresh import inventory_payload
 from app.sca.cache import needs_dependency_scan
 from app.deploypack import github_app
-from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
+from app.deploypack.github_app import GitHubAppAuthError
 from app.deploypack.delivery import DeliveryError, render_pr_body
+from app.deploypack.delivery_auth import (
+    DeliveryAuthorizationError, authorize_repository_delivery, validate_delivery_token,
+)
 from app.deploypack.generate import UnsupportedForDeployPack
 from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
@@ -194,7 +200,7 @@ def configure_cors(target: FastAPI) -> None:
         allow_origin_regex=origin_regex,
         allow_credentials=bool(origins) or allow_previews,
         allow_methods=["GET", "POST"],
-        allow_headers=["Authorization", "Content-Type", CSRF_HEADER],
+        allow_headers=["Authorization", "Content-Type", CSRF_HEADER, "X-GitHub-Token"],
         expose_headers=["Retry-After"],
     )
 
@@ -1019,9 +1025,9 @@ async def _resolve_pr_token(owner: str, repo: str) -> str | None:
     """The token delivery.open_pull_request should use for owner/repo: a
     GitHub App installation token when the App is configured (works for any
     repo the App is installed on), else None so delivery falls back to the
-    single-operator GITHUB_PR_TOKEN. Same resolution the Deploy Pack flow
-    does inline in create_fixpack — kept identical so both PR paths behave
-    the same."""
+    single-operator GITHUB_PR_TOKEN. This resolver is for the asynchronous
+    paid processor; public Deploy Pack delivery instead uses only its caller's
+    request-scoped credential (see docs/deploy-pack-delivery-access.md)."""
     app_creds = github_app.app_credentials_from_env()
     # Diagnostic for the "no GitHub token configured" incident: when App
     # creds look present in the process env yet resolution still yields no
@@ -2219,11 +2225,7 @@ async def create_audit(
         stack=stack.value,
         account_id=account["id"] if account else None,
         quota_key=quota_key,
-        idempotency_key=(
-            idempotency_key
-            or _audit_idempotency_key(
-                digest, account["id"] if account else None)
-        ),
+        idempotency_key=idempotency_key,
     )
     logger.info(
         "audit intake: queued job %s", enqueued["job_id"],
@@ -2232,23 +2234,30 @@ async def create_audit(
     return enqueued
 
 
-def _audit_idempotency_key(digest: str, account_id: str | None) -> str:
-    """The default key for a submission the client did not label itself.
+def _audit_idempotency_key(
+    digest: str, account_id: str | None, *, source_kind: str = "zip",
+    source_url: str | None = None, client_key: str | None = None,
+) -> str:
+    """Bind the optional client label to the validated submission, never access.
 
-    (content, engine version, submitter) -- so a double-clicked upload joins the
-    job already running instead of queueing a second identical scan, while two
-    different callers submitting the same bytes stay independent (they have
-    separate quotas, and one's job going terminal must not decide the other's
-    outcome). The engine version is in the key for the same reason it is in the
-    cache key: after a bump the same content is genuinely different work."""
-    material = f"{digest}|{AUDIT_ENGINE_VERSION}|{account_id or 'anon'}"
+    Accounts have separate namespaces. Anonymous callers retain the existing
+    identical-content possession policy used by the audit cache; an IP address
+    is not an identity. Both content and source must match before a retry can
+    join a live job. JSON encodes boundaries so a client label cannot alter the
+    account/content/source fields. No raw client key is stored in the queue.
+    """
+    material = json.dumps([
+        "audit-job-v2", account_id, digest, AUDIT_ENGINE_VERSION,
+        source_kind, source_url if source_kind == "repo_url" else None,
+        client_key or None,
+    ], separators=(",", ":"))
     return hashlib.sha256(material.encode()).hexdigest()
 
 
 async def _enqueue_audit_job(
     audit_job_repo: AuditJobRepository, *, raw: bytes | None, source_kind: str,
     source_url: str | None, digest: str, stack: str, account_id: str | None,
-    quota_key: str | None, idempotency_key: str,
+    quota_key: str | None, idempotency_key: str | None,
 ) -> dict:
     """Queue one validated submission and return the 202 body.
 
@@ -2267,19 +2276,28 @@ async def _enqueue_audit_job(
     with, and deliberately does NOT re-stage: that job's payload is already on
     disk, and rewriting it under a worker that may be mid-read buys nothing."""
     job_id = str(uuid.uuid4())
-    job = await audit_job_repo.enqueue(
-        job_id=job_id,
-        initial_state="created" if source_kind == "zip" else "queued",
-        source_kind=source_kind,
-        # Filled in below for a zip, once the bytes are actually on disk.
-        source_ref=None if source_kind == "zip" else source_url,
-        content_hash=digest,
-        engine_version=AUDIT_ENGINE_VERSION,
-        stack=stack,
-        account_id=account_id,
-        quota_key=quota_key,
-        idempotency_key=idempotency_key,
+    scoped_key = _audit_idempotency_key(
+        digest, account_id, source_kind=source_kind, source_url=source_url,
+        client_key=idempotency_key,
     )
+    try:
+        job = await audit_job_repo.enqueue(
+            job_id=job_id,
+            initial_state="created" if source_kind == "zip" else "queued",
+            source_kind=source_kind,
+            # Filled in below for a zip, once the bytes are actually on disk.
+            source_ref=None if source_kind == "zip" else source_url,
+            content_hash=digest,
+            engine_version=AUDIT_ENGINE_VERSION,
+            stack=stack,
+            account_id=account_id,
+            quota_key=quota_key,
+            idempotency_key=scoped_key,
+        )
+    except AuditJobIdempotencyConflict:
+        raise HTTPException(
+            status_code=409, detail={"reason": "idempotency_conflict"},
+        ) from None
     if job is None:
         # No DATABASE_URL: there is no queue to accept the job and no worker to
         # run it. Before the cutover this deployment could still scan inline and
@@ -2290,6 +2308,18 @@ async def _enqueue_audit_job(
             detail={"reason": "queue_unavailable",
                     "detail": "audit persistence isn't configured on this "
                               "deployment (see app/db.py)"},
+        )
+
+    # Defence in depth: even a legacy/misbehaving repository must not hand a
+    # caller another submission's token. ZIP source_ref is a server spool path,
+    # not the submitted identity, so it is deliberately excluded here.
+    expected = {"account_id": account_id, "content_hash": digest,
+                "engine_version": AUDIT_ENGINE_VERSION, "source_kind": source_kind}
+    if source_kind == "repo_url":
+        expected["source_ref"] = source_url
+    if any(job.get(key) != value for key, value in expected.items()):
+        raise HTTPException(
+            status_code=409, detail={"reason": "idempotency_conflict"},
         )
 
     # job["id"] rather than the minted job_id: on a duplicate collision the row
@@ -2392,11 +2422,11 @@ async def create_fixpack(
     for now; should become "1 free Pack run per audit_id" now that
     audits are persisted.
 
-    PR delivery uses a GitHub App installation token when
-    GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY are configured (works for
-    any repo the App is installed on, not just the operator's own),
-    falling back to the single-operator GITHUB_PR_TOKEN otherwise —
-    see app/deploypack/github_app.py and app/deploypack/delivery.py.
+    PR delivery requires the caller's X-GitHub-Token with repository write
+    permission. Both the preflight and delivery use that exact token; this
+    public endpoint never borrows the server's GitHub App or PAT authority.
+    The token is request-only and is not persisted or returned. Generation
+    without deliver_to remains public and does not require a GitHub token.
 
     `want_preview=true` keeps the container alive (24h TTL, 256MB RAM
     cap, 1 live preview per client key — same _client_key as the rate
@@ -2450,6 +2480,7 @@ async def create_fixpack(
     # in delivery.py + github_app.py). Reject anything that isn't exactly
     # two valid name segments so extra "/" or ".." can't reshape the path.
     owner = repo = None
+    delivery_token: str | None = None
     if deliver_to:
         parts = deliver_to.split("/")
         if len(parts) != 2 or not all(_VALID_OWNER_REPO_SEGMENT.match(p) for p in parts):
@@ -2460,6 +2491,12 @@ async def create_fixpack(
                                   "matching ^[A-Za-z0-9._-]+$"},
             )
         owner, repo = parts
+
+        try:
+            delivery_token = validate_delivery_token(request.headers.get("X-GitHub-Token"))
+            await run_in_threadpool(authorize_repository_delivery, owner, repo, delivery_token)
+        except DeliveryAuthorizationError as exc:
+            raise HTTPException(status_code=exc.status_code, detail={"reason": exc.reason}) from None
 
     if want_preview:
         await run_in_threadpool(preview_registry.reap_expired)
@@ -2508,20 +2545,15 @@ async def create_fixpack(
         else:
             body = render_pr_body("deploy", result["files"], result["detail"])
             try:
-                token: str | None = None
-                app_creds = github_app.app_credentials_from_env()
-                if app_creds is not None:
-                    app_id, private_key = app_creds
-                    token = await run_in_threadpool(
-                        github_app.installation_token_for_repo, owner, repo,
-                        app_id=app_id, private_key=private_key,
-                    )
                 opened = await run_in_threadpool(
                     pr_opener, owner, repo, result["files"], body=body,
-                    token=token, job_id=job_id,
+                    token=delivery_token, job_id=job_id,
                 )
-            except (DeliveryError, GitHubAppError) as exc:
-                pr = {"delivered": False, "reason": str(exc)}
+            except (DeliveryError, httpx.HTTPError):
+                # Upstream exceptions can contain request data. Never reflect
+                # them to this caller or borrow server credentials on failure.
+                pr = {"delivered": False,
+                      "reason": "GitHub delivery failed; check repository permissions and retry."}
             else:
                 pr = {"delivered": True, "url": opened.html_url,
                       "branch": opened.branch}

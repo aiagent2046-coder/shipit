@@ -84,7 +84,7 @@ def test_preflight_advertises_methods_and_auth_header(monkeypatch):
         headers={
             "Origin": LISTED,
             "Access-Control-Request-Method": "POST",
-            "Access-Control-Request-Headers": "authorization,content-type",
+            "Access-Control-Request-Headers": "authorization,content-type,x-github-token",
         },
     )
     assert r.status_code == 200
@@ -92,6 +92,7 @@ def test_preflight_advertises_methods_and_auth_header(monkeypatch):
     allowed_methods = r.headers["access-control-allow-methods"]
     assert "GET" in allowed_methods and "POST" in allowed_methods
     assert "authorization" in r.headers["access-control-allow-headers"].lower()
+    assert "x-github-token" in r.headers["access-control-allow-headers"].lower()
 
 
 def test_quota_retry_time_is_readable_by_the_allowed_browser_origin(monkeypatch):
