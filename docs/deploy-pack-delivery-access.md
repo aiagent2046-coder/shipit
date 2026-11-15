@@ -126,7 +126,8 @@ During the maintenance window:
    downtime; keep ingress in maintenance until verification is complete.
 2. From the selected target checkout, inspect migration status and apply all
    pending migrations, including `0041`. The migration manager takes a fresh
-   database dump and verifies its archive listing before any SQL is applied.
+   database dump and verifies its archive listing before applying pending
+   migration SQL to an existing database.
    Keep that backup; do not pass `--no-backup` or add `--allow-destructive` merely
    to bypass a refusal. Clear any ambient `DATABASE_URL` so these commands use
    the production env file consistently:
