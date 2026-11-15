@@ -54,7 +54,9 @@ for 30 days for review/pilots. Those temporary artifacts have names such as
 checksumming and extraction, using their own included installer and wheels.
 
 Choose the bundle matching your OS, CPU architecture and Python minor version.
-The first CI matrix covers Linux x86_64 and macOS arm64 with Python 3.12.
+CI builds and verifies Linux x86_64 on Ubuntu 24.04 and macOS arm64 on macOS 15,
+both with Python 3.12. It checks the interpreter architecture before downloading
+native wheels. This job does not verify compatibility with older macOS versions.
 Windows users can use the Linux bundle inside matching WSL. Python must already
 be installed with `venv` support (on distributions that separate it, install the
 matching Python venv package first).
