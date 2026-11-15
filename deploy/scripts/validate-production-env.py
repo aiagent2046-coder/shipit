@@ -4,6 +4,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 import argparse
+import base64
 import os
 import re
 import sys
@@ -397,6 +398,27 @@ def main() -> int:
             "together; with only one set the card checkout answers 503 to "
             "every buyer"
         )
+
+    # Paid checkout and renewal need durable buyer authority. Check this before
+    # activation, rather than returning healthy while every purchase fails.
+    # Keep Fernet's ASCII/base64/32-byte contract without importing the app or
+    # third-party packages. A configured key must also work with sales disabled:
+    # existing paid jobs can still need it. A temporary DB kill switch is not
+    # an exemption, since sales resume without another environment preflight.
+    delivery_key = values.get("FIXPACK_DELIVERY_ENCRYPTION_KEY", "")
+    if delivery_key or bank_configured or shop_id or secret_key:
+        try:
+            valid_delivery_key = len(
+                base64.urlsafe_b64decode(delivery_key.encode("ascii"))
+            ) == 32
+        except (ValueError, UnicodeError):
+            valid_delivery_key = False
+        if not valid_delivery_key:
+            errors.append(
+                "FIXPACK_DELIVERY_ENCRYPTION_KEY must be a valid Fernet key "
+                "when configured or when a payment rail is configured; "
+                "paid checkout and delivery cannot work without it"
+            )
 
     # A live shop holding a test key takes no money at all, and the symptom is
     # "nobody is buying" rather than anything that looks like a misconfiguration
