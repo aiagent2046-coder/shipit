@@ -89,3 +89,78 @@ same-credential boundaries; no OAuth flow is claimed in this version.
 
 References: [GitHub fine-grained token permissions](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
 and [personal access token management](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+
+### Production cutover checklist
+
+The deployment workflow does **not** apply migrations, provision secrets or pause
+checkout. A green health check is not proof that paid delivery is configured.
+`validate-production-env.py` rejects missing delivery encryption keys when a
+bank or card rail is configured, and rejects a malformed supplied key even without
+a configured rail. A temporary sales pause does not exempt the host from this
+check. The validator checks format, not equality between separate service env
+files; verify that API and worker load the same persistent key.
+
+Before scheduling the maintenance window:
+
+1. Select a reviewed commit on `main` with passing CI and create its release tag
+   **before** building it. Keep the tag and full SHA in the deployment record.
+2. Inspect the running release, unit states and pending migrations on the actual
+   host. Do not infer them from GitHub CI. Record whether the Fix Pack timer was
+   active, so a previously disabled timer is not accidentally enabled afterwards.
+3. Provision the dedicated key in the deployment secret store used by both API
+   and worker (`/opt/shipit/.env` in the recorded systemd units). Preserve an
+   existing valid key; do not regenerate it on every release. Keep its recoverable
+   copy separate from the database backup. Never source this file as shell code.
+4. Run the **target release's** production validator against the host env file.
+   Check that `ENVIRONMENT=production` is explicitly configured: otherwise the
+   validator intentionally skips production checks.
+
+During the maintenance window:
+
+1. Pause ingress for new purchases and stop `shipit-fixpack.timer`. Let the
+   currently running paid request finish before stopping the API. Stopping the
+   timer or its curl process alone does not cancel work already inside the API.
+   If a request does not finish, investigate it before proceeding; do not mutate
+   the schema underneath the old process. Stop `shipit.service` and
+   `shipit-audit-worker.service` after draining. This simple cutover includes API
+   downtime; keep ingress in maintenance until verification is complete.
+2. From the selected target checkout, inspect migration status and apply all
+   pending migrations, including `0041`. The migration manager takes a fresh
+   database dump and verifies its archive listing before any SQL is applied.
+   Keep that backup; do not pass `--no-backup` or add `--allow-destructive` merely
+   to bypass a refusal. Clear any ambient `DATABASE_URL` so these commands use
+   the production env file consistently:
+
+   ```bash
+   env -u DATABASE_URL SHIPIT_ENV_FILE=/opt/shipit/.env \
+     python3 scripts/migration_manager.py status
+   env -u DATABASE_URL SHIPIT_ENV_FILE=/opt/shipit/.env \
+     python3 scripts/migration_manager.py apply
+   env -u DATABASE_URL SHIPIT_ENV_FILE=/opt/shipit/.env \
+     python3 scripts/migration_manager.py status
+   ```
+
+   Archive-list verification detects an unreadable dump; it is not a full
+   restore rehearsal. Resolve drift or unexpected pending SQL before applying.
+3. Run `deploy/scripts/deploy-production.sh --revision "$SHIPIT_RELEASE_TAG"`
+   with `SHIPIT_RELEASE_TAG` set to the recorded tag. This builds/activates the
+   matching API and restarts the audit worker. Coordinate the frontend release
+   from the same source revision; this API deployment workflow does not publish
+   the separately hosted frontend. Because the Fix Pack timer was already stopped,
+   the deploy script leaves it stopped for verification.
+4. Verify `/version` reports the recorded SHA, the API and audit worker are
+   healthy, migration status has no pending/drifted entries, and both service
+   configurations use the intended env file. Check checkout without a GitHub
+   token refuses before an invoice/provider call, and test authorization renewal
+   on a controlled existing funded order without creating another charge. A
+   resumed worker can perform real delivery: choose the controlled order and
+   verify the target repository before starting processing.
+5. Resume the Fix Pack timer only if it was previously active and verification
+   passed. Reopen purchases after the matching frontend is available. Record the
+   deployed SHA, backup path, migration result and verification outcome.
+
+If migration `0041` has been applied and deployment fails, leave purchases and
+paid processing paused. Its `rollback-safe: no` marker intentionally blocks a
+routine rollback to an old worker. Recover forward with a compatible release, or
+plan a coordinated database/code restore using the pre-migration backup; do not
+force the ordinary rollback gate.

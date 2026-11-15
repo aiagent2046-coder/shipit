@@ -13,6 +13,7 @@ Loaded by path because the filename is hyphenated and not importable.
 from __future__ import annotations
 
 import importlib.util
+import base64
 import sys
 from pathlib import Path
 
@@ -405,6 +406,8 @@ def test_a_short_token_warns_but_still_starts(tmp_path, monkeypatch, capsys):
 # --- a payment rail must have a way to confirm a payment --------------------
 
 _BANK_RAIL = {"BANK_TRANSFER_CARD": "0000 0000 0000 0000"}
+_FAKE_DELIVERY_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode()
+_DELIVERY_AUTH = {"FIXPACK_DELIVERY_ENCRYPTION_KEY": _FAKE_DELIVERY_KEY}
 _TELEGRAM = {
     "TELEGRAM_BOT_TOKEN": "000:fake-bot-token",
     "TELEGRAM_ADMIN_CHAT_ID": "12345",
@@ -422,7 +425,7 @@ def test_a_payment_rail_without_telegram_refuses_to_boot(tmp_path, monkeypatch):
     nothing and _is_operator rejects everyone -- including the operator. Money
     arrives, nobody can act on it, and no error is raised anywhere.
     """
-    env = {**COMPLETE_ENV, **_BANK_RAIL}
+    env = {**COMPLETE_ENV, **_BANK_RAIL, **_DELIVERY_AUTH}
 
     assert _run(tmp_path, monkeypatch, env) == 78
 
@@ -432,14 +435,14 @@ def test_each_telegram_variable_is_required_on_its_own(tmp_path, monkeypatch):
     and chat id silence the notification, the webhook secret makes the
     endpoint 503 so the Confirm tap never arrives."""
     for missing in _TELEGRAM:
-        env = {**COMPLETE_ENV, **_BANK_RAIL, **_TELEGRAM}
+        env = {**COMPLETE_ENV, **_BANK_RAIL, **_TELEGRAM, **_DELIVERY_AUTH}
         del env[missing]
 
         assert _run(tmp_path, monkeypatch, env) == 78, missing
 
 
 def test_a_complete_payment_setup_boots(tmp_path, monkeypatch):
-    env = {**COMPLETE_ENV, **_BANK_RAIL, **_TELEGRAM}
+    env = {**COMPLETE_ENV, **_BANK_RAIL, **_TELEGRAM, **_DELIVERY_AUTH}
 
     assert _run(tmp_path, monkeypatch, env) == 0
 
@@ -450,6 +453,65 @@ def test_a_deployment_selling_nothing_is_unaffected(tmp_path, monkeypatch):
     demanding a bot token from it would refuse to boot over an unused
     feature."""
     assert _run(tmp_path, monkeypatch, dict(COMPLETE_ENV)) == 0
+
+
+@pytest.mark.parametrize("rail", [
+    {**_BANK_RAIL, **_TELEGRAM},
+    {"BANK_TRANSFER_ACCOUNT": "fake-account", **_TELEGRAM},
+    {"YOOKASSA_SHOP_ID": "fake-shop", "YOOKASSA_SECRET_KEY": "fake-secret"},
+])
+def test_payment_rail_requires_delivery_key_from_file(
+    tmp_path, monkeypatch, capsys, rail,
+):
+    # An operator's shell must not make a broken service EnvironmentFile pass.
+    monkeypatch.setenv("FIXPACK_DELIVERY_ENCRYPTION_KEY", _FAKE_DELIVERY_KEY)
+    env = {**COMPLETE_ENV, **rail}
+    assert _run(tmp_path, monkeypatch, env) == 78
+    assert "FIXPACK_DELIVERY_ENCRYPTION_KEY" in capsys.readouterr().err
+    assert _run(tmp_path, monkeypatch, {**env, **_DELIVERY_AUTH}) == 0
+
+
+@pytest.mark.parametrize("key", [
+    "", " ", "bad", "кириллица", "not-a-key-do-not-log",
+    base64.urlsafe_b64encode(b"too-short").decode(),
+    base64.urlsafe_b64encode(b"x" * 33).decode(),
+    _FAKE_DELIVERY_KEY, _FAKE_DELIVERY_KEY.rstrip("="),
+    "  " + _FAKE_DELIVERY_KEY + "  ",
+    "!" + _FAKE_DELIVERY_KEY,
+])
+def test_delivery_key_preflight_matches_runtime(
+    tmp_path, monkeypatch, capsys, key,
+):
+    from app.deploypack.paid_delivery_auth import _cipher
+    from app.deploypack.delivery_auth import DeliveryAuthorizationError
+
+    monkeypatch.setenv("FIXPACK_DELIVERY_ENCRYPTION_KEY", key)
+    try:
+        _cipher()
+        expected = 0
+    except DeliveryAuthorizationError:
+        expected = 78
+
+    env = {**COMPLETE_ENV, **_BANK_RAIL, **_TELEGRAM,
+           "FIXPACK_DELIVERY_ENCRYPTION_KEY": key}
+    assert _run(tmp_path, monkeypatch, env) == expected
+    error = capsys.readouterr().err
+    if expected:
+        assert "FIXPACK_DELIVERY_ENCRYPTION_KEY" in error
+    if key.strip():
+        assert key.strip() not in error
+
+
+def test_malformed_delivery_key_refused_even_without_payment_rails(
+    tmp_path, monkeypatch, capsys,
+):
+    env = {**COMPLETE_ENV,
+           "FIXPACK_DELIVERY_ENCRYPTION_KEY": "invalid-existing-job-key"}
+    assert _run(tmp_path, monkeypatch, env) == 78
+    error = capsys.readouterr().err
+    assert "FIXPACK_DELIVERY_ENCRYPTION_KEY" in error
+    assert "invalid-existing-job-key" not in error
+    assert _run(tmp_path, monkeypatch, {**COMPLETE_ENV, **_DELIVERY_AUTH}) == 0
 
 
 # --- half a delivery channel ------------------------------------------------
