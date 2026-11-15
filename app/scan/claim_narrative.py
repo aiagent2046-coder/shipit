@@ -15,8 +15,17 @@ from app.scan.claim_evidence import source_assessments
 from app.scan.external_operation_identity import valid_external_identity
 from app.scan.scoring import ScoredFinding
 
-_OBSERVED_KINDS = {"sql_table_literal_source", "cors_nonempty_origin_guard"}
+_OBSERVED_KINDS = {
+    "sql_table_literal_source",
+    "cors_nonempty_origin_guard",
+    "fastapi_route_identity_dependency",
+}
 _KINDS = {"fact_input_count_unbounded", "retry_callback_scope"} | _OBSERVED_KINDS
+_REVIEW_PREMISES = {
+    "sql_table_literal_source": "sql_table_external_control",
+    "cors_nonempty_origin_guard": "cors_all_origins_allowed",
+    "fastapi_route_identity_dependency": "fastapi_route_missing_authentication",
+}
 _MAX = 2**53 - 1
 
 
@@ -144,7 +153,7 @@ def _source_review(check, finding, hashes):
         return None
     review = check.get("narrative_review")
     kind = check["kind"]
-    premise = "sql_table_external_control" if kind == "sql_table_literal_source" else "cors_all_origins_allowed"
+    premise = _REVIEW_PREMISES.get(kind)
     if (not isinstance(review, dict) or review.get("status") != "required" or review.get("premise") != premise
             or not isinstance(review.get("reason"), str) or not review["reason"].strip()):
         return None
@@ -176,7 +185,7 @@ def _source_review(check, finding, hashes):
                         "Review other SQL paths separately.",
             "observation": observation,
         }
-    else:
+    elif kind == "cors_nonempty_origin_guard":
         if (any(not _inside(b.get(key), b) for key in
                 ("registration", "callback", "guard", "configuration", "environment_default", "next_call"))
                 or not _inside(b["callback"], b["registration"]) or not _inside(b["guard"], b["callback"])
@@ -200,6 +209,30 @@ def _source_review(check, finding, hashes):
             "fix_hint": "Decide whether callers without Origin are permitted. If they are not, add explicit "
                         "caller authentication or an appropriate missing-Origin rule and test legitimate clients. "
                         "Do not treat an Origin check alone as authentication.",
+            "observation": observation,
+        }
+    else:
+        if (any(not _inside(b.get(key), b) for key in ("route", "decorator", "dependency_guard"))
+                or not _inside(b["decorator"], b["route"])
+                or not _inside(b["dependency_guard"], b["route"])
+                or b.get("dependency_role") != "identity"
+                or type(b.get("guard_count")) is not int or not 1 <= b["guard_count"] <= 64
+                or b.get("runtime_enforcement") != "not_checked"
+                or b.get("ownership_policy") != "not_checked"):
+            return None
+        anchor = b["route"]
+        observation = (
+            "The cited FastAPI route declares an identity-shaped dependency guard in its signature or "
+            "decorator. What that dependency verifies at runtime and whether it enforces object ownership "
+            "have not been checked."
+        )
+        wording = {
+            "title": "FastAPI route declares an identity dependency; runtime enforcement needs review",
+            "explanation": observation + " The claim that no authentication dependency is present on this route "
+                           "conflicts with its declared signature or decorator. Dependency implementation, "
+                           "token validation and row-level ownership remain unverified.",
+            "fix_hint": "Inspect the dependency implementation to confirm that it rejects unauthenticated "
+                        "requests and enforces any required resource ownership or role checks.",
             "observation": observation,
         }
     if not quote["line_start"] <= anchor["line_end"] or not anchor["line_start"] <= quote["line_end"]:

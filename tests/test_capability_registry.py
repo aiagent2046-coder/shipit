@@ -57,6 +57,7 @@ SCANNER_CHECKS = {
     "scan_xss": "xss",
     "scan_command_injection": "command_injection",
     "scan_cookie_flags": "session_cookie",
+    "scan_llm_browser_client": "llm_browser_client",
 }
 
 

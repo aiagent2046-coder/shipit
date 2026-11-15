@@ -1,0 +1,7 @@
+{
+  "description": "A commented-out client instantiation does not execute.",
+  "expect": [],
+  "forbid": [
+    "llm-client-browser-exposed"
+  ]
+}

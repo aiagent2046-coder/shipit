@@ -51,6 +51,7 @@ import pytest
 from app.scan.archive_extraction import scan_archive_extraction
 from app.scan.command_injection import scan_command_injection
 from app.scan.insecure_randomness import scan_insecure_randomness
+from app.scan.llm_browser_client import scan_llm_browser_client
 from app.scan.path_traversal import scan_path_traversal
 from app.scan.sql_injection import scan_sql_injection
 from app.scan.sql_injection_js import scan_sql_injection_js
@@ -82,6 +83,7 @@ SCANNERS = {
     "path-traversal-file-sink": scan_path_traversal,
     "unsafe-xml-parse": scan_unsafe_xml_parse,
     "unsafe-deserialization": scan_unsafe_deserialization,
+    "llm-client-browser-exposed": scan_llm_browser_client,
 }
 
 PY_SUFFIX = ".py"
