@@ -74,6 +74,11 @@ Live on [drydock.co](https://drydock.co) with:
 
 Release identity for a running host: `GET /version` (commit + `source` tree URL + CalVer tag). What the static audit can look for — every check, the rule ids it can emit, and what it does not resolve — is `GET /v1/capabilities`, served without authentication so it can be read before buying.
 
+This branch changes paid PR delivery to buyer-owned credentials and adds renewal
+for waiting orders. It requires migration 0041 and a dedicated encryption key;
+see [delivery authorization and rollout](docs/deploy-pack-delivery-access.md).
+The deployed version is determined by `/version`, not by this branch.
+
 ## What Drydock deliberately does not claim
 
 Read this before you pay — same boundaries the product enforces in code:
@@ -103,7 +108,7 @@ Read this before you pay — same boundaries the product enforces in code:
 public repo or ZIP
   → audit queue → static + LLM scan → findings + verification limits
   → (optional) paid Fix Pack → generate plan → sandbox / proof
-  → GitHub App opens PR → customer notification
+  → recheck buyer authorization → open PR with buyer token → customer notification
 ```
 
 Design and security boundaries: [`docs/shipit-architecture.md`](docs/shipit-architecture.md).
@@ -132,7 +137,11 @@ development server, set `ENVIRONMENT=development`; the template selects
 `production`. See [configuration requirements](docs/configuration.md) for the
 production and integration-specific fields.
 
-Optional: LLM keys, GitHub App, sandbox runner, `YOOKASSA_*`, SMTP / Telegram.
+Paid delivery requires `FIXPACK_DELIVERY_ENCRYPTION_KEY` on the API and worker,
+and a repository-scoped credential supplied by the buyer at checkout. See the
+[rollout guide](docs/deploy-pack-delivery-access.md) before enabling this flow.
+Other integration settings: LLM keys, GitHub App webhooks, sandbox runner,
+`YOOKASSA_*`, SMTP / Telegram.
 Without LLM keys the scan degrades to static-only (`basis: static_only`) rather
 than inventing coverage.
 

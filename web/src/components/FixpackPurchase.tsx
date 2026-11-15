@@ -93,6 +93,8 @@ export function FixpackPurchase({
           code and re-run the audit, this section will offer a Fix Pack when
           there&apos;s something for it to do.
         </p>
+        <FixpackStatusArea key={auditId} auditId={auditId} repoUrl={repoUrl}
+          accessToken={accessToken} onStatusChange={setOrderStatus} />
       </section>
     );
   }
@@ -107,6 +109,8 @@ export function FixpackPurchase({
           opens a real pull request against your repository, so there needs to
           be a repo to open it against (a zip upload has none).
         </p>
+        <FixpackStatusArea key={auditId} auditId={auditId} repoUrl={null}
+          accessToken={accessToken} onStatusChange={setOrderStatus} />
       </section>
     );
   }
@@ -412,7 +416,7 @@ function SupportContact() {
 
 function FixpackStatusArea({ auditId, repoUrl, accessToken, onStatusChange }: {
   auditId: string;
-  repoUrl: string;
+  repoUrl: string | null;
   accessToken?: string | null;
   onStatusChange: (status: FixpackStatus["status"]) => void;
 }) {
@@ -460,12 +464,17 @@ function FixpackStatusArea({ auditId, repoUrl, accessToken, onStatusChange }: {
     <div className="mt-5 border-t border-border pt-5">
       <h3 className="text-sm font-semibold text-muted">Fix Pack status</h3>
       <div className="mt-2">
-        {status.status === "awaiting_authorization" && accessToken && (
+        {status.status === "awaiting_authorization" && accessToken && (repoUrl ? (
           <RenewDeliveryAuthorization key={status.delivery_reference ?? "missing-reference"}
             auditId={auditId} accessToken={accessToken} repoUrl={repoUrl}
             initialReference={status.delivery_reference}
             onRenewed={() => { setStatus({ ...status, status: "paid" }); onStatusChange("paid"); }} />
-        )}
+        ) : (
+          <p className="rounded-md border border-high/40 bg-high/10 p-3 text-sm">
+            Your paid order needs repository authorization, but this audit has no
+            repository URL. Please <SupportContact /> so we can review the order.
+          </p>
+        ))}
         {(status.status === "paid" || status.status === "running") && (
           <p className="flex items-center gap-2 text-sm text-muted">
             <Spinner /> Generating your fix… this opens a pull request

@@ -99,3 +99,39 @@ it("keeps an unauthorized renewal recoverable and shows a fixed message", async 
   expect(screen.queryByText(/upstream internal/)).toBeNull();
   expect(screen.queryByText(/Generating your fix/)).toBeNull();
 });
+
+it("keeps recovery available for a previously paid order when the audit is no longer auto-fixable", async () => {
+  const calls: Array<[string, RequestInit | undefined]> = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push([url, init]);
+    if (url.includes("delivery-authorization")) return new Response("{}", { status: 200 });
+    if (url.includes("fixpack-status")) return new Response(JSON.stringify({
+      status: "awaiting_authorization", pr_url: null, delivery_reference: "DRY-LEGACY",
+    }), { status: 200 });
+    return new Response("{}", { status: 503 });
+  }));
+  render(<FixpackPurchase auditId="audit" repoUrl="https://github.com/acme/app"
+    accessToken="owner-read-token" autoFixable={false} />);
+  await screen.findByText("Renew GitHub access to continue your paid Fix Pack");
+  expect(screen.queryByText("Pay by bank transfer")).toBeNull();
+  expect(screen.queryByText("Pay by card")).toBeNull();
+  expect((screen.getByLabelText("Payment reference") as HTMLInputElement).value).toBe("DRY-LEGACY");
+  fireEvent.change(screen.getByLabelText("GitHub delivery token"), { target: { value: GITHUB_TOKEN } });
+  fireEvent.click(screen.getByRole("button", { name: "Authorize and resume existing order" }));
+  await screen.findByText(/Generating your fix/);
+  expect(calls.filter(([, init]) => init?.method === "POST").map(([url]) => url))
+    .toEqual([expect.stringContaining("/fixpack/delivery-authorization")]);
+});
+
+it("shows the existing order's failure when a legacy audit has no repository URL", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url.includes("fixpack-status")) return new Response(JSON.stringify({
+      status: "failed", pr_url: null,
+    }), { status: 200 });
+    return new Response("{}", { status: 503 });
+  }));
+  render(<FixpackPurchase auditId="legacy-audit" repoUrl={null} accessToken="owner-read-token" />);
+  expect(await screen.findByText(/Fix Pack generation failed/)).toBeTruthy();
+  expect(screen.queryByLabelText("GitHub delivery token")).toBeNull();
+  expect(screen.queryByText("Pay by bank transfer")).toBeNull();
+});

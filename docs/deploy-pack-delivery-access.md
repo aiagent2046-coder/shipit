@@ -38,7 +38,9 @@ The server encrypts this credential using Fernet and a dedicated
 order reference, audit ID and exact case-insensitive repository name. An order and
 its encrypted grant are inserted in one transaction. The separate
 `fixpack_delivery_grants` table has RLS enabled and no public read policy. It never
-appears in payment JSON, provider metadata, job responses or logs.
+appears in payment JSON, provider metadata, job responses or logs. Its foreign
+key uses ON DELETE CASCADE: deleting a payment also removes its credential
+envelope, so an orphan credential cannot outlive its parent order.
 
 The worker reads the original completed funding payment (including its immutable
 `funding_key`) before doing expensive work, then reads it again immediately before

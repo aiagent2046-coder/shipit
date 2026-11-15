@@ -23,8 +23,23 @@ async def live_db(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", _DB_URL)
     await db.close_pool()
     pool = await db.get_pool()
-    yield pool
-    await db.close_pool()
+    try:
+        yield pool
+    finally:
+        try:
+            # Later smoke suites claim globally, so leave no synthetic paid
+            # work for them. Restrict cleanup to this module's own audit tag
+            # and fixture repository; never touch another suite's jobs.
+            async with pool.connection() as conn:
+                await conn.execute(
+                    """update fixpack_jobs j set status = 'failed', started_at = null
+                         from audits a where j.audit_id = a.id
+                          and a.engine_version = 'paid-delivery-store-test'
+                          and a.repo_url = 'https://github.com/example/synthetic'
+                          and j.status in ('paid', 'running', 'awaiting_authorization')""",
+                )
+        finally:
+            await db.close_pool()
 
 
 async def _seed(*, grant="encrypted-test-grant", status="completed"):
