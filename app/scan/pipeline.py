@@ -314,6 +314,8 @@ _SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
 # 2026-09-09-32: preserve credential values through Fix Pack planning; distinguish
 #               SQL expressions from comparisons and non-SQL calls; scope SQL
 #               assignments, deploy commands and completed-success labels.
+# 2026-11-13-1: llm-client-browser-exposed static detector for OpenAI, Anthropic,
+#               Groq and Mistral JS/TS SDKs configured with dangerouslyAllowBrowser=true.
 
 # How many LLM passes a PAID audit runs (union-of-N; see run_llm_scan). 2, and
 # not because two is round: measured on four same-engine runs of a real repo
