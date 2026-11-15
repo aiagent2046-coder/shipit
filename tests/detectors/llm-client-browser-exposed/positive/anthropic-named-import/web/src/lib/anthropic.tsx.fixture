@@ -1,0 +1,5 @@
+import { Anthropic } from "@anthropic-ai/sdk";
+
+export function createClaude() {
+  return new Anthropic({ dangerouslyAllowBrowser: true });
+}

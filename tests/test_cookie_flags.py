@@ -40,6 +40,20 @@ def test_cookie_alias_chain_keeps_proven_authentication_name():
     assert len(scan_cookie_flags(archive(source, "src/login.ts"))) == 1
 
 
+def test_cookie_session_local_alias_and_constant_template_name_are_caught():
+    source_alias = (
+        'import cookieSession from "cookie-session";\n'
+        "const cs = cookieSession;\n"
+        'app.use(cs({ name: "session", httpOnly: false }));\n'
+    )
+    assert len(scan_cookie_flags(archive(source_alias, "src/server.ts"))) == 1
+    source_tpl = (
+        'import sessions from "cookie-session";\n'
+        'app.use(sessions({ name: `${"session"}`, httpOnly: false }));\n'
+    )
+    assert len(scan_cookie_flags(archive(source_tpl, "src/server.ts"))) == 1
+
+
 def test_class_flag_does_not_replace_imported_global_cookie_flag():
     source = ('from config import FLAG\nclass Settings:\n    FLAG = False\n'
               'def login(response):\n    response.set_cookie("session", "token", httponly=FLAG)\n')

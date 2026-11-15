@@ -1,0 +1,10 @@
+import OpenAI from "openai";
+
+export function makeMock() {
+  class OpenAI {
+    constructor(options: Record<string, unknown>) {
+      void options;
+    }
+  }
+  return new OpenAI({ dangerouslyAllowBrowser: true });
+}
