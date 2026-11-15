@@ -71,7 +71,9 @@ def test_key_misconfiguration_refuses_before_invoice(monkeypatch, key):
     assert key not in str(error.value) if key else True
 
 
-@pytest.mark.parametrize("scenario", ["deliver", "missing", "revoke", "swap", "outage"])
+@pytest.mark.parametrize("scenario", [
+    "deliver", "missing", "revoke", "swap", "outage", "settling", "settled_between_reads",
+])
 def test_real_worker_reloads_and_rechecks_invoice_authority(cipher, monkeypatch, scenario):
     audits, jobs = _review_job_setup()
     job = {"id": "j1", "audit_id": "a1", "status": "running"}
@@ -80,6 +82,7 @@ def test_real_worker_reloads_and_rechecks_invoice_authority(cipher, monkeypatch,
     opened = []
     store = SimpleNamespace(
         get_for_job=AsyncMock(return_value=row),
+        funding_pending=AsyncMock(return_value=False),
         await_authorization=AsyncMock(), clear_for_job=AsyncMock(),
     )
     monkeypatch.setattr(auth, "get_paid_delivery_store", lambda: store)
@@ -104,6 +107,13 @@ def test_real_worker_reloads_and_rechecks_invoice_authority(cipher, monkeypatch,
         opened.append(kwargs["token"])
         return PullRequestResult("https://github.com/acme/app/pull/9", "fixture")
 
+    if scenario == "settling":
+        store.get_for_job.return_value = None
+        store.funding_pending.return_value = True
+        def fetch(*args):
+            pytest.fail("work reached repository fetch before settlement")
+    if scenario == "settled_between_reads":
+        store.get_for_job.side_effect = [None, row, row]
     if scenario == "missing":
         store.get_for_job.return_value = None
         def fetch(*args):
@@ -121,11 +131,11 @@ def test_real_worker_reloads_and_rechecks_invoice_authority(cipher, monkeypatch,
         fix_outcome_repo=SimpleNamespace(record=AsyncMock()),
         repo_fetcher=fetch, pr_opener=opener, llm_client=None,
     ))
-    if scenario == "deliver":
+    if scenario in ("deliver", "settled_between_reads"):
         assert outcome == "delivered"
         assert opened == [TOKEN] and len(calls) == 2
         store.clear_for_job.assert_awaited_once_with("j1")
-    elif scenario == "outage":
+    elif scenario in ("outage", "settling"):
         assert outcome == "authorization_deferred"
         assert jobs.released == ["j1"] and opened == []
         store.await_authorization.assert_not_awaited()

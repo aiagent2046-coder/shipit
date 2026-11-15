@@ -79,7 +79,15 @@ def get_paid_delivery_store():
 
 async def paid_delivery_token(job: dict, audit: dict) -> str:
     """Re-read committed funding and authority on every check, including delivery."""
-    row = await get_paid_delivery_store().get_for_job(str(job["id"]))
+    store = get_paid_delivery_store()
+    row = await store.get_for_job(str(job["id"]))
+    if row is None:
+        # Settlement commits the job before linking the confirmed invoice.
+        # This brief interval is not a revoked or missing buyer credential.
+        if await store.funding_pending(str(job["id"])):
+            raise DeliveryAuthorizationError(503, "delivery_funding_pending")
+        # Settlement may have committed between the two reads above.
+        row = await store.get_for_job(str(job["id"]))
     if row is None or str(row.get("audit_id")) != str(job.get("audit_id")):
         raise DeliveryAuthorizationError(401, "github_delivery_authorization_required")
     name = repository_name(audit)

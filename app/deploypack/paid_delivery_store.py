@@ -23,6 +23,31 @@ def _owns_funding(row: dict) -> bool:
 
 
 class PaidDeliveryStore:
+    async def funding_pending(self, job_id: str) -> bool:
+        """Recognize the exact invoice while confirmation links it to its job.
+
+        grant_fixpack reserves the job before completing its payment. A worker
+        can claim inside that gap. This is a reason to defer, never authority
+        to execute work or to borrow another pending invoice's credential.
+        """
+        try:
+            parsed_id = uuid.UUID(str(job_id))
+            pool = await db.get_pool()
+        except (ValueError, db.DatabaseNotConfigured):
+            return False
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                """select p.provider, p.external_ref, p.audit_id,
+                          j.audit_id as job_audit_id, j.funding_key
+                     from fixpack_jobs j join payments p on p.audit_id = j.audit_id
+                    where j.id = %s and j.funding_key is not null
+                      and p.status = 'pending' and p.product = 'fixpack'
+                      and (p.fixpack_job_id is null or p.fixpack_job_id = j.id)""",
+                (parsed_id,),
+            )
+            rows = await cur.fetchall()
+        return any(_owns_funding(row) for row in rows)
+
     async def await_authorization(self, job_id: str, reason: str) -> None:
         """Park only the running lease, without spending a generation attempt."""
         try:

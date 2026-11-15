@@ -183,3 +183,37 @@ async def test_newer_deploy_preview_does_not_hide_live_paid_work(live_db, status
         await _reject_if_fixpack_already_live(jobs, audit["id"])
     assert refused.value.status_code == 409
     assert refused.value.detail["reason"] == "fixpack_already_in_progress"
+
+
+async def test_pending_funding_recognized_before_invoice_job_link(live_db):
+    _, job, payment = await _seed(status="pending")
+    async with live_db.connection() as conn:
+        await conn.execute("update payments set fixpack_job_id = null where id = %s",
+                           (uuid.UUID(payment["id"]),))
+    store = PaidDeliveryStore()
+    assert await store.get_for_job(job["id"]) is None
+    assert await store.funding_pending(job["id"]) is True
+    completed = await db.PaymentRepository().mark_completed_fixpack(
+        payment["id"], external_ref=payment["external_ref"], fixpack_job_id=job["id"],
+    )
+    assert completed is not None
+    assert await store.funding_pending(job["id"]) is False
+    assert (await store.get_for_job(job["id"]))["payment_id"] == payment["id"]
+
+
+@pytest.mark.parametrize("mismatch", ["provider", "reference", "audit"])
+async def test_another_pending_invoice_cannot_explain_missing_funding(live_db, mismatch):
+    _, job, payment = await _seed(status="pending")
+    async with live_db.connection() as conn:
+        if mismatch == "provider":
+            await conn.execute("update payments set provider = 'yookassa' where id = %s",
+                               (uuid.UUID(payment["id"]),))
+        elif mismatch == "reference":
+            await conn.execute("update payments set external_ref = %s where id = %s",
+                               (uuid.uuid4().hex, uuid.UUID(payment["id"])))
+        else:
+            await conn.execute("update payments set audit_id = null where id = %s",
+                               (uuid.UUID(payment["id"]),))
+    store = PaidDeliveryStore()
+    assert await store.get_for_job(job["id"]) is None
+    assert await store.funding_pending(job["id"]) is False
