@@ -73,6 +73,10 @@ class DatabaseNotConfigured(Exception):
     error, not get treated as "not configured"."""
 
 
+class AuditJobIdempotencyConflict(RuntimeError):
+    """A live idempotency key belongs to a different audit submission."""
+
+
 class ProGrantConflict(RuntimeError):
     """A Pro settlement was refused after its transaction started writing.
 
@@ -3105,7 +3109,12 @@ class AuditJobRepository:
         vs. joining one in flight) via the xmax idiom: on a plain INSERT the new
         tuple has no updating transaction, so xmax is 0.
 
-        Returns None when DATABASE_URL isn't set."""
+        The conflict update additionally requires the same account, content,
+        engine and source. A key alone never authorizes returning a job token.
+        A ZIP's source_ref becomes its private spool path after insertion and
+        is therefore not part of its submitted identity. A repository URL is.
+        Raises AuditJobIdempotencyConflict if a live key belongs to another
+        submission. Returns None only when DATABASE_URL isn't set."""
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -3124,6 +3133,12 @@ class AuditJobRepository:
                 on conflict (idempotency_key)
                     where state in ('created', 'queued', 'claimed', 'running')
                 do update set updated_at = audit_jobs.updated_at
+                where audit_jobs.account_id is not distinct from excluded.account_id
+                  and audit_jobs.content_hash = excluded.content_hash
+                  and audit_jobs.engine_version = excluded.engine_version
+                  and audit_jobs.source_kind = excluded.source_kind
+                  and (excluded.source_kind = 'zip'
+                       or audit_jobs.source_ref is not distinct from excluded.source_ref)
                 returning access_token, (xmax = 0) as inserted,
                           {_AUDIT_JOB_COLUMNS}
                 """,
@@ -3134,7 +3149,9 @@ class AuditJobRepository:
                 ),
             )
             row = await cur.fetchone()
-        return _row_to_audit_job(row) if row else None
+        if row is None:
+            raise AuditJobIdempotencyConflict("idempotency key belongs to another submission")
+        return _row_to_audit_job(row)
 
     async def mark_queued(
         self, *, job_id: str, source_ref: str | None = None

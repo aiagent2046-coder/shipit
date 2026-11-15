@@ -1,11 +1,11 @@
 """PR delivery for a verified Deploy Pack — GitHub REST (Git Data API).
 
-Accepts whatever token the caller passes in. app/main.py resolves that
-token: a GitHub App installation token when GITHUB_APP_ID +
-GITHUB_APP_PRIVATE_KEY are configured (see app/deploypack/github_app.py
-— works for any repo the App is installed on), falling back to the
-single-operator GITHUB_PR_TOKEN below otherwise. This module itself
-stays auth-agnostic — it doesn't know or care which kind of token it got.
+Accepts the token passed by its caller. The public Deploy Pack endpoint must
+pass the requesting user's GitHub credential; it cannot borrow server App/PAT
+authority. The asynchronous paid processor still resolves a service GitHub App
+token or operator PAT separately. This module remains auth-agnostic; repository
+authorization belongs at those entry points. A missing token retains the
+operator-only GITHUB_PR_TOKEN fallback, which public callers must never reach.
 
 Never pushes to the base branch directly: creates a new branch, commits
 there, opens a PR. Merge stays with the repo owner (HITL), same

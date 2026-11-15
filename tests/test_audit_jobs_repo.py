@@ -27,7 +27,7 @@ import uuid
 import pytest
 
 import app.db as db_mod
-from app.db import AuditJobRepository, AuditRepository
+from app.db import AuditJobIdempotencyConflict, AuditJobRepository, AuditRepository
 
 _SMOKE_DB_URL = os.environ.get("DATABASE_URL")
 
@@ -174,6 +174,47 @@ async def test_enqueue_after_terminal_state_creates_a_new_job(real_db):
     assert second["inserted"] is True
     assert second["id"] != first["id"]
     assert second["state"] == "queued"
+
+
+@pytest.mark.parametrize("overrides", [
+    {"content_hash": "different-content"},
+    {"engine_version": "different-engine"},
+    {"source_ref": "https://github.com/another/repository"},
+    {"source_kind": "zip", "source_ref": None},
+])
+async def test_enqueue_refuses_live_key_for_different_request(real_db, overrides):
+    repo = AuditJobRepository()
+    kwargs = _enqueue_kwargs()
+    first = await repo.enqueue(**kwargs)
+    with pytest.raises(AuditJobIdempotencyConflict):
+        await repo.enqueue(**{**kwargs, **overrides})
+    row = await _read_row(first["id"])
+    assert row["content_hash"] == kwargs["content_hash"]
+    assert row["source_ref"] == kwargs["source_ref"]
+
+
+async def test_enqueue_refuses_other_account_on_same_live_key(real_db):
+    from app.accounts import generate_api_key
+    from app.db import AccountRepository
+
+    account = await AccountRepository().create(api_key=generate_api_key(), tier="pro")
+    repo = AuditJobRepository()
+    kwargs = _enqueue_kwargs()
+    first = await repo.enqueue(**kwargs)
+    with pytest.raises(AuditJobIdempotencyConflict):
+        await repo.enqueue(**{**kwargs, "account_id": account["id"]})
+    assert (await _read_row(first["id"]))["account_id"] is None
+
+
+async def test_staged_zip_retry_ignores_server_assigned_spool_path(real_db):
+    repo = AuditJobRepository()
+    kwargs = _enqueue_kwargs(source_kind="zip", source_ref=None)
+    first = await repo.enqueue(**kwargs, initial_state="created")
+    assert await repo.mark_queued(job_id=first["id"], source_ref="/private/spool/fixture.zip")
+    retry = await repo.enqueue(**kwargs, initial_state="created")
+    assert retry["id"] == first["id"]
+    assert retry["access_token"] == first["access_token"]
+    assert retry["inserted"] is False
 
 
 # --- the 'created' hop: staging an uploaded archive ------------------------

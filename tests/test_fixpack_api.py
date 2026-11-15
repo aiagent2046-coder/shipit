@@ -13,18 +13,30 @@ import io
 import json
 import zipfile
 
+import pytest
 from fastapi.testclient import TestClient
 
+import app.main as main_mod
 import app.deploypack.pipeline as pipeline_mod
 from app.deploypack import github_app
 from app.deploypack.delivery import DeliveryError, PullRequestResult
-from app.deploypack.github_app import GitHubAppError
+from app.deploypack.delivery_auth import DeliveryAuthorizationError
 from app.deploypack.preview import PreviewResult
 from app.deploypack.sandbox import SandboxResult
 from app.main import app, get_pr_opener, get_preview_registry
 from app.sandbox_client import SandboxRunnerUnavailable
 
 client = TestClient(app)
+CALLER_TOKEN = "fixture-caller-token"
+
+
+@pytest.fixture(autouse=True)
+def authorized_caller_repository(monkeypatch):
+    # These API tests isolate the network. Real permission response handling
+    # and redirect/token boundaries have separate MockTransport coverage.
+    def allow(owner, repo, token):
+        assert token == CALLER_TOKEN
+    monkeypatch.setattr(main_mod, "authorize_repository_delivery", allow)
 
 
 def _runner_unavailable(*args, **kwargs):
@@ -71,6 +83,7 @@ def post_fixpack(
     entries: dict[str, bytes],
     deliver_to: str | None = None,
     want_preview: bool = False,
+    token: str | None = CALLER_TOKEN,
 ):
     data = {}
     if deliver_to:
@@ -81,6 +94,7 @@ def post_fixpack(
         "/v1/fixpacks",
         files={"archive": ("app.zip", make_zip(entries), "application/zip")},
         data=data,
+        headers={"X-GitHub-Token": token} if deliver_to and token is not None else {},
     )
 
 
@@ -310,15 +324,16 @@ def test_want_preview_true_but_not_verified_returns_preview_none():
     assert body["preview"] is None
 
 
-def test_deliver_to_uses_github_app_token_when_configured(monkeypatch):
+def test_deliver_to_uses_only_caller_token_even_when_app_is_configured(monkeypatch):
     monkeypatch.setattr(
         pipeline_mod, "verify_deploy_pack",
         lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
     )
     monkeypatch.setattr(github_app, "app_credentials_from_env",
                          lambda: ("999", "fake-pem"))
-    monkeypatch.setattr(github_app, "installation_token_for_repo",
-                         lambda owner, repo, **k: "ghs_app_token")
+    def forbidden_server_token(*args, **kwargs):
+        pytest.fail("public delivery must not mint a server App token")
+    monkeypatch.setattr(github_app, "installation_token_for_repo", forbidden_server_token)
     captured = {}
 
     def fake_opener(owner, repo, files, token=None, **kwargs):
@@ -333,15 +348,17 @@ def test_deliver_to_uses_github_app_token_when_configured(monkeypatch):
         app.dependency_overrides.pop(get_pr_opener, None)
 
     assert resp.json()["pr"]["delivered"] is True
-    assert captured["token"] == "ghs_app_token"
+    assert captured["token"] == CALLER_TOKEN
+    assert CALLER_TOKEN not in resp.text
 
 
-def test_deliver_to_falls_back_to_pat_when_app_not_configured(monkeypatch):
+def test_deliver_to_does_not_borrow_configured_server_pat(monkeypatch):
     monkeypatch.setattr(
         pipeline_mod, "verify_deploy_pack",
         lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
     )
     monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
+    monkeypatch.setenv("GITHUB_PR_TOKEN", "fixture-server-pat")
     captured = {}
 
     def fake_opener(owner, repo, files, token=None, **kwargs):
@@ -356,26 +373,33 @@ def test_deliver_to_falls_back_to_pat_when_app_not_configured(monkeypatch):
         app.dependency_overrides.pop(get_pr_opener, None)
 
     assert resp.json()["pr"]["delivered"] is True
-    assert captured["token"] is None  # fake_opener would fall back to GITHUB_PR_TOKEN
+    assert captured["token"] == CALLER_TOKEN
 
 
-def test_deliver_to_reports_github_app_not_installed(monkeypatch):
-    monkeypatch.setattr(
-        pipeline_mod, "verify_deploy_pack",
-        lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
-    )
-    monkeypatch.setattr(github_app, "app_credentials_from_env",
-                         lambda: ("999", "fake-pem"))
+@pytest.mark.parametrize("token", [None, "", "malformed token"])
+def test_deliver_to_requires_caller_token_before_sandbox(monkeypatch, token):
+    monkeypatch.setenv("GITHUB_PR_TOKEN", "fixture-server-pat")
+    def forbidden(*args, **kwargs):
+        pytest.fail("unauthorized delivery must stop before expensive or privileged work")
+    monkeypatch.setattr(main_mod, "run_deploy_pack", forbidden)
+    monkeypatch.setattr(github_app, "installation_token_for_repo", forbidden)
+    resp = post_fixpack(FASTAPI_ZIP, deliver_to="acme/app", token=token)
+    assert resp.status_code == 401
+    assert "fixture-server-pat" not in resp.text
 
-    def raise_not_installed(owner, repo, **k):
-        raise GitHubAppError(f"GitHub App is not installed on {owner}/{repo}")
 
-    monkeypatch.setattr(github_app, "installation_token_for_repo", raise_not_installed)
-
+@pytest.mark.parametrize("status,reason", [(403, "repository_write_access_required"),
+                                         (502, "github_authorization_unavailable")])
+def test_denied_or_unavailable_permission_check_never_builds(monkeypatch, status, reason):
+    def deny(*args, **kwargs):
+        raise DeliveryAuthorizationError(status, reason)
+    def forbidden(*args, **kwargs):
+        pytest.fail("failed authorization must stop before sandbox")
+    monkeypatch.setattr(main_mod, "authorize_repository_delivery", deny)
+    monkeypatch.setattr(main_mod, "run_deploy_pack", forbidden)
     resp = post_fixpack(FASTAPI_ZIP, deliver_to="acme/app")
-    body = resp.json()
-    assert body["pr"]["delivered"] is False
-    assert "not installed on acme/app" in body["pr"]["reason"]
+    assert resp.status_code == status
+    assert resp.json()["detail"]["reason"] == reason
 
 
 def test_deliver_to_reports_delivery_error(monkeypatch):
@@ -385,7 +409,7 @@ def test_deliver_to_reports_delivery_error(monkeypatch):
     )
 
     def failing_opener(owner, repo, files, **kwargs):
-        raise DeliveryError("create branch failed: 422 already exists")
+        raise DeliveryError(f"upstream message containing {CALLER_TOKEN}")
 
     app.dependency_overrides[get_pr_opener] = lambda: failing_opener
     try:
@@ -395,4 +419,5 @@ def test_deliver_to_reports_delivery_error(monkeypatch):
 
     body = resp.json()
     assert body["pr"]["delivered"] is False
-    assert "already exists" in body["pr"]["reason"]
+    assert "GitHub delivery failed" in body["pr"]["reason"]
+    assert CALLER_TOKEN not in resp.text

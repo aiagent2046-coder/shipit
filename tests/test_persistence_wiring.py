@@ -294,6 +294,7 @@ def test_create_fixpack_persists_job_and_links_audit_id(monkeypatch):
 
 
 def test_create_fixpack_marks_delivered_after_real_pr_open(monkeypatch):
+    monkeypatch.setattr("app.main.authorize_repository_delivery", lambda *args: None)
     monkeypatch.setattr(
         pipeline_mod, "verify_deploy_pack",
         lambda *a, **k: SandboxResult(ok=True, detail="HTTP 200 on /"),
@@ -311,6 +312,7 @@ def test_create_fixpack_marks_delivered_after_real_pr_open(monkeypatch):
             "/v1/fixpacks",
             files={"archive": ("app.zip", make_zip(FASTAPI_ZIP), "application/zip")},
             data={"deliver_to": "acme/app"},
+            headers={"X-GitHub-Token": "fixture-caller-token"},
         )
     finally:
         app.dependency_overrides.pop(get_fixpack_repo, None)
