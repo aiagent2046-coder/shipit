@@ -15,7 +15,7 @@ afterEach(cleanup);
 
 it("does not promise queued work when the received payment needs reconciliation", () => {
   state.review = true;
-  render(<PaymentMethods auditId="audit-test" accessToken={null} price={null} priceFailed />);
+  render(<PaymentMethods auditId="audit-test" repoUrl="https://github.com/acme/app" accessToken={null} price={null} priceFailed />);
   const text = screen.getByRole("alert").textContent;
   expect(text).toContain("has not been confirmed");
   expect(text).toContain("TEST-SECOND");
@@ -25,7 +25,7 @@ it("does not promise queued work when the received payment needs reconciliation"
 
 it("still announces work for the payment that funded the job", () => {
   state.review = false;
-  render(<PaymentMethods auditId="audit-test" accessToken={null} price={null} priceFailed />);
+  render(<PaymentMethods auditId="audit-test" repoUrl="https://github.com/acme/app" accessToken={null} price={null} priceFailed />);
   expect(screen.getByText(/generating your Fix Pack/)).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();
 });

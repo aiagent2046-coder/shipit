@@ -79,8 +79,8 @@ from app.sca.snapshot import baseline_is_current, snapshot_is_current
 from app.sca.refresh import inventory_payload
 from app.sca.cache import needs_dependency_scan
 from app.deploypack import github_app
-from app.deploypack.github_app import GitHubAppAuthError
 from app.deploypack.delivery import DeliveryError, render_pr_body
+from app.deploypack.paid_delivery_auth import paid_delivery_token, get_paid_delivery_store
 from app.deploypack.delivery_auth import (
     DeliveryAuthorizationError, authorize_repository_delivery, validate_delivery_token,
 )
@@ -990,7 +990,7 @@ async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
     "completed" for work that was already bought and paid for once.
 
     The condition mirrors the ON CONFLICT predicate in create_paid --
-    status in ('paid', 'running') -- and must keep mirroring it. A stricter
+    status in ('paid', 'running', 'awaiting_authorization') -- and must keep mirroring it. A stricter
     check here would refuse sales the database would have happily served:
     re-buying after a 'failed' job is a supported flow, and so is buying again
     once a previous Fix Pack was delivered and the audit re-run.
@@ -1003,7 +1003,7 @@ async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
     contract as every other repository call on this path.
     """
     job = await fixpack_repo.get_by_audit(audit_id)
-    if job is None or job.get("status") not in ("paid", "running"):
+    if job is None or job.get("status") not in ("paid", "running", "awaiting_authorization"):
         return
     raise HTTPException(
         status_code=409,
@@ -1340,7 +1340,8 @@ async def _process_one_paid_job(
     payment_repo: PaymentRepository | None = None,
 ) -> str:
     """Generate + deliver one paid Fix Pack job. Returns the outcome:
-    'delivered', 'no_fix_needed', 'blocked', 'deferred', or 'failed'. Advances
+    'delivered', 'no_fix_needed', 'blocked', 'deferred', 'failed',
+    'awaiting_authorization', or 'authorization_deferred'. Advances
     the job's status to match so a re-run of the processor doesn't pick it up
     again (a 'failed' or 'blocked' job stays visible for a human to retry/review
     rather than silently stuck on 'paid'). 'blocked' means the generated
@@ -1348,7 +1349,7 @@ async def _process_one_paid_job(
     client's own tests against the patched tree) found a regression, so the
     PR was withheld for manual review.
 
-    'deferred' is the one outcome that does NOT advance the status: the semantic
+    'deferred' keeps the running lease unchanged: the semantic
     check could not run at all (sandbox runner unreachable), so there is no
     verdict to act on and the job keeps its 'running' lease to be retried by the
     existing stale-lease reaper. Delivering would ship an unverified PR; blocking
@@ -1393,6 +1394,7 @@ async def _process_one_paid_job(
             return "failed"
         owner, repo = parsed
 
+        await paid_delivery_token(job, audit)
         zip_bytes = await run_in_threadpool(repo_fetcher, owner, repo)
 
         findings = audit.get("findings_json") or []
@@ -1544,48 +1546,50 @@ async def _process_one_paid_job(
                 "review the purchase includes. The full review is still "
                 "owed. Re-run it manually and send the buyer the link."
             )
-        token = await _resolve_pr_token(owner, repo)
+        token = await paid_delivery_token(job, audit)
         opened = await run_in_threadpool(
             pr_opener, owner, repo, plan.files,
             title=title, body=body, branch_prefix="drydock/fix-pack",
             deletions=plan.deletions, token=token, job_id=job_id,
         )
         await fixpack_repo.mark_fixpack_delivered(job_id, opened.html_url)
+        try:
+            await get_paid_delivery_store().clear_for_job(str(job_id))
+        except Exception:  # cleanup must never reopen an already delivered job
+            logger.warning("Fix Pack %s: delivery credential cleanup pending", job_id)
         await _record_fix_outcome(
             fix_outcome_repo, job=job, outcome="delivered",
             rule_ids=_rule_ids_from_plan(plan), is_regression=False,
             pr_url=opened.html_url,
         )
         return "delivered"
-    except GitHubAppAuthError as exc:
-        # GitHub refused our own App credentials. Nothing about this job or
-        # this customer's repository was reached, so the three things the
-        # generic handler below does would all be wrong here:
-        #
-        #   * 'failed' is terminal, and this job is perfectly deliverable the
-        #     moment an operator fixes the key -- failing it bills a customer
-        #     for our outage and leaves recovery to hand-editing the database;
-        #   * the attempt the claim charged walks it toward the reaper's
-        #     terminal 'failed' for a reason no retry of theirs can fix;
-        #   * a fix_outcomes row would record OUR outage as the outcome of a
-        #     fix, in the one table we intend to learn from later.
-        #
-        # So the job goes back on the queue, unspent, and the operator is told
-        # what is actually broken. Same shape as the verification_unavailable
-        # branch above: when we could not do our job, the customer's job waits.
-        detail = _failure_detail(exc)
-        logger.error(
-            "Fix Pack job %s deferred: GitHub App credentials rejected (%s)",
-            job_id, detail,
-            extra={"step": "github_app_auth",
-                   "duration_ms": _elapsed_ms(started)},
+    except DeliveryAuthorizationError as exc:
+        if exc.status_code >= 500:
+            await fixpack_repo.release_to_paid(job_id, exc.reason)
+            return "authorization_deferred"
+        await get_paid_delivery_store().await_authorization(str(job_id), exc.reason)
+        return "awaiting_authorization"
+    except httpx.HTTPError:
+        await fixpack_repo.release_to_paid(job_id, "github_delivery_unavailable")
+        return "authorization_deferred"
+    except DeliveryError as exc:
+        # Upstream bodies must never reach logs, persisted detail or public output.
+        if exc.retryable or exc.status_code == 429 or (exc.status_code and exc.status_code >= 500):
+            await fixpack_repo.release_to_paid(job_id, "github_delivery_unavailable")
+            return "authorization_deferred"
+        if exc.status_code in (401, 403):
+            await get_paid_delivery_store().await_authorization(
+                str(job_id), "github_delivery_failed_check_token_permissions",
+            )
+            return "awaiting_authorization"
+        detail = "github_delivery_failed"
+        await fixpack_repo.mark_status(job_id, "failed", detail=detail)
+        await _record_fix_outcome(
+            fix_outcome_repo, job=job, outcome="failed", rule_ids=[],
+            is_regression=False, pr_url=None,
         )
-        await fixpack_repo.release_to_paid(
-            job_id,
-            f"requeued: GitHub App credentials rejected — {detail}",
-        )
-        await _alert_github_app_auth_failed(detail)
-        return "auth_rejected"
+        await _alert_fixpack_failed(job_id, detail)
+        return "failed"
     except Exception as exc:  # noqa: BLE001 — every failure must be recorded
         # Any error in fetch, generation, token exchange, or PR delivery
         # lands here. Log the full traceback (logger.exception attaches it)
@@ -1776,19 +1780,10 @@ async def process_paid_fixpacks(
                     # further claim would only spend another job's attempts.
                     summary["deferred"] += 1
                     break
-                elif outcome == "auth_rejected":
-                    # Already back on 'paid' with its attempt refunded, so
-                    # unlike the branch above this one is NOT waiting for the
-                    # reaper -- it is immediately re-claimable, which is exactly
-                    # why the loop must stop. A broken App key rejects every
-                    # job identically, so draining on would spin through the
-                    # whole backlog releasing and re-claiming the same rows.
-                    #
-                    # Reported separately from `deferred` because the two mean
-                    # different things to whoever reads the summary: one is a
-                    # sandbox outage that heals itself, the other needs a human
-                    # to edit .env before any Fix Pack can ever be delivered.
-                    summary["skipped_github_app_auth"] = True
+                elif outcome == "awaiting_authorization":
+                    summary["awaiting_authorization"] = summary.get("awaiting_authorization", 0) + 1
+                elif outcome == "authorization_deferred":
+                    summary["deferred"] += 1
                     break
                 else:
                     summary["failed"] += 1
@@ -2593,6 +2588,8 @@ app.include_router(bundle_check_router)
 app.include_router(session_router)
 app.include_router(storefront_router)
 app.include_router(yookassa_router)
+from app.routes.paid_delivery import router as paid_delivery_router  # noqa: E402
+app.include_router(paid_delivery_router)
 # Off unless MCP_ENABLED is set: the router is always mounted, and the
 # endpoint itself answers 404 when the flag is unset. Mounting
 # conditionally would make the flag a restart-time decision that an

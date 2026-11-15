@@ -10,7 +10,7 @@ import re
 
 import httpx
 
-from app.deploypack.delivery import GITHUB_API, _HEADERS_BASE
+from app.deploypack.delivery import GITHUB_API, _HEADERS_BASE, github_retryable
 
 
 class DeliveryAuthorizationError(Exception):
@@ -47,6 +47,8 @@ this check must never authorize use of the server's more powerful App or PAT.
             timeout=10, follow_redirects=False, transport=transport,
         ) as client:
             response = client.get(f"/repos/{owner}/{repo}")
+        if github_retryable(response):
+            raise DeliveryAuthorizationError(502, "github_authorization_unavailable")
         if response.status_code == 401:
             raise DeliveryAuthorizationError(401, "invalid_github_token")
         if response.status_code in (403, 404) or response.is_redirect:

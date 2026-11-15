@@ -87,7 +87,7 @@ def _reject_if_nothing_to_fix(audit: dict) -> None:
 
 
 async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
-    """409 when this audit already has a Fix Pack job that is paid or running.
+    """409 when this audit already has paid work, including paused authorization.
 
     Selling one is the last moment refusing costs nothing. After the payment,
     every layer below reports success and none of them can undo it:
@@ -96,20 +96,19 @@ async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
     "completed" for work that was already bought and paid for once.
 
     The condition mirrors the ON CONFLICT predicate in create_paid --
-    status in ('paid', 'running') -- and must keep mirroring it. A stricter
+    status in ('paid', 'running', 'awaiting_authorization') -- and must keep mirroring it. A stricter
     check here would refuse sales the database would have happily served:
     re-buying after a 'failed' job is a supported flow, and so is buying again
     once a previous Fix Pack was delivered and the audit re-run.
 
-    get_by_audit returns the newest job, which is enough: migration 0025's
-    partial unique index allows only one live job per audit, so a newer
-    terminal row can only exist if no live one does.
+    get_by_audit prioritizes live work over a newer generated Deploy Pack row.
+    The partial unique index allows only one live job per audit.
 
     No-op when persistence isn't configured (get_by_audit returns None), same
     contract as every other repository call on this path.
     """
     job = await fixpack_repo.get_by_audit(audit_id)
-    if job is None or job.get("status") not in ("paid", "running"):
+    if job is None or job.get("status") not in ("paid", "running", "awaiting_authorization"):
         return
     raise HTTPException(
         status_code=409,

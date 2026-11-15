@@ -27,6 +27,8 @@ from app.db import (
     PaymentRepository,
     ServiceFlagsRepository,
 )
+from app.deploypack.delivery_auth import DeliveryAuthorizationError
+from app.deploypack.paid_delivery_auth import authorize_paid_checkout, repository_name
 from app.ratelimit import RateLimitExceeded, RateLimiter
 from app.routes._shared import (
     _client_key,
@@ -288,8 +290,18 @@ async def create_fixpack_bank_transfer_invoice(
     await _reject_if_fixpack_already_live(fixpack_repo, audit_id)
     _reject_if_nothing_to_fix(audit)
     details = _bank_transfer_details()
+    try:
+        github_token = await authorize_paid_checkout(
+            audit, request.headers.get("x-github-token"),
+        )
+    except DeliveryAuthorizationError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail={"reason": exc.reason},
+        ) from None
+    repo_full_name = repository_name(audit)
     invoice = await bank_transfer.create_fixpack_invoice(
         payment_repo, details=details, audit_id=audit_id,
+        github_token=github_token, repo_full_name=repo_full_name,
         payer_name=payer.payer_name,
         payer_email=payer.payer_email,
         payer_x=payer.payer_x,

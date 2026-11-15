@@ -42,6 +42,9 @@ class FakeFixpackRepoWithProof(FakeFixpackRepo):
 
 
 def _healthy_runner(monkeypatch):
+    from tests.test_fixpack_process_endpoint import mock_paid_delivery
+
+    mock_paid_delivery(monkeypatch)
     monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
     monkeypatch.setattr(main_mod.sandbox_client, "minimal_check", local_minimal_check)
 

@@ -23,7 +23,7 @@ from app.deploypack import github_app
 from app import alerts as alerts_mod
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
-from app.deploypack.github_app import GitHubAppAuthError, GitHubAppError
+from app.deploypack.delivery_auth import DeliveryAuthorizationError
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.main import (
     app,
@@ -44,12 +44,30 @@ def _sandbox_runner_is_healthy(monkeypatch):
     in tests there is no runner at all. Default it to healthy so these tests keep
     exercising the delivery path; the gate itself is covered by its own tests,
     which override this."""
+    mock_paid_delivery(monkeypatch)
     monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
     # Same reason for the check itself: with no runner, sandbox_client would
     # report "unavailable" and the processor would (correctly) defer every job.
     # The local implementation needs no docker for the plans these tests use.
     monkeypatch.setattr(main_mod.sandbox_client, "minimal_check",
                         local_minimal_check)
+
+
+def mock_paid_delivery(monkeypatch):
+    """Fake funded authority for pipeline tests; dedicated tests cover the grant."""
+    async def caller_token(job, audit):
+        return "caller-test-token"
+
+    class Store:
+        async def clear_for_job(self, job_id):
+            pass
+
+        async def await_authorization(self, job_id, reason):
+            repo = app.dependency_overrides[get_fixpack_repo]()
+            await repo.mark_status(job_id, "awaiting_authorization", reason)
+
+    monkeypatch.setattr(main_mod, "paid_delivery_token", caller_token)
+    monkeypatch.setattr(main_mod, "get_paid_delivery_store", Store)
 
 
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
@@ -644,7 +662,7 @@ def test_zero_eligible_findings_does_not_open_pr(monkeypatch):
     assert fixpack_repo.statuses["j1"] == "no_fix_needed"
 
 
-def test_delivery_error_marks_job_failed(monkeypatch):
+def test_delivery_error_pauses_for_authorization(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
@@ -659,7 +677,7 @@ def test_delivery_error_marks_job_failed(monkeypatch):
     jobs = [{"id": "j1", "audit_id": "a1", "status": "paid"}]
 
     def failing_opener(*a, **k):
-        raise DeliveryError("create branch failed")
+        raise DeliveryError("create branch failed", status_code=403)
 
     fixpack_repo = FakeFixpackRepo(jobs)
     override(FakeAuditRepo(audits), fixpack_repo,
@@ -670,8 +688,47 @@ def test_delivery_error_marks_job_failed(monkeypatch):
         clear_overrides()
 
     assert resp.json() == {"processed": 1, "delivered": 0, "skipped": 0,
-                           "blocked": 0, "failed": 1, "requeued": 0, "deferred": 0}
-    assert fixpack_repo.statuses["j1"] == "failed"
+                           "blocked": 0, "failed": 0, "requeued": 0, "deferred": 0,
+                           "awaiting_authorization": 1}
+    assert fixpack_repo.statuses["j1"] == "awaiting_authorization"
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503])
+def test_delivery_outage_requeues_without_requesting_new_authorization(
+    monkeypatch, caplog, status_code,
+):
+    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
+    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
+    audits = {"a1": {
+        "repo_url": "https://github.com/acme/app",
+        "findings_json": [{"rule_id": "aws-access-key-id", "file": "config.py",
+                           "line": 1, "title": "AWS Access Key ID", "context": None}],
+    }}
+    jobs = [{"id": "j1", "audit_id": "a1", "status": "paid"},
+            {"id": "j2", "audit_id": "a1", "status": "paid"}]
+
+    def failing_opener(*args, **kwargs):
+        raise DeliveryError("upstream echoed caller-test-token", status_code=status_code)
+
+    fixpack_repo = FakeFixpackRepo(jobs)
+    override(FakeAuditRepo(audits), fixpack_repo,
+             fake_fetcher_returning(zip_bytes), failing_opener)
+    try:
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
+    finally:
+        clear_overrides()
+
+    body = resp.json()
+    assert body["deferred"] == 1
+    assert body["failed"] == 0
+    assert body["delivered"] == 0
+    assert body.get("awaiting_authorization", 0) == 0
+    assert fixpack_repo.statuses["j1"] == "paid"
+    assert fixpack_repo.details["j1"] == "github_delivery_unavailable"
+    assert fixpack_repo.released == ["j1"]
+    assert fixpack_repo.claimed == ["j1"]
+    assert "caller-test-token" not in caplog.text
+    assert "caller-test-token" not in resp.text
 
 
 def test_missing_audit_marks_job_failed(monkeypatch):
@@ -694,10 +751,8 @@ def test_missing_audit_marks_job_failed(monkeypatch):
 
 # --- observability: a failed job must never be silent ---------------------
 
-def test_delivery_error_records_detail_and_logs(monkeypatch, caplog):
-    """Regression for the silent-failure incident: when delivery raises, the
-    job's `detail` must be populated and a full traceback logged — not a
-    'failed' row with null detail and nothing in the logs."""
+def test_delivery_error_records_only_safe_detail(monkeypatch, caplog):
+    """Delivery diagnostics remain visible without leaking response bodies."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
@@ -712,7 +767,7 @@ def test_delivery_error_records_detail_and_logs(monkeypatch, caplog):
     jobs = [{"id": "j1", "audit_id": "a1", "status": "paid"}]
 
     def failing_opener(*a, **k):
-        raise DeliveryError("open pull request failed: 422 base branch main not found")
+        raise DeliveryError("open pull request failed: 403 caller-test-token", status_code=403)
 
     fixpack_repo = FakeFixpackRepo(jobs)
     override(FakeAuditRepo(audits), fixpack_repo,
@@ -723,64 +778,48 @@ def test_delivery_error_records_detail_and_logs(monkeypatch, caplog):
     finally:
         clear_overrides()
 
-    assert resp.json()["failed"] == 1
-    assert fixpack_repo.statuses["j1"] == "failed"
+    assert resp.json()["awaiting_authorization"] == 1
+    assert resp.json()["failed"] == 0
+    assert fixpack_repo.statuses["j1"] == "awaiting_authorization"
 
     detail = fixpack_repo.details["j1"]
-    assert detail is not None and detail != ""
-    assert "DeliveryError" in detail
-    assert "base branch main not found" in detail
-
-    # A full traceback reached the logs (logger.exception attaches exc_info).
-    assert any(
-        rec.exc_info is not None and "j1" in rec.getMessage()
-        for rec in caplog.records
-    )
+    assert detail == "github_delivery_failed_check_token_permissions"
+    assert "caller-test-token" not in caplog.text
+    assert "caller-test-token" not in resp.text
+    assert not any(rec.exc_info is not None for rec in caplog.records)
 
 
-def test_github_app_token_error_marks_failed_with_detail(monkeypatch, caplog):
-    """The App-not-installed / token-exchange failure path (a prime suspect
-    for the production incident) must also record a detail and log, instead
-    of failing silently."""
+def test_caller_authorization_does_not_borrow_server_app(monkeypatch):
+    """A verified caller token is the only credential the worker may use."""
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    # App IS configured, so _resolve_pr_token tries the installation-token
-    # exchange — which raises for a repo the App isn't installed on.
-    monkeypatch.setattr(github_app, "app_credentials_from_env",
-                        lambda: ("Iv23appid", "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----"))
+    monkeypatch.setenv("GITHUB_PR_TOKEN", "server-token-must-not-be-used")
 
-    def raising_token(owner, repo, *, app_id, private_key):
-        raise GitHubAppError(
-            f"GitHub App is not installed on {owner}/{repo} — "
-            "the repo owner needs to install it first"
-        )
+    def unexpected_app(*args, **kwargs):
+        raise AssertionError("Paid delivery must not resolve server App authority")
 
-    monkeypatch.setattr(github_app, "installation_token_for_repo", raising_token)
-
+    monkeypatch.setattr(github_app, "app_credentials_from_env", unexpected_app)
+    monkeypatch.setattr(github_app, "installation_token_for_repo", unexpected_app)
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     audits = {"a1": {
-        "repo_url": "https://github.com/donjonson-hash/drydock-fixpack-e2e-test",
-        "findings_json": [
-            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
-             "title": "AWS Access Key ID", "context": None},
-        ],
+        "repo_url": "https://github.com/acme/app",
+        "findings_json": [{"rule_id": "aws-access-key-id", "file": "config.py",
+                           "line": 1, "title": "AWS Access Key ID", "context": None}],
     }}
-    jobs = [{"id": "j1", "audit_id": "a1", "status": "paid"}]
+    calls = []
 
-    fixpack_repo = FakeFixpackRepo(jobs)
+    def caller_opener(*args, **kwargs):
+        calls.append(kwargs["token"])
+        return PullRequestResult(html_url="https://github.com/acme/app/pull/1", branch="fix")
+
+    fixpack_repo = FakeFixpackRepo([{"id": "j1", "audit_id": "a1", "status": "paid"}])
     override(FakeAuditRepo(audits), fixpack_repo,
-             fake_fetcher_returning(zip_bytes),
-             lambda *a, **k: PullRequestResult(html_url="x", branch="y"))
+             fake_fetcher_returning(zip_bytes), caller_opener)
     try:
-        with caplog.at_level("ERROR"):
-            resp = client.post("/internal/fixpack/process-paid", headers=auth())
+        resp = client.post("/internal/fixpack/process-paid", headers=auth())
     finally:
         clear_overrides()
-
-    assert resp.json()["failed"] == 1
-    assert fixpack_repo.statuses["j1"] == "failed"
-    detail = fixpack_repo.details["j1"]
-    assert detail is not None and "GitHubAppError" in detail
-    assert "not installed" in detail
+    assert resp.json()["delivered"] == 1
+    assert calls == ["caller-test-token"]
 
 
 def test_missing_audit_records_detail(monkeypatch):
@@ -1343,31 +1382,15 @@ def test_pr_token_resolve_counts_the_base64_pem_variable(monkeypatch, caplog):
     assert "GITHUB_APP_PRIVATE_KEY=MISSING" not in warnings[0].getMessage()
 
 
-# --- GitHub rejects OUR credentials ---
-#
-# Every other failure in this processor is about the customer's repository.
-# This one is about us: the key on this deployment no longer matches the App,
-# so no Fix Pack anywhere can open a PR. Treating it like the others billed a
-# customer for our outage -- the job went terminal 'failed', the payment was
-# spent, and recovery meant editing the database by hand.
+# --- Unavailable authorization checks defer paid work without spending it ---
 
 
-def _auth_rejected_setup(monkeypatch, jobs):
+def _authorization_unavailable_setup(monkeypatch, jobs):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(github_app, "app_credentials_from_env",
-        # Any non-empty string: installation_token_for_repo is replaced
-        # below, so nothing ever parses this. A PEM header here would only
-        # trip the added-lines secret scanner in CI, for no benefit.
-        lambda: ("Iv23appid", "placeholder-key-never-parsed"),
-    )
+    async def unavailable_authorization(job, audit):
+        raise DeliveryAuthorizationError(502, "github_authorization_unavailable")
 
-    def rejecting_token(owner, repo, *, app_id, private_key):
-        raise GitHubAppAuthError(
-            'resolve installation failed: 401 {"message": "A JSON web token '
-            'could not be decoded"}'
-        )
-
-    monkeypatch.setattr(github_app, "installation_token_for_repo", rejecting_token)
+    monkeypatch.setattr(main_mod, "paid_delivery_token", unavailable_authorization)
 
     zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
     audits = {"a1": {
@@ -1384,10 +1407,10 @@ def _auth_rejected_setup(monkeypatch, jobs):
     return fixpack_repo
 
 
-def test_rejected_credentials_requeue_the_job_instead_of_failing_it(monkeypatch):
-    """The job is deliverable the moment an operator fixes the key, so it goes
+def test_unavailable_authorization_requeue_the_job_instead_of_failing_it(monkeypatch):
+    """The job is deliverable once GitHub authorization recovers, so it goes
     back on the queue rather than to a terminal state a customer paid for."""
-    fixpack_repo = _auth_rejected_setup(
+    fixpack_repo = _authorization_unavailable_setup(
         monkeypatch, [{"id": "j1", "audit_id": "a1", "status": "paid"}])
     try:
         resp = client.post("/internal/fixpack/process-paid", headers=auth())
@@ -1397,13 +1420,13 @@ def test_rejected_credentials_requeue_the_job_instead_of_failing_it(monkeypatch)
     body = resp.json()
     assert body["failed"] == 0
     assert body["delivered"] == 0
-    assert body["skipped_github_app_auth"] is True
+    assert body["deferred"] == 1
     assert fixpack_repo.released == ["j1"]
     assert fixpack_repo.statuses["j1"] == "paid"
-    assert "credentials rejected" in fixpack_repo.details["j1"]
+    assert "github_authorization_unavailable" in fixpack_repo.details["j1"]
 
 
-def test_rejected_credentials_write_no_fix_outcome_row(monkeypatch):
+def test_unavailable_authorization_write_no_fix_outcome_row(monkeypatch):
     """fix_outcomes is the table we intend to learn from. Our own outage is
     not the outcome of a fix and must not be recorded as one."""
     recorded = []
@@ -1413,7 +1436,7 @@ def test_rejected_credentials_write_no_fix_outcome_row(monkeypatch):
             recorded.append(kwargs)
             return None
 
-    fixpack_repo = _auth_rejected_setup(
+    fixpack_repo = _authorization_unavailable_setup(
         monkeypatch, [{"id": "j1", "audit_id": "a1", "status": "paid"}])
     app.dependency_overrides[main_mod.get_fix_outcome_repo] = \
         lambda: RecordingOutcomes()
@@ -1427,11 +1450,11 @@ def test_rejected_credentials_write_no_fix_outcome_row(monkeypatch):
     assert fixpack_repo.released == ["j1"]
 
 
-def test_rejected_credentials_stop_the_drain_instead_of_spinning(monkeypatch):
+def test_unavailable_authorization_stop_the_drain_instead_of_spinning(monkeypatch):
     """The released job is immediately re-claimable, unlike the sandbox
-    'deferred' path which leaves it leased. Without the break, one broken key
+    'deferred' path which leaves it leased. Without the break, an unavailable check
     would spin the loop releasing and re-claiming the same rows forever."""
-    fixpack_repo = _auth_rejected_setup(monkeypatch, [
+    fixpack_repo = _authorization_unavailable_setup(monkeypatch, [
         {"id": "j1", "audit_id": "a1", "status": "paid"},
         {"id": "j2", "audit_id": "a1", "status": "paid"},
         {"id": "j3", "audit_id": "a1", "status": "paid"},
@@ -1446,45 +1469,6 @@ def test_rejected_credentials_stop_the_drain_instead_of_spinning(monkeypatch):
     assert fixpack_repo.claimed == ["j1"]
     assert resp.json()["processed"] == 1
     assert fixpack_repo.statuses.get("j2") is None
-
-
-def test_an_uninstalled_app_still_fails_terminally(monkeypatch):
-    """The boundary. 'Not installed on this repo' is the customer's problem
-    and stays a real failure -- relaxing the auth case must not relax that,
-    or a repo that will never work would be retried forever."""
-    monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
-    monkeypatch.setattr(github_app, "app_credentials_from_env",
-        # Any non-empty string: installation_token_for_repo is replaced
-        # below, so nothing ever parses this. A PEM header here would only
-        # trip the added-lines secret scanner in CI, for no benefit.
-        lambda: ("Iv23appid", "placeholder-key-never-parsed"),
-    )
-
-    def not_installed(owner, repo, *, app_id, private_key):
-        raise GitHubAppError(f"GitHub App is not installed on {owner}/{repo}")
-
-    monkeypatch.setattr(github_app, "installation_token_for_repo", not_installed)
-
-    zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
-    audits = {"a1": {
-        "repo_url": "https://github.com/donjonson-hash/drydock-fixpack-e2e-test",
-        "findings_json": [
-            {"rule_id": "aws-access-key-id", "file": "config.py", "line": 1,
-             "title": "AWS Access Key ID", "context": None},
-        ],
-    }}
-    fixpack_repo = FakeFixpackRepo([{"id": "j1", "audit_id": "a1", "status": "paid"}])
-    override(FakeAuditRepo(audits), fixpack_repo,
-             fake_fetcher_returning(zip_bytes),
-             lambda *a, **k: PullRequestResult(html_url="x", branch="y"))
-    try:
-        resp = client.post("/internal/fixpack/process-paid", headers=auth())
-    finally:
-        clear_overrides()
-
-    assert resp.json()["failed"] == 1
-    assert fixpack_repo.statuses["j1"] == "failed"
-    assert fixpack_repo.released == []
 
 
 def test_verified_build_block_without_regression_withholds_pr(

@@ -2,8 +2,8 @@
 
 Accepts the token passed by its caller. The public Deploy Pack endpoint must
 pass the requesting user's GitHub credential; it cannot borrow server App/PAT
-authority. The asynchronous paid processor still resolves a service GitHub App
-token or operator PAT separately. This module remains auth-agnostic; repository
+authority. The asynchronous paid processor also uses the buyer's encrypted, invoice-bound
+credential and rechecks it immediately before delivery. This module remains auth-agnostic; repository
 authorization belongs at those entry points. A missing token retains the
 operator-only GITHUB_PR_TOKEN fallback, which public callers must never reach.
 
@@ -29,7 +29,12 @@ _HEADERS_BASE = {
 
 
 class DeliveryError(Exception):
-    """A GitHub API call failed; message includes which step and why."""
+    """A GitHub API call failed; status is available without exposing its body."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, retryable: bool = False):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 @dataclass
@@ -201,6 +206,22 @@ def _already_exists(resp: httpx.Response) -> bool:
     return resp.status_code == 422 and "already exists" in resp.text.lower()
 
 
+def github_retryable(resp: httpx.Response) -> bool:
+    if resp.status_code == 429 or resp.status_code >= 500:
+        return True
+    if resp.status_code != 403:
+        return False
+    if resp.headers.get("X-RateLimit-Remaining") == "0" or resp.headers.get("Retry-After"):
+        return True
+    try:
+        data = resp.json()
+    except ValueError:
+        return False
+    message = data.get("message") if isinstance(data, dict) else None
+    return isinstance(message, str) and "rate limit" in message.casefold()
+
+
 def _check(resp: httpx.Response, action: str) -> None:
     if resp.status_code >= 300:
-        raise DeliveryError(f"{action} failed: {resp.status_code} {resp.text[:300]}")
+        raise DeliveryError(f"{action} failed: {resp.status_code}", status_code=resp.status_code,
+                            retryable=github_retryable(resp))

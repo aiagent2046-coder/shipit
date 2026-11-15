@@ -44,7 +44,7 @@ from tests.test_billing_bank_transfer import (
     FakePaymentRepo,
 )
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-GitHub-Token": "fixture-github-token"})
 
 REPO_URL = "https://github.com/acme/widget"
 TRUSTED = "185.71.76.5"
@@ -60,6 +60,16 @@ PAYER = {
 
 @pytest.fixture(autouse=True)
 def _shop(monkeypatch):
+    from cryptography.fernet import Fernet
+    import app.routes.yookassa as checkout
+
+    monkeypatch.setenv("FIXPACK_DELIVERY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    async def authorized(audit, token):
+        assert token == "fixture-github-token"
+        return token
+
+    monkeypatch.setattr(checkout, "authorize_paid_checkout", authorized)
     monkeypatch.setenv("YOOKASSA_SHOP_ID", "test-shop")
     monkeypatch.setenv("YOOKASSA_SECRET_KEY", "test_secret")
     monkeypatch.delenv("YOOKASSA_VAT_CODE", raising=False)

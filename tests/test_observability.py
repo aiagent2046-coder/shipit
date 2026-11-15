@@ -25,7 +25,7 @@ import app.main as main_mod
 from app.deploypack import github_app
 from app import alerts
 from app.fixpack.semantic_check import minimal_check as local_minimal_check
-from app.deploypack.delivery import DeliveryError, PullRequestResult
+from app.deploypack.delivery import PullRequestResult
 from app.main import app, get_fixpack_repo
 
 
@@ -36,6 +36,9 @@ def _sandbox_runner_is_healthy(monkeypatch):
     in tests there is no runner at all. Default it to healthy so these tests keep
     exercising the delivery path; the gate itself is covered by its own tests,
     which override this."""
+    from tests.test_fixpack_process_endpoint import mock_paid_delivery
+
+    mock_paid_delivery(monkeypatch)
     monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
     # Same reason for the check itself: with no runner, sandbox_client would
     # report "unavailable" and the processor would (correctly) defer every job.
@@ -265,7 +268,7 @@ def test_failed_job_fires_one_alert(monkeypatch):
     monkeypatch.setattr(alerts, "notify_operator", recorder)
 
     def failing_opener(*a, **k):
-        raise DeliveryError("open pull request failed: 422 base branch not found")
+        raise RuntimeError("unexpected delivery implementation failure")
 
     resp, repo = _run_process(
         monkeypatch, opener=failing_opener,

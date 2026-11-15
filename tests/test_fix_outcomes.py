@@ -43,6 +43,9 @@ def _sandbox_runner_is_healthy(monkeypatch):
     in tests there is no runner at all. Default it to healthy so these tests keep
     exercising the delivery path; the gate itself is covered by its own tests,
     which override this."""
+    from tests.test_fixpack_process_endpoint import mock_paid_delivery
+
+    mock_paid_delivery(monkeypatch)
     monkeypatch.setattr(main_mod.sandbox_client, "runner_healthy", lambda: True)
     # Same reason for the check itself: with no runner, sandbox_client would
     # report "unavailable" and the processor would (correctly) defer every job.

@@ -539,6 +539,7 @@ export interface BankTransferPaidResult {
 // "paid" = purchased, waiting in the backlog; "running" = the processor
 // has claimed it and is generating the fix (both shown as in-progress).
 export type FixpackJobStatus =
+  | "awaiting_authorization"
   | "paid"
   | "running"
   | "delivered"
@@ -560,6 +561,7 @@ export interface FixpackStatus {
   // stays server-side, while job_id is a support reference for the owner.
   block_reason?: "proof_failed" | "verification_failed" | null;
   job_id?: string | null;
+  delivery_reference?: string | null;
 }
 
 // GET /v1/github/installation-status?owner=&repo=

@@ -42,9 +42,24 @@ from tests.conftest import (
     fixpack_live_job,
 )
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-GitHub-Token": "fixture-github-token"})
 
 REPO_URL = "https://github.com/acme/widget"
+
+
+@pytest.fixture(autouse=True)
+def _authorized_checkout(monkeypatch):
+    # These cases isolate payment mechanics. The public authorization boundary
+    # is exercised without this stub in test_paid_checkout_authorization.py.
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setenv("FIXPACK_DELIVERY_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    async def authorized(audit, token):
+        assert token == "fixture-github-token"
+        return token
+
+    monkeypatch.setattr(bank_transfer_routes, "authorize_paid_checkout", authorized)
 
 # Obviously-fake stand-ins for the operator's real banking details, which are
 # one private individual's and live only in the deployment's environment.
@@ -97,6 +112,7 @@ def _no_network() -> httpx.MockTransport:
 class FakePaymentRepo(FakeProGrantMixin, FakeKeyDeliveryMixin, FakeCompletionCasMixin):
     def __init__(self, *, account_repo=None):
         self.rows: dict[str, dict] = {}
+        self.delivery_grants: dict[str, str] = {}
         self.account_repo = account_repo if account_repo is not None else FakeAccountRepo()
 
     async def create(self, *, account_id, provider, external_ref, amount,
@@ -104,7 +120,7 @@ class FakePaymentRepo(FakeProGrantMixin, FakeKeyDeliveryMixin, FakeCompletionCas
                      audit_id=None, created_at=None,
                      payer_name=None, payer_email=None, payer_x=None,
                      payer_locale=None, provider_payment_id=None,
-                     fixpack_job_id=None):
+                     fixpack_job_id=None, delivery_grant=None):
         row = {
             "id": str(uuid.uuid4()), "account_id": account_id, "provider": provider,
             "external_ref": external_ref, "amount": amount, "currency": currency,
@@ -116,6 +132,8 @@ class FakePaymentRepo(FakeProGrantMixin, FakeKeyDeliveryMixin, FakeCompletionCas
             "created_at": created_at or datetime.datetime.now(datetime.timezone.utc),
         }
         self.rows[row["id"]] = row
+        if delivery_grant is not None:
+            self.delivery_grants[row["id"]] = delivery_grant
         return row
 
     async def get(self, payment_id):
