@@ -71,3 +71,21 @@ def test_missing_or_invalid_tokens_are_rejected_without_network(token):
     with pytest.raises(DeliveryAuthorizationError) as caught:
         validate_delivery_token(token)
     assert caught.value.status_code == 401
+
+
+@pytest.mark.parametrize("headers,body", [
+    ({"X-RateLimit-Remaining": "0"}, {}),
+    ({"Retry-After": "60"}, {}),
+    ({}, {"message": "You have exceeded a secondary rate limit."}),
+])
+def test_github_rate_limit_403_is_unavailable_not_revoked(headers, body):
+    from app.deploypack.delivery import _check, DeliveryError
+    response = httpx.Response(403, headers=headers, json=body)
+    with pytest.raises(DeliveryAuthorizationError) as error:
+        authorize_repository_delivery("acme", "app", TOKEN, transport=httpx.MockTransport(
+            lambda request: response))
+    assert error.value.status_code == 502
+    with pytest.raises(DeliveryError) as delivery:
+        _check(response, "create branch")
+    assert delivery.value.retryable is True
+    assert delivery.value.status_code == 403

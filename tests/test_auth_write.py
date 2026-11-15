@@ -7,9 +7,9 @@ Two tests here exist because the others can pass while proving nothing:
     negative that stays silent for the wrong reason fails here instead of
     looking like discrimination;
   * the product's own routes are scanned. The rule sees 28 write routes in
-    app/ today and must report none of them -- if that ever changes, either
-    the product grew the defect or the rule grew a false positive, and both
-    are worth a failing build. The count is asserted first, so silence on an
+    app/ today. The one reviewed exception is anonymous Pro onboarding beside
+    repository-authorized Fix Pack checkout. Any other disagreement must fail
+    review; the rule itself is not weakened to hide the onboarding signal. The count is asserted first, so silence on an
     archive with no write routes cannot masquerade as the test passing.
 """
 import io
@@ -216,7 +216,7 @@ def test_each_corpus_negative_goes_silent_for_its_stated_reason(case):
     assert scan_auth_write(archive(files)), "the mutation must make the rule fire"
 
 
-def test_the_product_own_write_routes_report_nothing():
+def test_product_write_routes_only_report_reviewed_anonymous_pro_onboarding():
     sources = [p.read_text() for p in (REPO_ROOT / "app").rglob("*.py")]
     write_routes = sum(len(re.findall(r"@\w+\.(?:post|put|patch|delete)\(", source))
                        for source in sources)
@@ -224,7 +224,16 @@ def test_the_product_own_write_routes_report_nothing():
         f"this test is only meaningful while the product has write routes; found {write_routes}")
     files = {p.relative_to(REPO_ROOT).as_posix(): p.read_text()
              for p in sorted((REPO_ROOT / "app").rglob("*.py")) if "__pycache__" not in p.parts}
-    assert scan_auth_write(archive(files)) == []
+    # A Pro purchase creates the buyer's first account: it must remain public.
+    # Its sibling Fix Pack purchase now requires GitHub authority to write a PR.
+    # The heuristic correctly reports a disagreement, not a proven vulnerability.
+    # Pin ONLY this reviewed route/call; any newly introduced signal still fails.
+    findings = scan_auth_write(archive(files))
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.file == "app/routes/bank_transfer.py"
+    assert "POST /v1/billing/bank-transfer/pro " in finding.explanation
+    assert "bank_transfer.create_invoice(" in files[finding.file].splitlines()[finding.line - 1]
 
 
 @pytest.mark.parametrize("declaration", [

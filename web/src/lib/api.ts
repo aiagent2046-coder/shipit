@@ -80,6 +80,17 @@ async function parse<T>(res: Response): Promise<T> {
             "and nothing was started. Try again shortly, or email " +
             "support@drydock.co if it stays paused."
           : d.detail || d.reason || message;
+      const deliveryMessages: Record<string, string> = {
+        github_token_required: "Enter a GitHub delivery token for this repository before continuing.",
+        invalid_github_token: "GitHub could not accept this token. Create a fresh token and try again.",
+        repository_write_access_required: "This token does not authorize this repository. Check the repository selection and your write access.",
+        github_authorization_unavailable: "GitHub access could not be checked. Please try again shortly.",
+        delivery_authorization_not_configured: "Repository delivery is temporarily unavailable. Please try again later or contact support.",
+        github_delivery_authorization_required: "Repository authorization is needed. Enter a GitHub token for this repository.",
+        delivery_authorization_not_waiting: "This order is not waiting for authorization. Refresh the page to see its current status.",
+        github_delivery_authorization_expired: "Repository authorization has expired. Renew access with a fresh GitHub token.",
+      };
+      if (d.reason && deliveryMessages[d.reason]) message = deliveryMessages[d.reason];
       if (d.reason === "duplicate_path") {
         message = "The archive contains repeated file paths. Please create a fresh ZIP and try again.";
       }
@@ -256,10 +267,13 @@ export async function createBankTransferInvoice(
 export async function createFixpackBankTransferInvoice(
   auditId: string,
   payer: PayerContact,
+  githubToken: string,
 ): Promise<BankTransferInvoice> {
+  const body = payerBody(payer);
   const res = await request(
     `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/bank-transfer`,
-    { method: "POST", ...payerBody(payer) },
+    { method: "POST", ...body,
+      headers: { ...body.headers, "X-GitHub-Token": githubToken } },
   );
   return parse<BankTransferInvoice>(res);
 }
@@ -276,13 +290,14 @@ export async function createFixpackCardPayment(
   auditId: string,
   payer: PayerContact,
   returnToken: string | null,
+  githubToken: string,
 ): Promise<CardPayment> {
   const body = payerBody(payer);
   const res = await request(
     `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/yookassa`,
     {
       method: "POST",
-      headers: body.headers,
+      headers: { ...body.headers, "X-GitHub-Token": githubToken },
       body: JSON.stringify({
         ...JSON.parse(body.body as string),
         return_token: returnToken,
@@ -290,6 +305,20 @@ export async function createFixpackCardPayment(
     },
   );
   return parse<CardPayment>(res);
+}
+
+export async function renewFixpackDeliveryAuthorization(
+  auditId: string, reference: string, auditToken: string, githubToken: string,
+): Promise<void> {
+  const res = await request(
+    `${API_BASE_URL}/v1/audits/${encodeURIComponent(auditId)}/fixpack/delivery-authorization`,
+    {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json", "X-GitHub-Token": githubToken },
+      body: JSON.stringify({ reference, audit_token: auditToken }),
+    },
+  );
+  await parse<unknown>(res);
 }
 
 export async function getBankTransferInvoice(

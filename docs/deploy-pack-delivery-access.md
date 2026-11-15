@@ -24,22 +24,68 @@ This is a deliberate compatibility change for API clients that previously set
 `deliver_to` without supplying their own authority. Installing the service's
 GitHub App alone does not establish the identity of the HTTP caller.
 
-## Scope and remaining paid-flow work
+## Paid Fix Pack delivery
 
-The asynchronous paid Fix Pack processor is a separate path. Its existing
-server App/PAT delivery and installation-status screen are not made into a
-GitHub user authorization flow by this change. Possession of an audit link or
-payment receipt does not establish write access to that repository.
+Both bank-transfer and YooKassa checkouts require `X-GitHub-Token` before opening
+an invoice or contacting the card provider. The browser keeps it only in component
+memory and uses a password input. Choose a repository-scoped fine-grained token
+with Contents and Pull requests write permission. The read-only preflight verifies
+the principal's repository role; it cannot prove every token scope. GitHub enforces
+the same token's actual permissions on every subsequent write.
 
-Before claiming repository ownership enforcement across all delivery paths,
-the paid flow needs a verified user-to-repository grant at purchase time and
-an authorization check at execution time. A suitable implementation is a
-GitHub App user authorization flow with a server-side, repository-bound grant
-and revocation checks; the existing frontend-only installation callback is not
-such a grant. Do not store a long-lived caller PAT in the job row or silently
-reuse service credentials when a caller credential expires.
+The server encrypts this credential using Fernet and a dedicated
+`FIXPACK_DELIVERY_ENCRYPTION_KEY`. The authenticated envelope binds the provider,
+order reference, audit ID and exact case-insensitive repository name. An order and
+its encrypted grant are inserted in one transaction. The separate
+`fixpack_delivery_grants` table has RLS enabled and no public read policy. It never
+appears in payment JSON, provider metadata, job responses or logs. Its foreign
+key uses ON DELETE CASCADE: deleting a payment also removes its credential
+envelope, so an orphan credential cannot outlive its parent order.
 
-Tests cover exact-target permission checks, missing/read-only credentials,
-redirects, unavailable GitHub, refusal before sandbox work, caller-only writes
-with server credentials configured, and omission of upstream secret-bearing
-diagnostics. All network interactions in those tests use mocks.
+The worker reads the original completed funding payment (including its immutable
+`funding_key`) before doing expensive work, then reads it again immediately before
+opening the PR. Each check decrypts the bound grant and checks GitHub access. A
+duplicate payment that happens to point at the same job cannot replace that grant.
+Delivery uses the buyer credential, never the service App or operator PAT.
+
+A grant expires after seven days. A revoked, expired or missing grant parks the job
+in `awaiting_authorization` without consuming its generation retry budget. It stays
+a live paid job, preventing another purchase. The audit owner can enter a new token
+and the original order reference in the status panel; the reference is also shown
+by the authenticated status endpoint. Renewal requires the audit access token and
+fresh GitHub authorization. It atomically updates the funded grant and requeues
+only the waiting job, never a completed or already-running job. No new payment is
+created. API clients use `POST /v1/audits/{id}/fixpack/delivery-authorization` with
+`{reference, audit_token}` and the `X-GitHub-Token` header.
+
+GitHub network failures, rate limits and 5xx responses defer the job for retry
+without requesting a new token. Permission refusals during a write also allow
+renewal. Other delivery errors remain failures with sanitized diagnostics.
+Successful delivery removes retained grants for the job. Seven days is the
+**authorization lifetime**, not automatic deletion of every ciphertext row:
+unpaid, blocked or failed orders may retain unusable encrypted envelopes. Operators
+must include the table in their retention policy and protect its backups and key.
+OAuth can replace manual token entry later without changing these funding and
+same-credential boundaries; no OAuth flow is claimed in this version.
+
+## Rollout and recovery
+
+1. Stop the old paid worker and pause Fix Pack checkout during rollout. An old
+   worker must not process newly authorized orders using its service credentials.
+2. Provision one dedicated Fernet key through the deployment secret manager for
+   both API and worker. `.env.example` names the setting and generation command;
+   do not put the real value in Git, logs, screenshots or this document. Without
+   it, new paid checkout refuses before payment and existing jobs defer.
+3. Back up the database and apply migration `0041_fixpack_delivery_grants.sql`,
+   then deploy matching API, frontend and worker versions. The new live-job state
+   makes rollback to old workers unsafe. Keep the key across ordinary deploys.
+4. Existing funded orders with no grant park for buyer authorization. Historical
+   jobs without an immutable funding key require operator payment reconciliation;
+   the system does not guess which old receipt owns them. Rotating or losing the
+   encryption key also requires fresh buyer authorization for retained orders.
+5. Check checkout refusal without a token, renewed-job resumption, and the
+   private-table migration checks before resuming sales and the worker. No live
+   payment or production credential is needed for the automated test suite.
+
+References: [GitHub fine-grained token permissions](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
+and [personal access token management](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).

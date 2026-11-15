@@ -38,12 +38,14 @@ import { SupportEmail } from "./SupportEmail";
 export function CardCheckout({
   auditId,
   returnToken,
+  githubToken,
   amount,
   currency,
 }: {
   auditId: string;
   /** The audit's access token, so the payer returns to a page they can read. */
   returnToken: string | null;
+  githubToken: string;
   amount: string;
   currency: string;
 }) {
@@ -53,9 +55,10 @@ export function CardCheckout({
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const ready = contactGiven(payerName, payerEmail);
+  const ready = contactGiven(payerName, payerEmail) && Boolean(githubToken.trim());
 
   async function pay() {
+    if (!ready || starting) return;
     setStarting(true);
     setError(null);
     try {
@@ -68,6 +71,7 @@ export function CardCheckout({
         auditId,
         payer,
         returnToken,
+        githubToken.trim(),
       );
       // Navigating away, so `starting` is deliberately left true: clearing it
       // would flash an enabled button under a page that is already leaving.

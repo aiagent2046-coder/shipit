@@ -369,6 +369,7 @@ async def create_fixpack_invoice(
     payment_repo: Any, *, details: dict[str, str], audit_id: str,
     payer_name: str | None = None, payer_email: str | None = None,
     payer_x: str | None = None, payer_locale: str | None = None,
+    github_token: str | None = None, repo_full_name: str | None = None,
 ) -> dict[str, Any] | None:
     """Open a bank-transfer invoice for a Fix Pack scoped to one audit. Same
     reference-code disambiguation as create_invoice, at the Fix Pack price and
@@ -378,6 +379,18 @@ async def create_fixpack_invoice(
     reference = await reserve_reference(payment_repo)
     if reference is None:
         return None
+    # Bound to this newly reserved order. Persistence writes the grant in the
+    # same transaction as the invoice, never as a plaintext payment attribute.
+    grant_kwargs: dict[str, str] = {}
+    if github_token is not None:
+        from app.deploypack.paid_delivery_auth import seal_paid_grant
+
+        if not repo_full_name:
+            raise ValueError("repository required for delivery grant")
+        grant_kwargs["delivery_grant"] = seal_paid_grant(
+            github_token, provider=PROVIDER, external_ref=reference,
+            audit_id=audit_id, repo_full_name=repo_full_name,
+        )
     # Same lock as create_invoice, and the same lock KEY: Pro and Fix Pack draw
     # suffixes from one pending set, so serializing them separately would let
     # them collide with each other.
@@ -389,6 +402,7 @@ async def create_fixpack_invoice(
             tier_granted=None, product=PRODUCT_FIXPACK, audit_id=audit_id,
             payer_name=payer_name, payer_email=payer_email,
             payer_x=payer_x, payer_locale=payer_locale,
+            **grant_kwargs,
         )
     if row is None:
         return None

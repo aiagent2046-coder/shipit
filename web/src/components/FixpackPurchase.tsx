@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
-import type { FixpackStatus, InstallationStatus, Pricing } from "@/lib/types";
+import type { FixpackStatus, Pricing } from "@/lib/types";
 import {
   createFixpackBankTransferInvoice,
   getFixpackStatus,
-  getInstallationStatus,
+  ApiError,
+  renewFixpackDeliveryAuthorization,
   getPricing,
 } from "@/lib/api";
 import { BankTransferCheckout } from "./BankTransferCheckout";
@@ -16,23 +16,6 @@ import { Spinner } from "./Spinner";
 import { SupportEmail } from "./SupportEmail";
 
 const POLL_MS = 10_000;
-
-// Survives the round trip to github.com and back to /github/installed, so the
-// receiver page can send the user straight back to this audit. sessionStorage
-// (not query state) because it's same-tab and we don't want it in a URL.
-const INSTALL_RETURN_KEY = "drydock:github-install-return";
-
-// Pull owner/repo out of a github.com URL for the installation check. The
-// backend re-validates both segments, so this is only about extracting them.
-function parseOwnerRepo(
-  repoUrl: string,
-): { owner: string; repo: string } | null {
-  const m = repoUrl
-    .trim()
-    .match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
-  if (!m) return null;
-  return { owner: m[1], repo: m[2] };
-}
 
 const TERMINAL: ReadonlySet<string> = new Set([
   "delivered",
@@ -74,6 +57,7 @@ export function FixpackPurchase({
   // nothing until a name and an email had been handed over.
   const [price, setPrice] = useState<Pricing | null>(null);
   const [priceFailed, setPriceFailed] = useState(false);
+  const [orderStatus, setOrderStatus] = useState<FixpackStatus["status"]>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,6 +93,8 @@ export function FixpackPurchase({
           code and re-run the audit, this section will offer a Fix Pack when
           there&apos;s something for it to do.
         </p>
+        <FixpackStatusArea key={auditId} auditId={auditId} repoUrl={repoUrl}
+          accessToken={accessToken} onStatusChange={setOrderStatus} />
       </section>
     );
   }
@@ -123,6 +109,8 @@ export function FixpackPurchase({
           opens a real pull request against your repository, so there needs to
           be a repo to open it against (a zip upload has none).
         </p>
+        <FixpackStatusArea key={auditId} auditId={auditId} repoUrl={null}
+          accessToken={accessToken} onStatusChange={setOrderStatus} />
       </section>
     );
   }
@@ -163,18 +151,20 @@ export function FixpackPurchase({
         </p>
       </header>
 
-      <InstallGate repoUrl={repoUrl}>
+      {!["paid", "running", "awaiting_authorization"].includes(orderStatus ?? "") && (
         <div className="mx-auto mt-5 max-w-md">
           <PaymentMethods
+            key={auditId}
             auditId={auditId}
+            repoUrl={repoUrl}
             accessToken={accessToken ?? null}
             price={price}
             priceFailed={priceFailed}
           />
         </div>
-      </InstallGate>
+      )}
 
-      <FixpackStatusArea auditId={auditId} accessToken={accessToken} />
+      <FixpackStatusArea key={auditId} auditId={auditId} repoUrl={repoUrl} accessToken={accessToken} onStatusChange={setOrderStatus} />
     </section>
   );
 }
@@ -201,17 +191,20 @@ export function FixpackPurchase({
  */
 export function PaymentMethods({
   auditId,
+  repoUrl,
   accessToken,
   price,
   priceFailed,
 }: {
   auditId: string;
+  repoUrl: string;
   accessToken: string | null;
   price: Pricing | null;
   /** Distinguishes "still loading" from "we asked and could not find out". */
   priceFailed?: boolean;
 }) {
   const [showTransfer, setShowTransfer] = useState(false);
+  const [githubToken, setGithubToken] = useState("");
 
   // Nothing at all while the answer is still in flight. Which rails exist is
   // part of that answer, so rendering a checkout first means rendering a
@@ -242,10 +235,12 @@ export function PaymentMethods({
 
   return (
     <>
+      <RepositoryTokenField repoUrl={repoUrl} value={githubToken} onChange={setGithubToken} />
       {card && price && (
         <CardCheckout
           auditId={auditId}
           returnToken={accessToken}
+          githubToken={githubToken}
           amount={price.fixpack.amount}
           currency={price.fixpack.currency}
         />
@@ -263,17 +258,18 @@ export function PaymentMethods({
 
       {transfer && (!card || showTransfer) && (
         <div className={card ? "mt-4" : undefined}>
-          <TransferCheckout auditId={auditId} />
+          <TransferCheckout auditId={auditId} githubToken={githubToken} />
         </div>
       )}
     </>
   );
 }
 
-function TransferCheckout({ auditId }: { auditId: string }) {
+function TransferCheckout({ auditId, githubToken }: { auditId: string; githubToken: string }) {
   return (
     <BankTransferCheckout
       title="Pay by bank transfer"
+      ready={Boolean(githubToken.trim())}
       description={
         <>
           Copy the card number and pay from your banking app. Your Fix Pack
@@ -282,7 +278,7 @@ function TransferCheckout({ auditId }: { auditId: string }) {
         </>
       }
       createInvoice={(payer) =>
-        createFixpackBankTransferInvoice(auditId, payer)
+        createFixpackBankTransferInvoice(auditId, payer, githubToken.trim())
       }
       renderCompleted={(completed) => completed.product === "fixpack" && completed.funding_review_required ? (
         <p role="alert" className="mt-4 text-sm">
@@ -305,124 +301,93 @@ function TransferCheckout({ auditId }: { auditId: string }) {
   );
 }
 
-// A Fix Pack opens a real PR, which needs the GitHub App installed on the
-// target repo. Until it is, we show an "Install GitHub App" button instead of
-// the pay cards, so no one pays for a Fix Pack that can't be delivered. When
-// the App isn't configured on this deployment at all (app_configured=false),
-// or the check can't complete, we don't strand the user — the pay cards show.
-export function InstallGate({
-  repoUrl,
-  children,
+export function RepositoryTokenField({
+  repoUrl, value, onChange, disabled = false,
 }: {
   repoUrl: string;
-  children: ReactNode;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
-  const [status, setStatus] = useState<InstallationStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
-
-  const parsed = parseOwnerRepo(repoUrl);
-
-  useEffect(() => {
-    if (!parsed) {
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setFailed(false);
-    getInstallationStatus(parsed.owner, parsed.repo)
-      .then((s) => {
-        if (!cancelled) setStatus(s);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // parsed is derived from repoUrl; keying on repoUrl avoids a new object
-    // each render retriggering the effect.
-  }, [repoUrl]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  if (loading) {
-    return (
-      <p className="mt-5 flex items-center gap-2 text-sm text-muted">
-        <Spinner /> Checking GitHub App installation…
-      </p>
-    );
-  }
-
-  // Couldn't parse the repo, the App isn't configured here, it's already
-  // installed, or the check failed — in every one of these the honest move is
-  // to let the purchase proceed rather than block on an unknown.
-  const blocked =
-    status !== null &&
-    status.app_configured &&
-    status.installed === false &&
-    !failed;
-
-  if (!blocked) return <>{children}</>;
-
-  function rememberReturn() {
-    try {
-      sessionStorage.setItem(INSTALL_RETURN_KEY, window.location.href);
-    } catch {
-      /* sessionStorage unavailable — /github/installed falls back to home */
-    }
-  }
-
-  // Installed AND suspended is a different problem with a different fix, and
-  // telling this person to "install the GitHub App" would be telling them to
-  // do something they have already done. The purchase is blocked either way;
-  // only the sentence changes.
-  if (status!.suspended) {
-    return (
-      <div className="mt-5 rounded-xl border border-high/40 bg-high/10 p-5">
-        <h3 className="text-base font-semibold text-high">
-          The GitHub App is suspended on this repository
-        </h3>
-        <p className="mt-2 max-w-2xl text-sm text-muted">
-          Our GitHub App is installed on{" "}
-          <span className="font-mono text-text">
-            {status!.owner}/{status!.repo}
-          </span>{" "}
-          but suspended, so it cannot open a pull request — and a Fix Pack is
-          delivered as one. Whoever owns the repository can lift it under
-          Settings → Applications → Installed GitHub Apps → Configure, then
-          reload this page.
-        </p>
-      </div>
-    );
-  }
-
   return (
-    <div className="mt-5 rounded-xl border border-high/40 bg-high/10 p-5">
-      <h3 className="text-base font-semibold text-high">
-        Install the GitHub App first
-      </h3>
-      <p className="mt-2 max-w-2xl text-sm text-muted">
-        A Fix Pack opens a real pull request against{" "}
-        <span className="font-mono text-text">
-          {status!.owner}/{status!.repo}
-        </span>
-        , so our GitHub App has to be installed on that repository before you
-        can buy one. Install it (you choose which repos it can access), and
-        you&apos;ll be brought right back here to continue.
+    <div className="mb-4 rounded-lg border border-border p-4">
+      <p className="text-sm font-semibold">Authorize delivery to your repository</p>
+      <p className="mt-2 break-all font-mono text-xs">{repoUrl}</p>
+      <p className="mt-2 text-sm text-muted">
+        Create a GitHub fine-grained personal access token for this repository only,
+        with Contents and Pull requests permissions set to Read and write.
+        You must have write access to the repository.
       </p>
-      {status!.install_url && (
-        <a
-          href={status!.install_url}
-          rel="noreferrer"
-          onClick={rememberReturn}
-          className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-fg hover:opacity-90"
-        >
-          Install GitHub App ↗
-        </a>
-      )}
+      <a href="https://github.com/settings/personal-access-tokens/new"
+        target="_blank" rel="noopener noreferrer"
+        className="mt-2 inline-block text-sm text-accent underline">
+        Create a GitHub token ↗
+      </a>
+      <label className="mt-3 block text-sm">
+        GitHub delivery token
+        <input type="password" autoComplete="off" spellCheck={false}
+          value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}
+          className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2"
+          maxLength={4096} />
+      </label>
+      <p className="mt-2 text-xs text-muted">
+        This token stays out of browser storage. Drydock stores it encrypted for
+        delivery authorization lasting up to 7 days, checks access again before
+        opening the PR, and uses only this token to write. GitHub enforces its
+        permissions on each write. You can revoke it in GitHub at any time.
+      </p>
+    </div>
+  );
+}
+
+function RenewDeliveryAuthorization({
+  auditId, accessToken, repoUrl, initialReference, onRenewed,
+}: {
+  auditId: string;
+  accessToken: string;
+  repoUrl: string;
+  initialReference?: string | null;
+  onRenewed: () => void;
+}) {
+  const [reference, setReference] = useState(initialReference ?? "");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function renew() {
+    if (!reference.trim() || !token.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await renewFixpackDeliveryAuthorization(auditId, reference.trim(), accessToken, token.trim());
+      setToken("");
+      onRenewed();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not renew repository access. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="rounded-md border border-high/40 bg-high/10 p-4 text-sm">
+      <p className="font-semibold">Renew GitHub access to continue your paid Fix Pack</p>
+      <p className="mt-2 text-muted">
+        Your order is waiting for repository authorization. Enter your payment
+        reference and a fresh token below. This resumes the existing order and
+        does not create another payment.
+      </p>
+      <label className="my-3 block">
+        Payment reference
+        <input value={reference} onChange={(e) => setReference(e.target.value)}
+          autoComplete="off" disabled={busy}
+          className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2" />
+      </label>
+      <RepositoryTokenField repoUrl={repoUrl} value={token} onChange={setToken} disabled={busy} />
+      <button type="button" onClick={renew} disabled={busy || !reference.trim() || !token.trim()}
+        className="rounded-lg bg-accent px-4 py-2 font-medium text-accent-fg disabled:opacity-60">
+        {busy ? "Checking repository access…" : "Authorize and resume existing order"}
+      </button>
+      {error && <p role="alert" className="mt-2 text-critical">{error}</p>}
+      <p className="mt-2 text-xs text-muted">Missing the payment reference? Email <SupportEmail /> with your order details.</p>
     </div>
   );
 }
@@ -434,8 +399,8 @@ export function InstallGate({
  * anywhere in this file. That is the branch which decides whether a failed
  * sale becomes a refund conversation or an accusation of fraud, and it is
  * reachable through no fault of the buyer: the sandbox runner being down, the
- * repository changing between audit and purchase, or the App being uninstalled
- * after the install gate above passed.
+ * repository changing between audit and purchase, or a credential being revoked
+ * after checkout.
  *
  * Names what to include, because the operator matches an incoming transfer on
  * the order number where the bank carried one and on the payer's name and
@@ -449,7 +414,12 @@ function SupportContact() {
   );
 }
 
-function FixpackStatusArea({ auditId, accessToken }: { auditId: string; accessToken?: string | null }) {
+function FixpackStatusArea({ auditId, repoUrl, accessToken, onStatusChange }: {
+  auditId: string;
+  repoUrl: string | null;
+  accessToken?: string | null;
+  onStatusChange: (status: FixpackStatus["status"]) => void;
+}) {
   const [status, setStatus] = useState<FixpackStatus | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -462,6 +432,7 @@ function FixpackStatusArea({ auditId, accessToken }: { auditId: string; accessTo
 
   useEffect(() => {
     setStatus(null);
+    onStatusChange(null);
     if (!accessToken) return;
     const token = accessToken;
     let cancelled = false;
@@ -471,6 +442,7 @@ function FixpackStatusArea({ auditId, accessToken }: { auditId: string; accessTo
         const s = await getFixpackStatus(auditId, token);
         if (cancelled) return;
         setStatus(s);
+        onStatusChange(s.status);
         if (s.status && TERMINAL.has(s.status)) stop();
       } catch {
         /* transient; keep polling */
@@ -483,7 +455,7 @@ function FixpackStatusArea({ auditId, accessToken }: { auditId: string; accessTo
       cancelled = true;
       stop();
     };
-  }, [auditId, accessToken, stop]);
+  }, [auditId, accessToken, stop, onStatusChange]);
 
   // Nothing purchased yet — keep the area quiet rather than show an empty box.
   if (!status || status.status === null) return null;
@@ -492,6 +464,17 @@ function FixpackStatusArea({ auditId, accessToken }: { auditId: string; accessTo
     <div className="mt-5 border-t border-border pt-5">
       <h3 className="text-sm font-semibold text-muted">Fix Pack status</h3>
       <div className="mt-2">
+        {status.status === "awaiting_authorization" && accessToken && (repoUrl ? (
+          <RenewDeliveryAuthorization key={status.delivery_reference ?? "missing-reference"}
+            auditId={auditId} accessToken={accessToken} repoUrl={repoUrl}
+            initialReference={status.delivery_reference}
+            onRenewed={() => { setStatus({ ...status, status: "paid" }); onStatusChange("paid"); }} />
+        ) : (
+          <p className="rounded-md border border-high/40 bg-high/10 p-3 text-sm">
+            Your paid order needs repository authorization, but this audit has no
+            repository URL. Please <SupportContact /> so we can review the order.
+          </p>
+        ))}
         {(status.status === "paid" || status.status === "running") && (
           <p className="flex items-center gap-2 text-sm text-muted">
             <Spinner /> Generating your fix… this opens a pull request

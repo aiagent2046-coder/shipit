@@ -18,7 +18,7 @@ const AUDIT = "2031a34d-3189-4401-98b5-77da859477dc";
 const TOKEN = "81a43fa1e47aacf98be92f2953abfc36"; // scan-allow: fixture audit token
 const PAY_URL = "https://yoomoney.ru/checkout/payments/v2/contract?orderId=x";
 
-function mount() {
+function mount(githubToken = "fixture_delivery_token") {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -27,6 +27,7 @@ function mount() {
       <CardCheckout
         auditId={AUDIT}
         returnToken={TOKEN}
+        githubToken={githubToken}
         amount="990.00"
         currency="RUB"
       />,
@@ -80,6 +81,12 @@ describe("CardCheckout", () => {
     expect(payButton(container).disabled).toBe(false);
   });
 
+  it("does not offer payment without repository authority even when contact is complete", () => {
+    const container = mount("");
+    fillIn(container);
+    expect(payButton(container).disabled).toBe(true);
+  });
+
   it("sends the audit's access token so the payer can read the page they return to", async () => {
     const create = vi
       .spyOn(api, "createFixpackCardPayment")
@@ -102,6 +109,7 @@ describe("CardCheckout", () => {
       AUDIT,
       expect.objectContaining({ payer_email: "ada@example.invalid" }),
       TOKEN,
+      "fixture_delivery_token",
     );
     vi.unstubAllGlobals();
   });

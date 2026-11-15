@@ -221,6 +221,11 @@ async def get_fixpack_status(
         "pr_url": job.get("pr_url"),
         "failure_kind": failure_kind,
     }
+    if status == "awaiting_authorization":
+        from app.deploypack.paid_delivery_auth import get_paid_delivery_store
+        funding = await get_paid_delivery_store().get_for_job(str(job["id"]))
+        result["delivery_reference"] = funding["external_ref"] if funding else None
+        result["job_id"] = job["id"]
     if status == "blocked":
         result["block_reason"] = (
             "proof_failed" if detail.startswith("proof gate")

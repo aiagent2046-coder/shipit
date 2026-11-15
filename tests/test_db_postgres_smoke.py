@@ -1365,6 +1365,9 @@ EXPECTED_DELETE_ACTIONS = {
     "payments_account_id_fkey": "NO ACTION",
     "payments_audit_id_fkey": "NO ACTION",
     "payments_fixpack_job_id_fkey": "NO ACTION",
+    # A retained delivery credential has no independent bookkeeping value:
+    # removing its payment must also erase the encrypted credential.
+    "fixpack_delivery_grants_payment_id_fkey": "CASCADE",
     "rls_live_checks_audit_id_fkey": "SET NULL",
     # SET NULL, matching rls_live_checks above and chosen for the same reason:
     # this ledger records that somebody consented and that we fetched their

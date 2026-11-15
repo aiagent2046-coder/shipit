@@ -60,8 +60,10 @@ export function BankTransferCheckout({
   description,
   createInvoice,
   renderCompleted,
+  ready = true,
 }: {
   title?: string;
+  ready?: boolean;
   description: React.ReactNode;
   createInvoice: (payer: PayerContact) => Promise<BankTransferInvoice>;
   renderCompleted: (
@@ -105,6 +107,7 @@ export function BankTransferCheckout({
   useEffect(() => () => stopPolling(), [stopPolling]);
 
   async function start() {
+    if (!ready || !contactReady || creating) return;
     setCreating(true);
     setError(null);
     setStatus(null);
@@ -284,7 +287,7 @@ export function BankTransferCheckout({
           <button
             type="button"
             onClick={start}
-            disabled={creating || !contactReady}
+            disabled={creating || !contactReady || !ready}
             className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 font-medium text-accent-fg hover:opacity-90 disabled:opacity-60"
           >
             {creating ? (

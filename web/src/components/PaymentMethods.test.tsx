@@ -25,6 +25,7 @@ function mount(price: Pricing | null, priceFailed = false) {
     createRoot(container).render(
       <PaymentMethods
         auditId={AUDIT}
+        repoUrl="https://github.com/acme/app"
         accessToken={null}
         price={price}
         priceFailed={priceFailed}

@@ -935,7 +935,7 @@ class FixpackJobRepository:
                 cur = await conn.execute(
                     f"select {columns}, false as inserted from fixpack_jobs "
                     "where funding_key = %s or (audit_id = %s "
-                    "and status in ('paid', 'running')) "
+                    "and status in ('paid', 'running', 'awaiting_authorization')) "
                     "order by (funding_key = %s) desc nulls last limit 1",
                     (funding_key, parsed_audit_id, funding_key),
                 )
@@ -1290,11 +1290,14 @@ class FixpackJobRepository:
         return _row_to_fixpack_job(row) if row else None
 
     async def get_by_audit(self, audit_id: str) -> dict[str, Any] | None:
-        """The most recent Fix Pack job for an audit, so the results page can
-        poll one audit's purchase outcome (status + pr_url) without knowing a
-        job id up front. Newest first because a re-purchase after a 'failed'
-        job should surface the latest attempt. Returns None when there's no
-        job yet or DATABASE_URL isn't set."""
+        """The live job, otherwise the latest job, for an audit.
+
+        Deploy Pack previews share this table and may create a newer generated
+        row while paid work is running or waiting for authorization. Live work
+        must remain visible both to polling and to the duplicate-purchase gate.
+        Among terminal jobs the newest attempt still wins. Returns None when
+        no job exists or persistence is unavailable.
+        """
         try:
             pool = await get_pool()
         except DatabaseNotConfigured:
@@ -1310,7 +1313,8 @@ class FixpackJobRepository:
                        preview_local_url, preview_expires_at,
                        pr_url, pr_delivered, status, created_at
                 from fixpack_jobs where audit_id = %s
-                order by created_at desc
+                order by (status in ('paid', 'running', 'awaiting_authorization')) desc,
+                         created_at desc
                 limit 1
                 """,
                 (parsed_id,),
@@ -2047,6 +2051,7 @@ class PaymentRepository:
         payer_x: str | None = None, payer_locale: str | None = None,
         provider_payment_id: str | None = None,
         fixpack_job_id: str | None = None,
+        delivery_grant: str | None = None,
     ) -> dict[str, Any] | None:
         """payer_name/payer_email (migration 0026) and payer_x (0032) are what
         the payer said about themselves before paying. The name is for the
@@ -2094,6 +2099,14 @@ class PaymentRepository:
                  provider_payment_id, parsed_job_id),
             )
             row = await cur.fetchone()
+            if delivery_grant is not None and row is not None:
+                # The pool connection commits on clean exit, so the order and
+                # its encrypted repository grant become visible together.
+                # Keep this secret outside the public payment row mapper.
+                await conn.execute(
+                    "insert into fixpack_delivery_grants (payment_id, encrypted_grant) "
+                    "values (%s, %s)", (row["id"], delivery_grant),
+                )
         return _row_to_payment(row)
 
     async def get(self, payment_id: str) -> dict[str, Any] | None:

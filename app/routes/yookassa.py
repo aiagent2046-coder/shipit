@@ -58,6 +58,8 @@ from app.routes.dependencies import (
     get_rate_limiter,
     get_service_flags_repo,
 )
+from app.deploypack.delivery_auth import DeliveryAuthorizationError
+from app.deploypack.paid_delivery_auth import authorize_paid_checkout, repository_name, seal_paid_grant
 from app.ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -237,6 +239,15 @@ async def create_fixpack_payment(
     _reject_if_nothing_to_fix(audit)
 
     credentials = _credentials()
+    try:
+        github_token = await authorize_paid_checkout(
+            audit, request.headers.get("x-github-token"),
+        )
+    except DeliveryAuthorizationError as exc:
+        raise HTTPException(
+            status_code=exc.status_code, detail={"reason": exc.reason},
+        ) from None
+    repo_full_name = repository_name(audit)
     amount = bank_transfer.fixpack_price_rub()
 
     reference = await bank_transfer.reserve_reference(
@@ -253,6 +264,10 @@ async def create_fixpack_payment(
         amount=float(amount), currency=yookassa.CURRENCY, status="pending",
         tier_granted=None, product=bank_transfer.PRODUCT_FIXPACK,
         audit_id=audit_id,
+        delivery_grant=seal_paid_grant(
+            github_token, provider=yookassa.PROVIDER, external_ref=reference,
+            audit_id=audit_id, repo_full_name=repo_full_name,
+        ),
         payer_name=payer.payer_name, payer_email=payer.payer_email,
         payer_x=payer.payer_x, payer_locale=payer.payer_locale,
     )
