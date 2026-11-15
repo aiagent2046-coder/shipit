@@ -30,9 +30,12 @@ jobs:
         include:
           - os: ubuntu-24.04
             platform: linux-x86_64
+            architecture: x64
             python: '3.12'
-          - os: macos-14
+          # GitHub retired macos-14 on 2026-11-02; macos-15 is standard ARM64.
+          - os: macos-15
             platform: macos-arm64
+            architecture: arm64
             python: '3.12'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -49,6 +52,23 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
+          architecture: ${{ matrix.architecture }}
+      - name: Verify interpreter architecture matches the installation bundle
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+        run: |
+          python - <<'PYTHON'
+          import os
+          import platform
+          import sys
+
+          system = {"linux": "linux", "darwin": "macos"}.get(sys.platform, sys.platform)
+          actual = f"{system}-{platform.machine().lower()}"
+          expected = os.environ["EXPECTED_PLATFORM"]
+          if actual != expected:
+              raise SystemExit(f"Refusing mislabeled bundle: expected {expected}, interpreter is {actual}")
+          print(f"Verified interpreter platform: {actual}; Python {platform.python_version()}")
+          PYTHON
       - name: Prepare the four runtime dependencies and locked build backend
         run: |
           python scripts/build_local_package.py --out "$RUNNER_TEMP/drydock-bootstrap" --stage-only
