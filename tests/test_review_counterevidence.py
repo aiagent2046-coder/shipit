@@ -281,4 +281,3 @@ def test_fastapi_identity_dependency_counterevidence_projects_narrative_and_pres
 def test_storage_only_dependency_or_ownership_concern_does_not_gain_fastapi_counterevidence(source, title):
     raw, sources = fastapi_raw(source, title)
     assert review.ReviewCounterevidence(archive(sources)).checks_for(raw) == []
-

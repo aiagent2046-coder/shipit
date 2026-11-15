@@ -2,4 +2,3 @@
 
 # Correlate verified dependency identities with a pinned KEV threat snapshot.
 AUDIT_ENGINE_VERSION = "2026-11-13-3"
-

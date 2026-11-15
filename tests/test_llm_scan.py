@@ -2053,4 +2053,3 @@ def test_system_prompt_for_isolates_rubric_specific_rules_and_keeps_core():
     assert "duplicate paid calls" in money_sys
     assert "query_limit_unbounded" in money_sys
     assert "sql_table_interpolation" not in money_sys
-

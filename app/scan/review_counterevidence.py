@@ -457,4 +457,3 @@ class ReviewCounterevidence:
             "runtime_enforcement": "not_checked",
             "ownership_policy": "not_checked",
         }
-
