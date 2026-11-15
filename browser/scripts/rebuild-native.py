@@ -49,13 +49,17 @@ def main():
             raise ValueError("Expected one source root")
         root = roots[0]
         if supplement := pkg.get("supplement"):
-            # The TypeScript PyPI sdist omits these seven headers. Copy only
-            # the manifest allowlist from the official npm release, same version.
+            # Copy only the manifest allowlist from the second archive, same
+            # revision: the TypeScript PyPI sdist omits seven npm headers
+            # ("package/" prefix), and the pglast sdist omits the generated
+            # upb sources that libpg_query keeps in its git tree (see the
+            # package's "prefix"). Nothing else from the archive is used.
+            prefix = supplement.get("prefix", "package/")
             with tarfile.open(fileobj=io.BytesIO(download(supplement))) as archive:
                 for name in supplement["files"]:
                     destination = root / name
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(archive.extractfile(f"package/{name}").read())
+                    destination.write_bytes(archive.extractfile(f"{prefix}{name}").read())
         with (output / f"{pkg['name']}.log").open("w") as log:
             subprocess.run(["pyodide", "build", "-o", str(output / "wheels")],
                            cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)

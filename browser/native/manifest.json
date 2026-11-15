@@ -1,67 +1,79 @@
 {
-  "pyodide": "314.0.6",
-  "python": "3.14.2",
-  "abi": "2026_0",
-  "emscripten": "5.0.3",
-  "pyodide_build": "0.39.0",
-  "source_date_epoch": 1789257600,
-  "packages": [
-    {
-      "name": "tree-sitter",
-      "version": "0.26.0",
-      "file_name": "tree_sitter-0.26.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
-      "sha256": "7c3dd87bee12cc3141c288cba7e336924768b3f5a20c114245e3072b4b5d62da",
-      "bytes": 76846,
-      "source": {
-        "url": "https://files.pythonhosted.org/packages/f7/03/5600b84aff2e6c4fe80cfebb4063fe2f50299521befe5f6092ab8c082f4a/tree_sitter-0.26.0.tar.gz",
-        "sha256": "b40c219edccc4564530c96f8f1556f6202b37cda964d1cbd7bd2b7e68b40a245"
-      }
-    },
-    {
-      "name": "tree-sitter-typescript",
-      "version": "0.23.2",
-      "file_name": "tree_sitter_typescript-0.23.2-cp39-abi3-pyemscripten_2026_0_wasm32.whl",
-      "sha256": "0dcb7a055a75103bec781257a11d601edf6f128d75bf3585a6b8e70a49eeedb9",
-      "bytes": 270129,
-      "source": {
-        "url": "https://files.pythonhosted.org/packages/1e/fc/bb52958f7e399250aee093751e9373a6311cadbe76b6e0d109b853757f35/tree_sitter_typescript-0.23.2.tar.gz",
-        "sha256": "7b167b5827c882261cb7a50dfa0fb567975f9b315e87ed87ad0a0a3aedb3834d"
-      },
-      "supplement": {
-        "url": "https://registry.npmjs.org/tree-sitter-typescript/-/tree-sitter-typescript-0.23.2.tgz",
-        "sha256": "0fdf63c35930a75885145d75ee63cb879da2d49db9bfe454bd8e60b08ba778a1",
-        "files": [
-          "common/scanner.h",
-          "tsx/src/tree_sitter/alloc.h",
-          "tsx/src/tree_sitter/array.h",
-          "tsx/src/tree_sitter/parser.h",
-          "typescript/src/tree_sitter/alloc.h",
-          "typescript/src/tree_sitter/array.h",
-          "typescript/src/tree_sitter/parser.h"
-        ]
-      }
-    },
-    {
-      "name": "tree-sitter-javascript",
-      "version": "0.25.0",
-      "file_name": "tree_sitter_javascript-0.25.0-cp310-abi3-pyemscripten_2026_0_wasm32.whl",
-      "sha256": "de1f4e6fcadf6159a074c55b37b47d7cb31d22ba2a8b4a989c48ed2f67a830cf",
-      "bytes": 57864,
-      "source": {
-        "url": "https://files.pythonhosted.org/packages/59/e0/e63103c72a9d3dfd89a31e02e660263ad84b7438e5f44ee82e443e65bbde/tree_sitter_javascript-0.25.0.tar.gz",
-        "sha256": "329b5414874f0588a98f1c291f1b28138286617aa907746ffe55adfdcf963f38"
-      }
-    },
-    {
-      "name": "pglast",
-      "version": "8.4",
-      "file_name": "pglast-8.4-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
-      "sha256": "9f67a69d6e239bc3e834ab594c031062058c36eec68a0ba4fb9d9debf0b8bc52",
-      "bytes": 995046,
-      "source": {
-        "url": "https://files.pythonhosted.org/packages/ae/e3/e7dbccbac32ba8d6ea4f55aaf14ebd794bf0b8a05561af72284efe38b1b8/pglast-8.4.tar.gz",
-        "sha256": "ebc804351aab9c1bac395611758883cd17d4198f4704224bb6f9f1dd1f3c513d"
-      }
-    }
-  ]
+ "pyodide": "314.0.6",
+ "python": "3.14.2",
+ "abi": "2026_0",
+ "emscripten": "5.0.3",
+ "pyodide_build": "0.39.0",
+ "source_date_epoch": 1789257600,
+ "packages": [
+  {
+   "name": "tree-sitter",
+   "version": "0.26.0",
+   "file_name": "tree_sitter-0.26.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+   "sha256": "7c3dd87bee12cc3141c288cba7e336924768b3f5a20c114245e3072b4b5d62da",
+   "bytes": 76846,
+   "source": {
+    "url": "https://files.pythonhosted.org/packages/f7/03/5600b84aff2e6c4fe80cfebb4063fe2f50299521befe5f6092ab8c082f4a/tree_sitter-0.26.0.tar.gz",
+    "sha256": "b40c219edccc4564530c96f8f1556f6202b37cda964d1cbd7bd2b7e68b40a245"
+   }
+  },
+  {
+   "name": "tree-sitter-typescript",
+   "version": "0.23.2",
+   "file_name": "tree_sitter_typescript-0.23.2-cp39-abi3-pyemscripten_2026_0_wasm32.whl",
+   "sha256": "0dcb7a055a75103bec781257a11d601edf6f128d75bf3585a6b8e70a49eeedb9",
+   "bytes": 270129,
+   "source": {
+    "url": "https://files.pythonhosted.org/packages/1e/fc/bb52958f7e399250aee093751e9373a6311cadbe76b6e0d109b853757f35/tree_sitter_typescript-0.23.2.tar.gz",
+    "sha256": "7b167b5827c882261cb7a50dfa0fb567975f9b315e87ed87ad0a0a3aedb3834d"
+   },
+   "supplement": {
+    "url": "https://registry.npmjs.org/tree-sitter-typescript/-/tree-sitter-typescript-0.23.2.tgz",
+    "sha256": "0fdf63c35930a75885145d75ee63cb879da2d49db9bfe454bd8e60b08ba778a1",
+    "files": [
+     "common/scanner.h",
+     "tsx/src/tree_sitter/alloc.h",
+     "tsx/src/tree_sitter/array.h",
+     "tsx/src/tree_sitter/parser.h",
+     "typescript/src/tree_sitter/alloc.h",
+     "typescript/src/tree_sitter/array.h",
+     "typescript/src/tree_sitter/parser.h"
+    ]
+   }
+  },
+  {
+   "name": "tree-sitter-javascript",
+   "version": "0.25.0",
+   "file_name": "tree_sitter_javascript-0.25.0-cp310-abi3-pyemscripten_2026_0_wasm32.whl",
+   "sha256": "de1f4e6fcadf6159a074c55b37b47d7cb31d22ba2a8b4a989c48ed2f67a830cf",
+   "bytes": 57864,
+   "source": {
+    "url": "https://files.pythonhosted.org/packages/59/e0/e63103c72a9d3dfd89a31e02e660263ad84b7438e5f44ee82e443e65bbde/tree_sitter_javascript-0.25.0.tar.gz",
+    "sha256": "329b5414874f0588a98f1c291f1b28138286617aa907746ffe55adfdcf963f38"
+   }
+  },
+  {
+   "name": "pglast",
+   "version": "8.7",
+   "file_name": "pglast-8.7-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+   "sha256": "aa33f8bc3c6590b8741f6266da63bf8119b242147d8f35d3f2bcb9d2e51c7a57",
+   "bytes": 992341,
+   "source": {
+    "url": "https://files.pythonhosted.org/packages/7c/89/6e1ea9afed453506d458d4f37812644af5f5fe08347af59ca44991541068/pglast-8.7.tar.gz",
+    "sha256": "7729abdc12a9949c8cc96e5cae0ba353943d3f12b0c17b09a049572bfa206e15"
+   },
+   "supplement": {
+    "url": "https://github.com/pganalyze/libpg_query/archive/f3a04061ebefb2f461f4529d0591c44e19faa3c5.tar.gz",
+    "sha256": "069f68de09cd585ac752054d0c2adda4864587cd0a840d638469efeba6de2fae",
+    "files": [
+     "libpg_query/protobuf/pg_query.upb.h",
+     "libpg_query/protobuf/pg_query.upb_minitable.c",
+     "libpg_query/protobuf/pg_query.upb_minitable.h",
+     "libpg_query/vendor/upb/upb/port/def.inc",
+     "libpg_query/vendor/upb/upb/port/undef.inc"
+    ],
+    "prefix": "libpg_query-f3a04061ebefb2f461f4529d0591c44e19faa3c5/"
+   }
+  }
+ ]
 }

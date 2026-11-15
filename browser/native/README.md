@@ -6,7 +6,7 @@ into the same-origin Pyodide package catalog. No CDN is used at scan time.
 
 Toolchain: Python 3.14.2, Pyodide/xbuildenv 314.0.6, pyodide-build 0.39.0,
 Emscripten 5.0.3, ABI `2026_0`. The tree-sitter wheels were built using setuptools
-84.0.0; pglast 8.4 uses its source-pinned setuptools 83.0.0 and Cython 3.2.8.
+84.0.0; pglast 8.7 uses its source-pinned setuptools 84.0.0 and Cython 3.3.0.
 All use `SOURCE_DATE_EPOCH=1789257600`. The manifest records source archive
 and wheel SHA-256 values separately.
 
@@ -14,8 +14,16 @@ The TypeScript 0.23.2 PyPI sdist omits `common/scanner.h` and the six
 `tree_sitter/*.h` headers. These are copied without modification from the
 official npm package of the same version. Its hash and exact seven-file
 allowlist are in the manifest. All parser C sources are otherwise unchanged.
-Pglast uses its bundled generated C; Pyodide's compiler/archive wrappers also
-build the nested libpg_query library. No host-native static archive is reused.
+Pglast's 8.7 PyPI sdist omits the generated upb sources that libpg_query
+keeps in its git tree: `protobuf/pg_query.upb.h`, the two
+`protobuf/pg_query.upb_minitable.*` files and `vendor/upb/upb/port/
+{def,undef}.inc` are copied without modification from the bundled
+revision's own tree (`pganalyze/libpg_query` commit f3a0406, one commit
+after 18.1.0), whose `pg_query.proto` is byte-identical to the sdist's
+(sha256 `cdd16c64...`). The commit tarball hash and the exact five-file
+allowlist are in the manifest `supplement`, including its `prefix`.
+Pyodide's compiler/archive wrappers also build the nested libpg_query
+library. No host-native static archive is reused.
 
 ## Rebuild on Linux
 
