@@ -23,7 +23,7 @@ dependencies = [
 drydock-local = "app.local_cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=9.2.0", "pytest-asyncio>=1.4.1", "ruff>=0.17.3", "jsonschema[format-nongpl]>=4.21", "hypothesis>=6.170.13"]
+dev = ["pytest>=9.2.0", "pytest-asyncio>=1.4.1.post1", "ruff>=0.17.3", "jsonschema[format-nongpl]>=4.21", "hypothesis>=6.170.13"]
 
 [tool.ruff]
 # 120, not the ruff default of 88: this codebase already reads comfortably at
