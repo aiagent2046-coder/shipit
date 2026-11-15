@@ -157,6 +157,7 @@ class ScanSession:
             "insecure_randomness": stage.scan_insecure_randomness,
             "command_injection": stage.scan_command_injection,
             "archive_extraction": stage.scan_archive_extraction,
+            "llm_browser_client": stage.scan_llm_browser_client,
         }
         updated = {**self.static, **deepcopy({key: self.static[key] for key in (
             "findings", "rule_coverage", "check_finding_counts", "checks_not_run", "checks_run", "coverage",

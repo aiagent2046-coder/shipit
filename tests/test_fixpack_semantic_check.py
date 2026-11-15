@@ -478,10 +478,13 @@ def test_both_builders_carry_fd_and_fsize_ulimits():
 
 def test_install_argv_routes_egress_through_the_proxy():
     # The install step needs the network, but only via the host's allowlisting
-    # forward proxy. Assert the container is pointed at host.docker.internal
-    # and every proxy env var (both casings) carries the configured URL.
+    # forward proxy. Assert the container is pointed at host.docker.internal,
+    # container-side DNS is pinned to closed loopback (--dns=127.0.0.1) so
+    # postinstall scripts cannot smuggle data via recursive DNS, and every
+    # proxy env var (both casings) carries the configured URL.
     argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
     assert "--add-host=host.docker.internal:host-gateway" in argv
+    assert "--dns=127.0.0.1" in argv
     proxy = sc.FIXPACK_INSTALL_PROXY_URL
     for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
         assert f"{var}={proxy}" in argv
@@ -495,6 +498,7 @@ def test_test_argv_has_no_proxy_and_stays_offline():
     argv = _docker_test_argv("node:20-slim", "/tmp/work", "npm test")
     assert "--network" in argv and "none" in argv
     assert not any(a.startswith("--add-host") for a in argv)
+    assert not any(a.startswith("--dns") for a in argv)
     assert not any("PROXY" in a or "proxy" in a for a in argv)
     # Non-proxy environment variables such as HOME and cache locations are
     # required for read-only, non-root containers. What must be absent here
@@ -529,10 +533,12 @@ def test_install_proxy_is_configurable_and_optional(monkeypatch):
     monkeypatch.setattr(sc, "FIXPACK_INSTALL_PROXY_URL", "http://proxy.example:9999")
     argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
     assert "HTTP_PROXY=http://proxy.example:9999" in argv
+    assert "--dns=127.0.0.1" in argv
 
     monkeypatch.setattr(sc, "FIXPACK_INSTALL_PROXY_URL", "")
     argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
     assert not any(a.startswith("--add-host") for a in argv)
+    assert not any(a.startswith("--dns") for a in argv)
     # Non-proxy environment variables such as HOME and cache locations are
     # required for read-only, non-root containers. What must be absent here
     # are specifically the proxy environment variables.
@@ -540,6 +546,23 @@ def test_install_proxy_is_configurable_and_optional(monkeypatch):
         "PROXY=" in argument.upper()
         for argument in argv
     )
+
+
+def test_install_network_is_off_by_default_and_opt_in(monkeypatch):
+    assert sc.FIXPACK_INSTALL_NETWORK == ""
+    argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
+    assert "--network" not in argv
+
+    monkeypatch.setattr(sc, "FIXPACK_INSTALL_NETWORK", "shipit-install")
+    argv = _docker_install_argv("python:3.12-slim", "/tmp/work", "pip install x")
+    assert "--network" in argv
+    assert argv[argv.index("--network") + 1] == "shipit-install"
+    # Test container always stays --network none regardless of install network
+    test_argv = _docker_test_argv("python:3.12-slim", "/tmp/work", "pytest")
+    assert test_argv[test_argv.index("--network") + 1] == "none"
+
+    monkeypatch.setattr(sc, "FIXPACK_INSTALL_NETWORK", "   ")
+    assert sc._install_network_argv() == []
 
 
 # --- container runtime selection (gVisor opt-in) ---------------------------

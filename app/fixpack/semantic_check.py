@@ -563,17 +563,44 @@ FIXPACK_INSTALL_PROXY_URL = os.environ.get(
     "FIXPACK_INSTALL_PROXY_URL", "http://host.docker.internal:3128"
 )
 
+# Optional isolated Docker network for the install container (e.g. a bridge
+# whose host DOCKER-USER rules only allow tcp/3128 to the host gateway and drop
+# everything else). Empty by default so merging does not break hosts that have
+# not created that network yet.
+FIXPACK_INSTALL_NETWORK = os.environ.get("FIXPACK_INSTALL_NETWORK", "")
+
+
+def _install_network_argv() -> list[str]:
+    """--network <name> for the install container when FIXPACK_INSTALL_NETWORK
+    is configured, or empty (default bridge)."""
+    net = FIXPACK_INSTALL_NETWORK.strip()
+    return ["--network", net] if net else []
+
 
 def _install_proxy_argv() -> list[str]:
     """docker-run flags routing the install container's egress through the
     host's allowlisting forward proxy. Empty if the proxy URL is explicitly
-    unset, so a deployment without a proxy still installs (network open)."""
+    unset, so a deployment without a proxy still installs (network open).
+
+    When the proxy is active, `--dns=127.0.0.1` is also passed so `/etc/resolv.conf`
+    inside the container points at the container's own closed loopback rather
+    than the host's recursive DNS resolver (or Docker's embedded 127.0.0.11).
+    Why both halves work and why the second matters:
+      * `host.docker.internal` is resolved from `/etc/hosts` (populated by
+        `--add-host`), and HTTP/HTTPS proxy clients (pip, npm, pnpm, yarn, curl)
+        send the target hostname to Squid in the HTTP request / CONNECT line, so
+        Squid resolves allowed registry domains on the host.
+      * A malicious `postinstall` or `setup.py` script therefore cannot smuggle
+        secrets out via UDP/TCP DNS queries (`<secret>.attacker.example`) when
+        direct web access is blocked, and a tool that ignores `HTTP_PROXY` fails
+        at name resolution instead of reaching an external host."""
     proxy = FIXPACK_INSTALL_PROXY_URL
     if not proxy:
         return []
     no_proxy = "localhost,127.0.0.1"
     return [
         "--add-host=host.docker.internal:host-gateway",
+        "--dns=127.0.0.1",
         "-e", f"HTTP_PROXY={proxy}",
         "-e", f"HTTPS_PROXY={proxy}",
         "-e", f"NO_PROXY={no_proxy}",
@@ -635,6 +662,7 @@ def _docker_install_argv(image: str, workdir: str, script: str) -> list[str]:
         "docker", "run", "--rm",
         *_runtime_argv(),
         *_user_argv(),
+        *_install_network_argv(),
         "--memory", memory_limit(),
         *_CONTAINER_HARDENING,
         *_readonly_argv(),

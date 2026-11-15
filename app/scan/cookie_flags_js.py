@@ -99,9 +99,22 @@ def _string_value(node) -> str:
         if len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]:
             return text[1:-1]
         return ""
-    if node.type == "template_string" and not any(child.type == "template_substitution"
-                                                 for child in node.named_children):
-        return _text(node)[1:-1]
+    if node.type == "template_string":
+        parts: list[str] = []
+        for child in node.named_children:
+            if child.type == "string_fragment":
+                parts.append(_text(child))
+            elif child.type == "template_substitution":
+                exprs = child.named_children
+                if len(exprs) != 1:
+                    return ""
+                sub_val = _string_value(exprs[0])
+                if sub_val == "" and exprs[0].type not in {"string", "template_string"}:
+                    return ""
+                parts.append(sub_val)
+            else:
+                return ""
+        return "".join(parts) if parts or _text(node) == "``" else _text(node)[1:-1]
     return ""
 
 
@@ -401,6 +414,27 @@ def _session_config_names(root, budget: list[int]) -> dict[str, str]:
                         names[_text(alias)] = module
                 elif inner.type == "identifier":
                     names[_text(inner)] = module
+    declarations = _stable_declarations(root)
+    for _ in range(3):
+        changed = False
+        for node in _walk(root, budget):
+            if node.type != "variable_declarator":
+                continue
+            name = node.child_by_field_name("name")
+            value = node.child_by_field_name("value")
+            if name is None or value is None or name.type != "identifier" or value.type != "identifier":
+                continue
+            key, target = _text(name), _text(value)
+            if (
+                key not in names
+                and target in names
+                and declarations.get(key) == node
+                and (target not in declarations or _visible_binding(target, value, declarations))
+            ):
+                names[key] = names[target]
+                changed = True
+        if not changed:
+            break
     return names
 
 

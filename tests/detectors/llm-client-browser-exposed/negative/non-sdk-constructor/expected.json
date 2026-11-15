@@ -1,0 +1,7 @@
+{
+  "description": "A local non-SDK class with an identically named option is not an LLM SDK browser exposure.",
+  "expect": [],
+  "forbid": [
+    "llm-client-browser-exposed"
+  ]
+}
