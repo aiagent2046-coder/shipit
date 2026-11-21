@@ -792,8 +792,8 @@ def run_web_structure_scan(
 
     try:
         target = validate_deployment_url(url, allow_loopback=allow_loopback)
-        resolve_and_vet(target.host, target.port, allow_loopback=allow_loopback,
-                        resolver=resolver)
+        vetted_ips = resolve_and_vet(target.host, target.port, allow_loopback=allow_loopback,
+                                     resolver=resolver)
     except UnsafeDeploymentUrl as exc:
         return done("skipped", str(exc), evidence={"reason": "unsafe_url"},
                     limitations=list(LIMITATIONS))
@@ -807,6 +807,10 @@ def run_web_structure_scan(
     if status is None:
         return done("error", "корень сайта недоступен: запрос не выполнился",
                     evidence={"reason": "request_failed",
+                              # The addresses actually tried: a name pointing
+                              # at a dead host reads as "site down" until the
+                              # report says WHICH IP refused to answer.
+                              "vetted_ips": vetted_ips,
                               "failures": budget.failures[:5]},
                     limitations=list(LIMITATIONS))
     if status >= 300 and status < 400:
@@ -869,7 +873,8 @@ def run_web_structure_scan(
     return done("checked", detail, findings=findings, checks=checks,
                 coverage=coverage, limitations=limitations,
                 evidence={"target": target.url, "host": target.host,
-                          "scheme": target.scheme, "worst_severity": worst})
+                          "scheme": target.scheme, "worst_severity": worst,
+                          "vetted_ips": vetted_ips})
 
 
 def render_text(result: WebScanResult) -> str:

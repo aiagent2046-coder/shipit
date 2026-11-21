@@ -163,6 +163,9 @@ def test_unreachable_root_is_error_with_the_failure_named():
     assert result.status == "error"
     assert "недоступен" in result.detail
     assert result.evidence["reason"] == "request_failed"
+    # The address actually tried travels with the failure: a domain pointing
+    # at a dead host must be diagnosable from the report alone.
+    assert result.evidence["vetted_ips"] == [PUBLIC_IP]
 
 
 def test_root_redirect_is_error_and_says_which_url_to_give():
