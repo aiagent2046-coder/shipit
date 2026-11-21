@@ -380,6 +380,31 @@ def _header(headers: list[tuple[str, str]], name: str) -> str | None:
     return None
 
 
+def _meta_csp(body: bytes) -> str | None:
+    """A Content-Security-Policy declared in a <meta http-equiv> tag, if any.
+
+    Valid for most directives — many static hosts ship exactly this form — so
+    a header-only check misreports a real policy as absent. What meta CANNOT
+    do (spec): frame-ancestors, report-uri/report-to are ignored there, and
+    the policy only engages after parsing begins. The caller keeps those
+    consequences visible instead of flattening "meta" into "none".
+    """
+    for match in re.finditer(rb"<meta\b[^>]*>", body[:262144], re.IGNORECASE):
+        tag = match.group(0)
+        if not re.search(rb"http-equiv\s*=\s*[\"']?\s*content-security-policy",
+                         tag, re.IGNORECASE):
+            continue
+        # CSP values legitimately contain single quotes ('self', 'none'), so
+        # the closing quote must MATCH the opening one; a [^"']* character class
+        # truncates every real policy at its first source expression.
+        content = re.search(
+            rb"content\s*=\s*(?:\"([^\"]*)\"|'([^']*)')", tag, re.IGNORECASE)
+        if content:
+            raw = content.group(1) if content.group(1) is not None else content.group(2)
+            return raw.decode("utf-8", errors="replace")[:400]
+    return None
+
+
 def _all(headers: list[tuple[str, str]], name: str) -> list[str]:
     return [value for key, value in headers if key == name]
 
@@ -431,7 +456,7 @@ def _check_https_redirect(budget: _Budget, host: str, checks: list[CheckRun],
     run.detail = f"редирект ведёт на {location[:100]}"
 
 
-def _check_security_headers(headers: list[tuple[str, str]], https: bool,
+def _check_security_headers(headers: list[tuple[str, str]], body: bytes, https: bool,
                             checks: list[CheckRun], findings: list[WebFinding]) -> None:
     run = CheckRun("web-security-headers", "ran")
     checks.append(run)
@@ -464,12 +489,25 @@ def _check_security_headers(headers: list[tuple[str, str]], https: bool,
             "Отдавать X-Content-Type-Options: nosniff.",
             evidence={"header": "x-content-type-options", "observed": ""}))
     csp = _header(headers, "content-security-policy") or ""
-    if not csp:
+    meta_csp = _meta_csp(body) if not csp else None
+    if not csp and meta_csp is not None:
+        findings.append(WebFinding(
+            "web-security-headers", "low", "CSP задан только через meta-тег",
+            "Политика нашлась в <meta http-equiv=...> страницы, а не в HTTP-заголовке. "
+            "Для большинства директив meta-форма действует, но frame-ancestors и report-uri/"
+            "report-to в meta игнорируются по спецификации, и политика включается позже "
+            "начала разбора страницы.",
+            "Перенести CSP в HTTP-заголовок ответа (web-сервер или платформа хостинга).",
+            evidence={"header": "content-security-policy", "observed": "meta-тег",
+                      "meta_directives": meta_csp[:200]}))
+    elif not csp:
         findings.append(WebFinding(
             "web-security-headers", "low", "Нет Content-Security-Policy",
             "Без CSP инъекция в разметку не ограничивается политикой (хардинг).",
             "Ввести CSP, начиная с report-only, если продакшн ещё не готов к блокировке.",
             evidence={"header": "content-security-policy", "observed": ""}))
+    # frame-ancestors counts ONLY from the header form: in meta it is ignored
+    # by every browser, so a meta policy naming it still leaves the site framable.
     frame_ancestors = "frame-ancestors" in csp
     xfo = _header(headers, "x-frame-options")
     if not xfo and not frame_ancestors:
@@ -787,7 +825,7 @@ def run_web_structure_scan(
     root_sha = hashlib.sha256(body).hexdigest()
     https = target.scheme == "https"
 
-    _check_security_headers(headers, https, checks, findings)
+    _check_security_headers(headers, body, https, checks, findings)
     _check_cookie_flags(headers, https, checks, findings)
     _check_server_banner(headers, checks, findings)
     _check_mixed_content(status, headers, body, checks, findings)

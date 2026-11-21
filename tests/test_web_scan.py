@@ -304,6 +304,32 @@ def test_hsts_shorter_than_owasp_minimum_fires_low():
     assert hsts and hsts[0].severity == "low"
 
 
+def test_meta_csp_is_reported_as_meta_not_absent():
+    """Meta http-equiv CSP is a real policy (static hosts ship exactly this
+    form); the check must not misread it as absent — but must say what meta
+    cannot do."""
+    page = (200, [("content-type", "text/html")],
+            b"<html><head><meta http-equiv=\"Content-Security-Policy\" "
+            b"content=\"default-src 'self'\"></head><body>ok</body></html>")
+    result, _ = scan({"/": page})
+    csp = [f for f in find(result, "web-security-headers") if "CSP" in f.title]
+    assert csp and all("meta" in f.title for f in csp), [f.title for f in csp]
+    assert csp[0].evidence.get("observed") == "meta-тег"
+    assert csp[0].evidence.get("meta_directives") == "default-src 'self'"
+
+
+def test_meta_frame_ancestors_does_not_satisfy_clickjacking_check():
+    """frame-ancestors in a META policy is ignored by every browser (spec):
+    the clickjacking finding must still fire."""
+    page = (200, [("content-type", "text/html")],
+            b"<html><head><meta http-equiv=\"Content-Security-Policy\" "
+            b"content=\"default-src 'self'; frame-ancestors 'none'\"></head>"
+            b"<body>ok</body></html>")
+    result, _ = scan({"/": page})
+    titles = [f.title for f in find(result, "web-security-headers")]
+    assert any("кликджекинга" in t for t in titles), titles
+
+
 def test_cors_wildcard_without_credentials_is_not_a_finding():
     cors = (200, [("access-control-allow-origin", "*")], b"")
     result, _ = scan({"/": (200, HARDENED_HEADERS, HARDENED_BODY)}, cors=cors)
