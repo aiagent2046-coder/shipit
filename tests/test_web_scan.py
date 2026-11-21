@@ -203,8 +203,7 @@ def vulnerable_routes():
                       b"CREATE TABLE users (id int);\nINSERT INTO users VALUES (1);\n"),
         "/backup.zip": (200, [("content-type", "application/zip")],
                         b"PK\x03\x04" + b"archive-bytes"),
-        "/.ssh/id_rsa": (200, [("content-type", "text/plain")],
-                          b"-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n"),
+        "/.ssh/id_rsa": (200, [], b"-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n"),  # scan-allow: synthetic fixture
     }
     return routes
 
