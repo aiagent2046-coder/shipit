@@ -42,7 +42,8 @@ from app.proof.rls_live_check import (
 )
 from app.proof.rls_metadata import MetadataInputError, parse_access_review
 from app.ratelimit import RateLimitExceeded, RateLimiter
-from app.routes._shared import _client_key, _parse_github_repo_url
+from app.github_repo import _parse_github_repo_url
+from app.routes._shared import _client_key
 from app.routes.dependencies import (
     get_audit_repo,
     get_rate_limiter,

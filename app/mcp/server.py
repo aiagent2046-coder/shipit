@@ -340,7 +340,8 @@ async def _tool_get_version(args: dict, ctx: dict) -> dict:
 
 
 async def _tool_start_audit(args: dict, ctx: dict) -> dict:
-    from app.main import _anon_daily_cap_exceeded, _parse_github_repo_url, create_audit
+    from app.github_repo import _parse_github_repo_url
+    from app.main import _anon_daily_cap_exceeded, create_audit
     from app.scan.pipeline import BASIS_PREVIEW, BASIS_STATIC_ONLY
 
     repo_url = args.get("repo_url")

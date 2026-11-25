@@ -32,7 +32,8 @@ from app.db import (
     SubscriptionRepository,
 )
 from app.monitor import normalize_repo_full_name
-from app.routes._shared import _VALID_OWNER_REPO_SEGMENT, _secret_equals
+from app.github_repo import _VALID_OWNER_REPO_SEGMENT
+from app.routes._shared import _secret_equals
 from app.routes.dependencies import (
     get_fix_outcome_repo,
     get_monitoring_repo,

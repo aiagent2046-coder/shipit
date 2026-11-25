@@ -310,10 +310,12 @@ def _elapsed_ms(started: float) -> int:
 # below tells ruff they are intentional re-exports rather than dead imports.
 # Removing one is a breaking change for the test suite -- delete only together
 # with the imports in tests/.
-from app.routes._shared import (  # noqa: E402
+from app.github_repo import (  # noqa: E402
     _VALID_OWNER_REPO_SEGMENT,
-    _bind_account,
     _parse_github_repo_url,
+)
+from app.routes._shared import (  # noqa: E402
+    _bind_account,
     _client_key,
     _require_bearer_token,
     _secret_equals,
