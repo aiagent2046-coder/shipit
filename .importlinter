@@ -1,0 +1,14 @@
+[importlinter]
+root_packages =
+    app
+
+# deslop-please `module-cycle` analogue: siblings under `app` must not use
+# each other in a circle (import-linter 2.17 `acyclic_siblings`).
+# Methodology: fix from first principles -- what is the intended layer of
+# abstraction? Which module belongs at which layer?
+[importlinter:contract:siblings-acyclic]
+name = siblings-acyclic
+type = acyclic_siblings
+ancestors =
+    app
+broken_contract_guidance = Fix from first principles: what is the intended layer of abstraction? Which module belongs at which layer? Do not do mechanical moves just to hide the cycle.
