@@ -15,11 +15,12 @@ root_packages =
 # the entry to be removed. Do not add new entries without untangling the
 # cycle from first principles.
 #
-# Fix phase progress: 5 of 30 untangled from first principles and REMOVED
+# Fix phase progress: 9 of 30 untangled from first principles and REMOVED
 # from this baseline: fixpack's gate composition layer (1), sca's
-# lockfile_primitives bottom layer (2), and two app.scan pairs -- the
-# update_where_proof kind-handler moved into atomic_claims, and the rls
-# prepare_recommendation delegate shim deleted. 25 remain.
+# lockfile_primitives bottom layer (2), and all six app.scan sibling pairs
+# (update_where_proof kind-handler move, rls delegate shim deletion,
+# external_call_primitives, identity_primitives, advisory_evaluation and
+# ast_primitives extraction). 21 remain -- all at the app package level.
 [importlinter:contract:siblings-acyclic]
 name = siblings-acyclic
 type = acyclic_siblings
@@ -48,7 +49,3 @@ ignore_imports =
     app.scan.pipeline -> app.sca.snapshot
     app.scan.pipeline -> app.sca.stage
     app.scan.static -> app.report.plain_language
-    app.scan.external_operation_context -> app.scan.external_call_assessment
-    app.scan.projected_read_identity -> app.scan.issue_identity
-    app.scan.remediation_catalog -> app.scan.cve_match
-    app.scan.url_token_assessment -> app.scan.auth_source_assessment
