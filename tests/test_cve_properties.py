@@ -13,7 +13,8 @@ import zipfile
 import pytest
 from hypothesis import example, given, settings, strategies as st
 
-from app.scan.cve_match import compare_versions, evaluate_advisory, match_archive
+from app.scan.advisory_evaluation import compare_versions, evaluate_advisory
+from app.scan.cve_match import match_archive
 
 
 PROPERTY_SETTINGS = settings(max_examples=40, derandomize=True)

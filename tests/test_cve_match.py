@@ -7,7 +7,8 @@ from dataclasses import fields
 import pytest
 
 from app.scan import cve_match
-from app.scan.cve_match import compare_versions, evaluate_advisory, match_archive
+from app.scan.advisory_evaluation import compare_versions, evaluate_advisory
+from app.scan.cve_match import match_archive
 from app.scan.scoring import ScoredFinding
 
 

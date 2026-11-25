@@ -65,8 +65,9 @@ def recipe_catalog() -> dict:
 def plan_dependency_upgrade(ecosystem: str, package: str, installed_version: str,
                             entries: list[dict], sources: dict, *,
                             identities_complete: bool = True, budget: UpgradeBudget | None = None) -> dict:
-    # Delay imports to keep the matcher and the portable recipe registry independent at import time.
-    from app.scan.cve_match import _entry_identity, compare_versions, evaluate_advisory
+    # Function-local import kept from the cycle-fix refactor; the evaluation
+    # core below is now a plain dependency, this no longer needs to be lazy.
+    from app.scan.advisory_evaluation import _entry_identity, compare_versions, evaluate_advisory
 
     if ecosystem not in _RECIPES:
         raise ValueError("Unsupported remediation ecosystem")
@@ -167,7 +168,7 @@ def remediation_record(evidence: object) -> dict | None:
 
 
 def _remediation_record(evidence: object) -> dict | None:
-    from app.scan.cve_match import SOURCE_REPOSITORY, GHSA_REPOSITORY, _valid_source, compare_versions
+    from app.scan.advisory_evaluation import SOURCE_REPOSITORY, GHSA_REPOSITORY, _valid_source, compare_versions
 
     if not isinstance(evidence, dict) or evidence.get("snapshot_check_status") == "retained_not_reconfirmed":
         return None
