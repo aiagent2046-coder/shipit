@@ -25,9 +25,9 @@ from app.fixpack.semantic_check import (
     missing_tests_pr_note,
     parse_node_counts,
     parse_pytest_counts,
-    run_semantic_check,
     run_suite,
 )
+from app.fixpack.gate import run_semantic_check
 
 
 def make_zip(entries: dict[str, str]) -> bytes:

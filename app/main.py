@@ -93,7 +93,7 @@ from app.fixpack.generate import (
     render_pr_body as render_fixpack_pr_body,
     render_pr_title as render_fixpack_pr_title,
 )
-from app.fixpack.semantic_check import run_semantic_check
+from app.fixpack.gate import run_semantic_check
 from app.proof import (
     decide_proof_gate,
     render_proof_markdown,
