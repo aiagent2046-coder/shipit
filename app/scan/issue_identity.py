@@ -17,6 +17,7 @@ from tree_sitter import Language, Parser
 import tree_sitter_typescript
 
 from app.scan import guard_context as g
+from app.scan.identity_primitives import MAX_CHECKS, _lines, _owning_scope, _span
 from app.scan.model_metadata_identity import (
     MECHANISM as MODEL_METADATA, VERSION as MODEL_METADATA_VERSION, model_metadata_claim,
     model_metadata_title,
@@ -34,7 +35,6 @@ MAX_FILE_BYTES = 256_000
 MAX_TOTAL_BYTES = 2_000_000
 MAX_FILES = 64
 MAX_NODES = 24_000
-MAX_CHECKS = 256
 MAX_DEPTH = 128
 MAX_WORK_NODES = 400_000
 
@@ -71,14 +71,6 @@ def _mechanism(title):
             title, re.I))):
         return None
     return selected[0]
-
-
-def _span(node):
-    return [node.start_byte, node.end_byte]
-
-
-def _lines(node):
-    return node.start_point[0] + 1, node.end_point[0] + 1
 
 
 def _enclosing(node, types):
@@ -126,11 +118,6 @@ def _query(node):
     return (_call_name(node) == "from" and len(_args(node)) == 1
             and g._literal(_args(node)[0]) is not None
             and any(_call_name(child) == "select" for child in g._walk(_chain(node))))
-
-
-def _owning_scope(root, nodes, start):
-    functions = [n for n in nodes if n.type in g._FUNCTIONS and _lines(n)[0] <= start <= _lines(n)[1]]
-    return min(functions, key=lambda n: n.end_byte - n.start_byte) if functions else root
 
 
 def _select(candidates, start, end):

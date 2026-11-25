@@ -52,7 +52,7 @@ from app.scan.scoring import CATEGORIES
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "8a5ec240931518f0"
+PROMPT_FINGERPRINT = "73de8273b116ca9f"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
