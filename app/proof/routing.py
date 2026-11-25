@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.proof.registry import get_template
-from app.proof.types import TemplateId
+from app.proof_types import TemplateId
 
 
 def select_templates(plan: Any, original_zip: bytes) -> list[TemplateId]:

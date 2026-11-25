@@ -34,7 +34,7 @@ from typing import Any
 
 from app.deploypack.sandbox import verify_deploy_pack
 from app.proof.cors_oracle import PROBE_ORIGIN, evaluate_cors_response
-from app.proof.types import ExploitAttempt
+from app.proof_types import ExploitAttempt
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ def run_cors_probe(
     be tested without docker — the same pattern sandbox.py uses for ``run``.
 
     ``diagnostics``, when given, is filled with the tail of a failed build's
-    output. It is DELIBERATELY NOT evidence: app/proof/types.py forbids raw
+    output. It is DELIBERATELY NOT evidence: app/proof_types.py forbids raw
     customer content there because evidence is stored in proof_json and
     rendered into a PR, and a build log can echo an ARG or a token. This
     channel goes to the caller that asked for it and no further.

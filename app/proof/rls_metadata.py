@@ -14,7 +14,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.proof.types import ExploitAttempt
+from app.proof_types import ExploitAttempt
 
 MAX_METADATA_BYTES = 256 * 1024
 Name = Annotated[str, Field(min_length=1, max_length=63, pattern=r"^[A-Za-z_][A-Za-z0-9_$]*$")]

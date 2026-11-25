@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.proof.templates import cors_open, secrets_leak, sqli
-from app.proof.types import ExploitAttempt, TemplateId
+from app.proof_types import ExploitAttempt, TemplateId
 
 TemplateFn = Callable[..., ExploitAttempt]
 

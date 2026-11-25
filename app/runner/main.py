@@ -236,7 +236,7 @@ async def proof_cors_probe(
                 "evidence": attempt.evidence,
                 "duration_ms": attempt.duration_ms,
                 # Beside the attempt, never inside it: build output is the
-                # customer's and must not reach proof_json (app/proof/types.py).
+                # customer's and must not reach proof_json (app/proof_types.py).
                 "diagnostics": diagnostics,
             }
         finally:

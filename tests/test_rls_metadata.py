@@ -7,7 +7,7 @@ import json
 import pytest
 
 from app.proof.rls_metadata import MetadataInputError, parse_access_review, review_metadata
-from app.proof.types import ExploitAttempt
+from app.proof_types import ExploitAttempt
 
 REF = "abcdefghijklmnopqrst"
 

@@ -53,9 +53,9 @@ from pathlib import Path
 
 import httpx
 
-from app.deploypack.sandbox import SandboxResult
+from app.sandbox_types import SandboxResult
 from app.fixpack.semantic_check import RunResult, TestRunner
-from app.proof.types import ExploitAttempt
+from app.proof_types import ExploitAttempt
 from app.fixpack.verification import (
     VerificationProfile,
     VerificationStage,

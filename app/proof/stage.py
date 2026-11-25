@@ -20,7 +20,7 @@ from app.proof.compare import build_proof_report, run_proof_pair
 from app.proof.routing import select_templates
 from app.proof.runtime_cors import PROBE_PORT_RANGE, runtime_cors_applicable
 from app.proof.artifacts import artifacts_to_json, build_artifacts
-from app.proof.types import ProofReport, proof_report_to_json
+from app.proof_types import ProofReport, proof_report_to_json
 from app.proof.workspace import apply_plan_to_zip
 
 logger = logging.getLogger(__name__)

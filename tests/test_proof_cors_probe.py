@@ -295,7 +295,7 @@ def test_a_failed_build_reports_its_log_outside_the_evidence() -> None:
     """"docker build failed" is not a diagnosis, and the log that explains it
     must not become evidence.
 
-    app/proof/types.py forbids raw customer content in evidence because
+    app/proof_types.py forbids raw customer content in evidence because
     evidence is stored in proof_json and rendered into a PR, and a build log
     can echo an ARG or a token. So the log travels through an explicit
     diagnostics channel to the caller that asked for it, and no further.

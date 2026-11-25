@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from app.proof.rls_oracle import RlsVerdict, evaluate_rls_response
-from app.proof.types import ExploitAttempt
+from app.proof_types import ExploitAttempt
 
 TEMPLATE_ID = "rls_open_runtime"
 
