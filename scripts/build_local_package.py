@@ -24,7 +24,7 @@ ALLOWED = {
     "app", "app.local_cli", "app.local_store", "app.logging_config", "app.log_context", "app.capabilities",
     "app.ingest", "app.ingest.validators", "app.report", "app.report.sarif", "app.report.plain_language",
     "app.report.dependency_snapshot", "app.report.project_checks", "app.report.threat_context",
-    "app.sca", "app.sca.lockfiles", "app.sca.resolved_locks", "app.sca.bun_lock",
+    "app.sca", "app.sca.lockfile_primitives", "app.sca.lockfiles", "app.sca.resolved_locks", "app.sca.bun_lock",
 }
 
 

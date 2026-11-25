@@ -14,18 +14,19 @@ Interpretation belongs to app/sca/osv.py and app/sca/stage.py.
 from __future__ import annotations
 
 import io
-import json
 import re
 import tomllib
 import zipfile
 import zlib
 from dataclasses import dataclass, field as dataclass_field
 
+from app.sca.bun_lock import bun_packages
+from app.sca.lockfile_primitives import (  # re-exported for existing callers
+    Dependency, DependencyOccurrence, MAX_LOCKFILE_BYTES, normalize_pypi,
+    _load_json, _NPM_NAME, _NPM_VERSION, _PYPI_NAME, _PYPI_PIN,
+)
+from app.sca.resolved_locks import pnpm_packages, uv_packages
 from app.scan.secrets import is_non_production_path
-
-# A lockfile is a machine-written file; past this size it is either generated
-# by something unusual or not a lockfile at all.
-MAX_LOCKFILE_BYTES = 2_000_000
 
 # The bound is on the LOOKUP, not on the repository: every dependency costs one
 # entry in a network request, and an audit must not become unbounded work
@@ -87,45 +88,6 @@ OSV_ECOSYSTEM = {
     "uv.lock": "PyPI",
 }
 
-_NPM_NAME = re.compile(r"(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+$")
-_NPM_VERSION = re.compile(
-    r"v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
-_PYPI_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\Z")
-_PYPI_PIN = re.compile(r"[0-9][A-Za-z0-9.!+_-]*\Z")
-
-
-@dataclass(frozen=True)
-class DependencyOccurrence:
-    """One selected manifest's aggregate evidence for a resolved package pin."""
-    manifest: str
-    line: int = 0
-    direct: bool = False
-    development: bool | None = None
-    dependency_groups: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class Dependency:
-    """One resolved dependency: what to look up, and where it is written."""
-    ecosystem: str
-    name: str
-    version: str
-    manifest: str          # archive-relative path of the lockfile it came from
-    line: int = 0          # 1-based, and only where the file is line-oriented
-    direct: bool = False   # named in a manifest or a supported lockfile root
-    # True when the lockfile says the package is installed for development
-    # only, False when the lockfile says otherwise, and None when the format
-    # does not record it. The three are kept apart because "not a production
-    # dependency" and "we cannot tell" lead a reader to different actions:
-    # measured on this repository's own package-lock.json, 170 of 327 entries
-    # carry dev: true, so the distinction is not a formality.
-    development: bool | None = None
-    # Lockfile-declared development groups; no guess from package names.
-    dependency_groups: tuple[str, ...] = ()
-    # At most MAX_LOCKFILES selected manifests. Empty on legacy stored data:
-    # the representative still exists, but other locations were not recorded.
-    occurrences: tuple[DependencyOccurrence, ...] = ()
-
 
 def dependency_occurrences(dependency: Dependency) -> tuple[DependencyOccurrence, ...]:
     """Recorded locations, with a single-location view of legacy dependencies."""
@@ -160,12 +122,6 @@ def _merge_occurrence(left: DependencyOccurrence, right: DependencyOccurrence) -
         max((left.development, right.development), key=_SCOPE_PRECEDENCE.__getitem__),
         tuple(sorted(set(left.dependency_groups) | set(right.dependency_groups))),
     )
-
-
-def normalize_pypi(name: str) -> str:
-    """PEP 503 normalization: `Foo_Bar` and `foo-bar` are the same project, and
-    the vulnerability database stores one of the spellings, not both."""
-    return re.sub(r"[-_.]+", "-", name).strip().lower()
 
 
 def _looks_like_lockfile(name: str) -> bool:
@@ -243,24 +199,6 @@ def find_lockfiles(archive: zipfile.ZipFile) -> list[str]:
 
 def _read(archive: zipfile.ZipFile, name: str) -> str:
     return archive.read(name).decode("utf-8")
-
-
-def _json_object(pairs: list[tuple[str, object]]) -> dict:
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("Duplicate JSON key")
-        result[key] = value
-    return result
-
-
-def _invalid_json_constant(value: str):
-    raise ValueError("Non-finite JSON constant")
-
-
-def _load_json(text: str):
-    # Conflicting entries must not silently erase a pin or select a version.
-    return json.loads(text, object_pairs_hook=_json_object, parse_constant=_invalid_json_constant)
 
 
 def _package_location(location: str) -> str:
@@ -581,7 +519,6 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
                 elif basename == "requirements.txt":
                     reason = _requirement_lines(manifest, text, collected)
                 elif basename == "bun.lock":
-                    from app.sca.bun_lock import bun_packages
                     workspace_paths: dict[str, str] = {}
                     reason = bun_packages(manifest, text, collected, workspace_paths=workspace_paths)
                     if reason is None:
@@ -590,7 +527,6 @@ def collect_dependency_inventory(data: bytes) -> DependencyInventory:
                         covered_workspaces.update(covered)
                         incomplete.update(metadata_gaps)
                 elif basename in {"pnpm-lock.yaml", "uv.lock"}:
-                    from app.sca.resolved_locks import pnpm_packages, uv_packages
                     reader = pnpm_packages if basename == "pnpm-lock.yaml" else uv_packages
                     reason = reader(manifest, text, collected)
                 else:
