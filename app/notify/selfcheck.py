@@ -208,7 +208,7 @@ async def run(*, alert=None, transport=None, verify=None, call=None,
                      result.channel, result.detail)
 
     if alert is None:
-        from app.alerts import notify_operator as alert  # noqa: N813
+        from app.notify.operator import notify_operator as alert  # noqa: N813
     try:
         await alert(describe(results),
                     dedupe_key=f"channel-down:{','.join(r.channel for r in broken)}",

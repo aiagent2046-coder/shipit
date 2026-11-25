@@ -224,7 +224,7 @@ async def _page_operator(
     and this one was not. A suite that touches the network is a suite that
     fails for reasons that have nothing to do with the code."""
     if alert is None:
-        from app.alerts import notify_operator as alert  # noqa: N813
+        from app.notify.operator import notify_operator as alert  # noqa: N813
     try:
         await alert(text, dedupe_key=dedupe_key, transport=transport)
     except Exception:  # noqa: BLE001
