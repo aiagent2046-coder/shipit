@@ -15,13 +15,14 @@ root_packages =
 # the entry to be removed. Do not add new entries without untangling the
 # cycle from first principles.
 #
-# Fix phase progress: 13 of 30 untangled from first principles and REMOVED
+# Fix phase progress: 14 of 30 untangled from first principles and REMOVED
 # from this baseline: fixpack's gate composition layer (1), sca's
 # lockfile_primitives bottom layer (2), all six app.scan sibling pairs (6),
 # the alerts->notify operator-workflow move (1), the github_repo extraction
-# (1), and the sandbox/proof contract-type moves (2). 17 remain -- all in
-# the domain six-pack (fixpack/ingest/local_store/report/sca/scan) plus
-# main<->mcp.
+# (1), the sandbox/proof contract-type moves (2), and the audit-workflow
+# extraction that untangled main<->mcp (1, also fixed a latent TypeError in
+# the MCP start-audit tool). 16 remain -- all in the domain six-pack
+# (fixpack/ingest/local_store/report/sca/scan).
 [importlinter:contract:siblings-acyclic]
 name = siblings-acyclic
 type = acyclic_siblings
@@ -32,7 +33,6 @@ ignore_imports =
     app.audit_history -> app.sca.refresh
     app.audit_history -> app.sca.snapshot
     app.ingest.stack_detect -> app.scan.file_scope
-    app.mcp.server -> app.main
     app.mcp.server -> app.routes.dependencies
     app.ops_endpoints -> app.db
     app.sandbox_client -> app.fixpack.semantic_check

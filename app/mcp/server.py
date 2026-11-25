@@ -340,8 +340,11 @@ async def _tool_get_version(args: dict, ctx: dict) -> dict:
 
 
 async def _tool_start_audit(args: dict, ctx: dict) -> dict:
+    from app.audit_workflow import (
+        _AuditForm, _AuditIntake, create_audit, gate_submission,
+    )
     from app.github_repo import _parse_github_repo_url
-    from app.main import _anon_daily_cap_exceeded, create_audit
+    from app.llm_budget import _anon_daily_cap_exceeded
     from app.scan.pipeline import BASIS_PREVIEW, BASIS_STATIC_ONLY
 
     repo_url = args.get("repo_url")
@@ -376,15 +379,20 @@ async def _tool_start_audit(args: dict, ctx: dict) -> dict:
         ) from exc
 
     try:
+        account, quota_key, daily_limit, started = await gate_submission(
+            ctx["request"], limiter=limiter,
+            account_repo=ctx["account_repo"],
+            service_flags_repo=ctx["service_flags_repo"],
+        )
         created = await create_audit(
             request=ctx["request"],
-            archive=None,
-            repo_url=repo_url,
+            intake=_AuditIntake(
+                _AuditForm(archive=None, repo_url=repo_url),
+                account, quota_key, daily_limit, started,
+            ),
             limiter=limiter,
             audit_repo=ctx["audit_repo"],
-            account_repo=ctx["account_repo"],
             repo_fetcher=ctx["repo_fetcher"],
-            service_flags_repo=ctx["service_flags_repo"],
             audit_job_repo=ctx["audit_job_repo"],
             idempotency_key=None,
         )

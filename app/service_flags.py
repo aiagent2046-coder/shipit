@@ -51,6 +51,11 @@ async def _llm_paid_ops_enabled(
     _FLAG_TTL_S. A missing row or unconfigured DB reads as enabled (fail-open):
     the kill switch must be an explicit operator action, never the accident of a
     missing table -- an unconfigured dev box must still run scans."""
+    if flags_repo is None:
+        # No repository wired at all (an unconfigured deployment, or the
+        # MCP server behind a dependency override): the same fail-open
+        # contract as a missing row.
+        return True, None
     now = time.monotonic()
     if now - float(_llm_paid_ops_cache["at"]) < _FLAG_TTL_S:
         return bool(_llm_paid_ops_cache["enabled"]), _llm_paid_ops_cache["note"]  # type: ignore[return-value]
