@@ -64,7 +64,7 @@ def test_transaction_template_observed_without_claiming_runner_execution():
 
 def test_expanded_actual_repository_prompt_retains_payment_predicates():
     paths = ['app/db.py', 'app/billing/__init__.py', 'app/main.py', 'app/billing/bank_transfer.py',
-             'scripts/migration_manager.py']
+             'app/llm_budget.py', 'scripts/migration_manager.py']
     facts = collect_source_facts(archive({p: Path(p).read_text() for p in paths}))
     prompt = facts_prompt(facts)
     assert len(prompt) <= 16000
