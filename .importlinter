@@ -15,12 +15,13 @@ root_packages =
 # the entry to be removed. Do not add new entries without untangling the
 # cycle from first principles.
 #
-# Fix phase progress: 9 of 30 untangled from first principles and REMOVED
+# Fix phase progress: 13 of 30 untangled from first principles and REMOVED
 # from this baseline: fixpack's gate composition layer (1), sca's
-# lockfile_primitives bottom layer (2), and all six app.scan sibling pairs
-# (update_where_proof kind-handler move, rls delegate shim deletion,
-# external_call_primitives, identity_primitives, advisory_evaluation and
-# ast_primitives extraction). 21 remain -- all at the app package level.
+# lockfile_primitives bottom layer (2), all six app.scan sibling pairs (6),
+# the alerts->notify operator-workflow move (1), the github_repo extraction
+# (1), and the sandbox/proof contract-type moves (2). 17 remain -- all in
+# the domain six-pack (fixpack/ingest/local_store/report/sca/scan) plus
+# main<->mcp.
 [importlinter:contract:siblings-acyclic]
 name = siblings-acyclic
 type = acyclic_siblings
@@ -28,18 +29,14 @@ ancestors =
     app
 broken_contract_guidance = Fix from first principles: what is the intended layer of abstraction? Which module belongs at which layer? Do not do mechanical moves just to hide the cycle.
 ignore_imports =
-    app.alerts -> app.notify.telegram
     app.audit_history -> app.sca.refresh
     app.audit_history -> app.sca.snapshot
-    app.deploypack.paid_delivery_auth -> app.routes._shared
     app.ingest.stack_detect -> app.scan.file_scope
     app.mcp.server -> app.main
     app.mcp.server -> app.routes.dependencies
     app.ops_endpoints -> app.db
-    app.sandbox_client -> app.deploypack.sandbox
     app.sandbox_client -> app.fixpack.semantic_check
     app.sandbox_client -> app.fixpack.verification
-    app.sandbox_client -> app.proof.types
     app.scan.browser -> app.report.sarif
     app.scan.cve_match -> app.sca.lockfiles
     app.scan.ghsa_catalog -> app.sca.lockfiles
