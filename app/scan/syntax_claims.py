@@ -11,7 +11,6 @@ import ast as py_ast
 import re
 import stat
 import zipfile
-from bisect import bisect_right
 from typing import BinaryIO
 
 from pglast import ast, parse_sql, scan
@@ -228,7 +227,8 @@ class SyntaxVerifier:
                 return _react(data, start, end, path)
             if kind == "python_completed_notification":
                 return _completed_notification(source, start, end)
-            return _sql(source, start, end)
+            from app.scan.atomic_claims import update_where_proof
+            return update_where_proof(source, start, end)
         except (UnicodeError, ValueError, TypeError, KeyError, OverflowError, RecursionError,
                 zipfile.BadZipFile, ParseError, SyntaxError):
             return unknown("Source could not be parsed within this check's scope.")
@@ -422,52 +422,3 @@ def _react(data: bytes, start: int, end: int, path: str) -> dict:
             return _result(kind, "observed", "A direct React hook call follows a top-level conditional return. "
                            "Whether renders take different paths was not tested.", **location)
     return unknown("Return/control-flow shape outside this bounded order check.")
-
-
-def _sql(source: str, start: int, end: int, *, target: str = "") -> dict:
-    kind = "sql_update_where"
-    # pglast exposes character offsets. Use the next statement's location:
-    # stmt_len is not reliable after multibyte text in pglast 7.7.
-    line_starts = [0] + [i + 1 for i, char in enumerate(source) if char == "\n"]
-    tokens = [t for t in scan(source) if t.name not in ("SQL_COMMENT", "C_COMMENT")]
-    candidates = []
-    index = 0
-    statements = parse_sql(source)
-    for position, statement in enumerate(statements):
-        lo = statement.stmt_location
-        hi = statements[position + 1].stmt_location if position + 1 < len(statements) else len(source)
-        relevant = []
-        while index < len(tokens) and tokens[index].start < hi:
-            if tokens[index].start >= lo:
-                relevant.append(tokens[index])
-            index += 1
-        if not relevant:
-            continue
-        first, last = relevant[0], relevant[-1]
-        a, b = bisect_right(line_starts, first.start), bisect_right(line_starts, last.end)
-        if start <= b and end >= a:
-            candidates.append((statement.stmt, a, b))
-    if len(candidates) != 1 or not isinstance(candidates[0][0], ast.UpdateStmt):
-        return _result(kind, "not_checked", "The cited range does not identify one top-level PostgreSQL UPDATE.")
-    update, a, b = candidates[0]
-    if target and (update.relation is None or update.relation.relname != target):
-        return _result(kind, "not_checked", "The selected UPDATE has a different relation target.")
-    # An UPDATE inside a CTE or nested statement needs its own location binding.
-    todo = [update]
-    updates = 0
-    while todo:
-        n = todo.pop()
-        if isinstance(n, ast.UpdateStmt):
-            updates += 1
-        if isinstance(n, ast.Node):
-            todo.extend(getattr(n, field) for field in n)
-        elif isinstance(n, (tuple, list)):
-            todo.extend(n)
-    if updates != 1:
-        return _result(kind, "not_checked", "Multiple UPDATE nodes inside the statement; target is ambiguous.")
-    present = update.whereClause is not None
-    return _result(kind, "contradicted" if present else "observed",
-                   "The selected UPDATE has its own WHERE clause. Its selectivity and safety were not tested."
-                   if present else "The selected UPDATE has no WHERE clause of its own. Intent and effects "
-                   "were not tested; a WHERE inside a subquery/CTE does not restrict the outer UPDATE.",
-                   line_start=a, line_end=b)
