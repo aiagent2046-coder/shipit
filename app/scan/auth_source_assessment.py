@@ -15,6 +15,9 @@ from app.scan import consequence_evidence as c
 from app.scan import guard_context as g
 from app.scan import imported_error_context as i
 from app.scan import ownership_claims as o
+from app.scan.ast_primitives import (  # statement/token helpers live below
+    _ast_tokens, _const, _consts, _native_import, _top,
+)
 
 MAX_CHECKS = 48
 MAX_OPERATIONS = 16
@@ -27,39 +30,6 @@ LIMITS = (
 )
 
 
-def _ast_tokens(node):
-    # named-only walking omits punctuation; include all AST leaves for equality.
-    todo, parts = [node] if node else [], []
-    while todo:
-        n = todo.pop()
-        if n.type == "comment":
-            continue
-        if n.children:
-            todo.extend(reversed(n.children))
-        else:
-            parts.append(g._text(n))
-    return "".join(parts)
-
-
-def _top(node, body):
-    while node and node.parent != body:
-        node = node.parent
-    return node
-
-
-def _const(node):
-    return bool(
-        node
-        and node.type == "variable_declarator"
-        and node.parent.type == "lexical_declaration"
-        and any(n.type == "const" for n in node.parent.children)
-    )
-
-
-def _consts(fn):
-    return [n for n in g._walk(fn.child_by_field_name("body"), g._SKIP) if _const(n)]
-
-
 def _single_const(decs, name):
     values = [n for n in decs if name in g._bound(n.child_by_field_name("name"))]
     return values[0] if len(values) == 1 else None
@@ -67,22 +37,6 @@ def _single_const(decs, name):
 
 def _member(node, name, prop):
     return o._member(node, name, prop)
-
-
-def _native_import(root, local, source, imported):
-    specs = [
-        n
-        for stmt in root.named_children
-        if stmt.type == "import_statement"
-        and g._literal(stmt.child_by_field_name("source")) == source
-        and not any(n.type == "type" for n in stmt.children)
-        for n in g._walk(stmt)
-        if n.type == "import_specifier"
-        and g._name(n.child_by_field_name("name")) == imported
-        and g._name(n.child_by_field_name("alias") or n.child_by_field_name("name")) == local
-        and not any(child.type == "type" for child in n.children)
-    ]
-    return len(specs) == 1 and i._unambiguous(root, local)
 
 
 def _service_key(dec, root):
