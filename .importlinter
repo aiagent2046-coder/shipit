@@ -14,6 +14,12 @@ root_packages =
 # (unmatched_ignore_imports_alerting=error, the default) the lint asks for
 # the entry to be removed. Do not add new entries without untangling the
 # cycle from first principles.
+#
+# Fix phase progress: 3 of 30 untangled from first principles and REMOVED
+# from this baseline (app.fixpack.verified_build -> app.fixpack.semantic_check
+# via the new gate composition layer; app.sca.lockfiles -> app.sca.bun_lock
+# and app.sca.resolved_locks -> app.sca.lockfiles via the new
+# lockfile_primitives bottom layer). 27 remain.
 [importlinter:contract:siblings-acyclic]
 name = siblings-acyclic
 type = acyclic_siblings
@@ -42,9 +48,6 @@ ignore_imports =
     app.scan.pipeline -> app.sca.snapshot
     app.scan.pipeline -> app.sca.stage
     app.scan.static -> app.report.plain_language
-    app.fixpack.verified_build -> app.fixpack.semantic_check
-    app.sca.lockfiles -> app.sca.bun_lock
-    app.sca.resolved_locks -> app.sca.lockfiles
     app.scan.atomic_claims -> app.scan.syntax_claims
     app.scan.external_operation_context -> app.scan.external_call_assessment
     app.scan.projected_read_identity -> app.scan.issue_identity
