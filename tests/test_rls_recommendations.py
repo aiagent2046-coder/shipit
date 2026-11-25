@@ -387,7 +387,7 @@ def test_select_operation_records_read_command_without_write_permission_claim():
 
 
 def test_client_switch_advice_is_replaced_and_original_retained():
-    from app.scan.rls_recommendations import prepare_recommendation
+    from app.scan.recommendations import prepare_recommendation
     from app.scan.scoring import ScoredFinding
     raw = recommendation()
     original = ScoredFinding(rule_id="llm-auth", category="Auth", severity="high", confidence=1,
@@ -400,7 +400,7 @@ def test_client_switch_advice_is_replaced_and_original_retained():
 
 
 def test_unresolved_operations_still_require_validation_before_switch():
-    from app.scan.rls_recommendations import prepare_recommendation
+    from app.scan.recommendations import prepare_recommendation
     from app.scan.scoring import ScoredFinding
     original = ScoredFinding(rule_id="service-role", category="Auth", severity="high", confidence=1, source="static",
                              **recommendation())

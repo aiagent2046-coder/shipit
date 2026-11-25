@@ -352,9 +352,3 @@ def client_change_prerequisites(raw, facts):
         "detail": "Original client-change advice is superseded by the conditional "
                   "recommendation below. Deployed authorization is not verified.",
     }, contexts
-
-
-def prepare_recommendation(finding, facts):
-    """Compatibility entry point; all prerequisites compose in one transaction."""
-    from app.scan.recommendations import prepare_recommendation as prepare
-    return prepare(finding, facts)
