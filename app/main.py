@@ -93,9 +93,8 @@ from app.proof import (
 )
 from app.ratelimit import RateLimiter, RateLimitExceeded, RateLimitStoreError
 from app.routes.accounts import router as accounts_router
-from app.routes.accounts import session_router
 from app.routes.bank_transfer import router as bank_transfer_router
-from app.routes.billing import router as billing_router
+from app.routes.billing import router as billing_router, telegram_router
 from app.routes.monitoring import (
     _monitoring_alert_text as _monitoring_alert_text,
     _process_one_monitoring_run as _process_one_monitoring_run,
@@ -106,6 +105,7 @@ from app.routes.bundle_check import router as bundle_check_router
 from app.routes.operator import router as operator_router
 from app.routes.reads import router as reads_router
 from app.routes.rls_check import router as rls_check_router
+from app.routes.session import router as session_router
 from app.routes.storefront import router as storefront_router
 from app.routes.yookassa import router as yookassa_router
 from app.sandbox_client import SandboxRunnerUnavailable
@@ -331,7 +331,6 @@ from app.routes.dependencies import (  # noqa: E402
     get_subscription_repo,
 )
 from app.routes.github import router as github_router  # noqa: E402
-from app.routes.telegram import router as telegram_router  # noqa: E402
 
 # Names re-exported for the test suite, listed so a linter does not read them as
 # dead imports. Keep in sync with the import block above.
