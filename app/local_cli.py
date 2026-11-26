@@ -425,6 +425,14 @@ def display(report: dict, as_json: bool, show_contextual: bool = False) -> None:
         if binary.get("artifacts"):
             print("Ghidra reports are operator-supplied static observations bound to these file bytes; "
                   "import consistency does not authenticate execution or establish a vulnerability.")
+        forensics = project.get("forensics") or {}
+        if forensics.get("observations") or forensics.get("cross_boundary_chains"):
+            print("Forensic correlation: " + json.dumps({
+                "status": forensics.get("status"),
+                "max_delta_score": forensics.get("max_delta_score"),
+                "cross_boundary_chains": len(forensics.get("cross_boundary_chains", [])),
+                "observations": forensics.get("observations", [])[:10],
+            }))
     print("Folder exclusions: " + json.dumps(report["snapshot"]["excluded"]))
     if agent := agent_record(report.get("security_agent")):
         print("Pattern review: " + json.dumps({
@@ -489,6 +497,16 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--fail-on", choices=["none", "low", "medium", "high", "critical"], default="none")
         if name == "watch":
             command.add_argument("--interval", type=float, default=10)
+    forensics_cmd = commands.add_parser(
+        "forensics",
+        help="run deterministic Code DNA + Ghidra v2 call-graph + KEV forensic correlation",
+    )
+    forensics_cmd.add_argument("project", type=Path)
+    forensics_cmd.add_argument("--json", action="store_true", help="complete machine-readable forensic bundle")
+    forensics_cmd.add_argument("--binary-evidence", action="append", default=[], metavar="PROJECT_PATH=REPORT_JSON",
+                              help="attach a Ghidra v2 report to an exact project-relative binary (repeatable)")
+    forensics_cmd.add_argument("--fail-on-observations", action="store_true",
+                              help="exit 1 when forensic observations are present")
     update = commands.add_parser("update")
     update.add_argument("--revision", required=True, help="full Shipit commit SHA; this command uses the network")
     args = parser.parse_args(argv)
@@ -528,6 +546,39 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(update_catalog(db, args.revision)))
                 return 0
             state_dir = state_dir.resolve()
+            if args.command == "forensics":
+                from app.scan.forensic_chain import run_forensic_investigation
+                raw, scope = snapshot(root, state_dir)
+                if args.binary_evidence:
+                    reports = []
+                    for argument in args.binary_evidence:
+                        artifact, separator, filename = argument.partition("=")
+                        if not separator or not artifact or not filename:
+                            raise ValueError("binary evidence must be PROJECT_PATH=REPORT_JSON")
+                        with os.fdopen(os.open(Path(filename).expanduser(),
+                                               os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+                            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                                raise ValueError("binary evidence must be a regular JSON file")
+                            body = stream.read(1024 * 1024 + 1)
+                        if len(body) > 1024 * 1024:
+                            raise ValueError("binary evidence exceeds 1 MiB")
+                        reports.append((artifact, body))
+                    raw = attach_binary_reports(raw, reports)
+                bundle = run_forensic_investigation(raw, engine_version=AUDIT_ENGINE_VERSION)
+                if args.json:
+                    print(json.dumps(bundle, ensure_ascii=False, sort_keys=True), flush=True)
+                else:
+                    print(f"Drydock forensics: status={bundle['status']}; "
+                          f"max_delta_score={bundle['code_dna']['max_delta_score']}; "
+                          f"chains={len(bundle['cross_boundary_chains'])}; "
+                          f"observations={len(bundle['forensic_observations'])}")
+                    for obs in bundle["forensic_observations"]:
+                        print("Forensic observation: " + json.dumps(obs))
+                if bundle["status"] != "completed":
+                    return 2
+                if args.fail_on_observations and bundle["forensic_observations"]:
+                    return 1
+                return 0
             if args.command == "history":
                 rows = db.execute("SELECT summary FROM scans WHERE root = ? ORDER BY id DESC LIMIT 100", (str(root),))
                 print(json.dumps([json.loads(row[0]) for row in rows]))

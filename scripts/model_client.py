@@ -127,39 +127,61 @@ def model_name() -> str:
     return configured or _DEFAULT_MODELS.get(provider(), _DEFAULT_MODELS["ollama"])
 
 
-def describe() -> str:
+def describe(model: str | None = None) -> str:
     """One line for the report header. Never includes the key."""
+    chosen = (model or "").strip() or model_name()
     if provider() == "openai":
         base = os.environ.get("HUNT_API_BASE", "https://api.deepseek.com")
-        return f"openai-compatible {model_name()} at {base}"
-    return f"ollama {model_name()} at {OLLAMA_URL}"
+        return f"openai-compatible {chosen} at {base}"
+    return f"ollama {chosen} at {OLLAMA_URL}"
 
 
 def _ollama(model: str, prompt: str, temperature: float,
             max_tokens: int, timeout: int) -> str:
-    payload = json.dumps({
+    base_req: dict[str, object] = {
         "model": model,
         "prompt": prompt,
         "stream": False,
         "keep_alive": "20m",   # a cold load costs ~15s; we make many calls
         "options": {"temperature": temperature, "num_predict": max_tokens},
-    }).encode()
-    req = urllib.request.Request(
-        f"{OLLAMA_URL}/api/generate", data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    # A localhost service must never be reached through the user's HTTP proxy.
+    }
+    thinking_on = os.environ.get("HUNT_THINKING", "off").strip().lower() == "on"
+    if not thinking_on:
+        base_req["think"] = False
+
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(req, timeout=timeout) as resp:
-        body = json.loads(resp.read())
-    # Ollama names its counters differently and reports no cost. Mapped onto
-    # the same totals so a run's line reads the same whichever provider served
-    # it -- the point of the number is comparability between runs.
+
+    def _post(req_dict: dict[str, object]) -> dict:
+        req = urllib.request.Request(
+            f"{OLLAMA_URL}/api/generate",
+            data=json.dumps(req_dict).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with opener.open(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+
+    try:
+        body = _post(base_req)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 400 and "think" in base_req:
+            fallback_req = {k: v for k, v in base_req.items() if k != "think"}
+            body = _post(fallback_req)
+        else:
+            with _usage_lock:
+                _usage["failed_calls"] += 1
+            raise GenerationError(f"ollama at {OLLAMA_URL} returned HTTP {exc.code} for {model!r}") from None
+
     _record({"usage": {
         "prompt_tokens": body.get("prompt_eval_count"),
         "completion_tokens": body.get("eval_count"),
     }})
-    return body["response"]
+    text = body.get("response") or ""
+    if not text.strip():
+        raise GenerationError(
+            f"{model} returned an empty response "
+            f"(done_reason={body.get('done_reason')!r}, thinking_present={bool(body.get('thinking'))})."
+        )
+    return text
 
 
 def _openai(model: str, prompt: str, temperature: float,
