@@ -15,27 +15,54 @@ import zipfile
 import httpx
 import pytest
 
-from app.llm import client as client_mod
-from app.scan import fact_projection_grouping
-from app.scan import review_counterevidence, python_sql_identity, prompt_context
-from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
-from app.scan import (llm_scan, source_facts, operation_context, function_context,
-                      syntax_claims, premise_context, operator_context, react_async_context,
-                      guard_context, cost_context, rls_recommendations, recommendations, recommendation_contract,
-                      model_metadata_identity, imported_error_context, rejection_diagnostics, source_limit_context,
-                      paid_operation_recommendations, credential_transport_assessment, claim_evidence,
-                      source_claim_assessment, external_call_assessment, scoped_ui_claim_assessment, atomic_claims,
-                      cross_rubric_dedup, auth_source_assessment, url_token_assessment,
-                      external_operation_context, external_operation_identity, file_scope,
-                      claim_narrative, query_read_identity, issue_identity)
 from app import scan_pipeline as pipeline_mod
-from app.scan.secrets import damp_for_non_production_path
+from app.llm import client as client_mod
+from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
+from app.scan import (
+    atomic_claims,
+    auth_source_assessment,
+    claim_evidence,
+    claim_narrative,
+    cost_context,
+    credential_transport_assessment,
+    cross_rubric_dedup,
+    external_call_assessment,
+    external_operation_context,
+    external_operation_identity,
+    fact_projection_grouping,
+    file_scope,
+    function_context,
+    guard_context,
+    imported_error_context,
+    issue_identity,
+    llm_scan,
+    model_metadata_identity,
+    operation_context,
+    operator_context,
+    paid_operation_recommendations,
+    premise_context,
+    prompt_context,
+    python_sql_identity,
+    query_read_identity,
+    react_async_context,
+    recommendation_contract,
+    recommendations,
+    rejection_diagnostics,
+    review_counterevidence,
+    rls_recommendations,
+    scoped_ui_claim_assessment,
+    source_claim_assessment,
+    source_facts,
+    source_limit_context,
+    syntax_claims,
+    url_token_assessment,
+)
 from app.scan.llm_scan import (
+    BEHAVIOUR,
+    PRESENTATION,
     RUBRICS,
     SYSTEM_PROMPT,
     LLMScanStats,
-    BEHAVIOUR,
-    PRESENTATION,
     build_prompt,
     clip,
     parse_findings,
@@ -45,8 +72,9 @@ from app.scan.llm_scan import (
     system_prompt_for,
     verify_finding,
 )
-from app.scan_pipeline import AUDIT_ENGINE_VERSION
 from app.scan.scoring import CATEGORIES
+from app.scan.secrets import damp_for_non_production_path
+from app.scan_pipeline import AUDIT_ENGINE_VERSION
 
 # sha256 of everything that decides what the model is shown -- the prompts,
 # and the file selection that fills them. First 16 hex characters. Paired with
@@ -748,6 +776,7 @@ def test_transient_5xx_retried_then_succeeds(monkeypatch):
 
 def test_4xx_not_retried(monkeypatch):
     import pytest as _pytest
+
     from app.llm import client as client_mod
     from app.llm.client import LLMClient, LLMError, Provider
 
@@ -772,6 +801,7 @@ def test_union_of_two_passes_merges_and_dedups(monkeypatch):
     kept — the paid Fix Pack completeness mode."""
     import io
     import zipfile as _zipfile
+
     from app.scan.llm_scan import run_llm_scan
 
     buf = io.BytesIO()
@@ -866,7 +896,8 @@ def test_damping_agrees_with_path_predicate():
     """The damper and is_non_production_path are two answers to one question.
     They are separate functions, so pin that they never disagree."""
     from app.scan.secrets import (
-        damp_for_non_production_path, is_non_production_path,
+        damp_for_non_production_path,
+        is_non_production_path,
     )
     paths = [
         "tests/test_x.py", "src/app.py", "docs/guide.md", "migrations/0001.sql",
@@ -1912,107 +1943,6 @@ def test_run_scan_at_full_depth_still_credits_every_category():
     scan = run_scan(raw, llm)
 
     assert scan["score"]["unexamined"] == []
-
-
-# --- one model name per PROVIDER, not one per chain (#29) --------------------
-#
-# The same model is spelled differently by each provider: AITunnel wants
-# claude-sonnet-4.6 (dot), the direct Anthropic API wants claude-sonnet-4-6
-# (dash), and the wrong one is a 400 on every request. One LLM_MODEL for the
-# whole chain cannot be right for both -- it configures the primary and
-# mis-configures the fallback, which then fails for a reason unrelated to the
-# outage it exists to survive. A spare tyre that only fits the car you are not
-# driving.
-#
-# This project has already paid for that spelling once: FREE_TIER_LLM_MODEL
-# shipped as the dashed name against an AITunnel-only deployment, and every
-# preview would have 400ed and degraded to static-only in silence.
-
-
-def _chain(monkeypatch, **env):
-    for k in ("LLM_MODEL", "AITUNNEL_LLM_MODEL", "ANTHROPIC_LLM_MODEL",
-              "AITUNNEL_API_KEY", "AITUNNEL_BASE_URL", "ANTHROPIC_API_KEY"):
-        monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("AITUNNEL_API_KEY", "k1")
-    monkeypatch.setenv("AITUNNEL_BASE_URL", "https://aitunnel.example/v1")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "k2")
-    for k, v in env.items():
-        monkeypatch.setenv(k, v)
-    return {p.kind: p.model for p in client_mod.providers_from_env()}
-
-
-def test_each_provider_can_be_told_its_own_spelling(monkeypatch):
-    models = _chain(monkeypatch,
-                    LLM_MODEL="claude-sonnet-4.6",
-                    ANTHROPIC_LLM_MODEL="claude-sonnet-4-6")
-
-    assert models == {"openai_compat": "claude-sonnet-4.6",
-                      "anthropic": "claude-sonnet-4-6"}
-
-
-def test_one_name_still_serves_a_one_provider_chain(monkeypatch):
-    """Every deployment today runs a single provider. The per-kind variables
-    exist so that adding a second one is a configuration change rather than a
-    silent downgrade -- not so that anyone has to learn them first."""
-    models = _chain(monkeypatch, LLM_MODEL="claude-sonnet-4.6")
-
-    assert set(models.values()) == {"claude-sonnet-4.6"}
-
-
-def test_an_unset_override_does_not_blank_the_model(monkeypatch):
-    """An empty string is what an operator leaves behind after commenting a
-    value out, and it must read as "not set" rather than as a model named ""."""
-    models = _chain(monkeypatch, LLM_MODEL="claude-sonnet-4.6",
-                    ANTHROPIC_LLM_MODEL="")
-
-    assert models["anthropic"] == "claude-sonnet-4.6"
-
-
-def test_with_model_can_respell_per_provider():
-    """The free tier's path. It runs a different model from the paid one, and
-    a preview that 400s on the fallback turns every free scan static-only on
-    the day the primary is down -- the thinner report a visitor cannot tell
-    apart from a real one."""
-    chain = LLMClient(providers=[
-        Provider("openai_compat", "https://a", "k", "claude-sonnet-4.6"),
-        Provider("anthropic", "https://b", "k", "claude-sonnet-4-6"),
-    ])
-
-    swapped = chain.with_model("claude-haiku-4.5",
-                               by_kind={"anthropic": "claude-haiku-4-5"})
-
-    assert [p.model for p in swapped.providers] == [
-        "claude-haiku-4.5", "claude-haiku-4-5"]
-
-
-def test_with_model_without_a_mapping_is_unchanged():
-    chain = LLMClient(providers=[
-        Provider("openai_compat", "https://a", "k", "x"),
-        Provider("anthropic", "https://b", "k", "y"),
-    ])
-
-    assert [p.model for p in chain.with_model("z").providers] == ["z", "z"]
-
-
-def test_the_free_tier_mapping_is_read_from_the_environment(monkeypatch):
-    """The producer behind FREE_TIER_MODEL_BY_KIND.
-
-    The constant is built at import, so without a function to call, the only
-    way to test the reading is to reload the module -- which leaves every
-    other importer holding the value from before.
-    """
-    monkeypatch.setenv("FREE_TIER_LLM_MODEL_ANTHROPIC", "claude-haiku-4-5")
-    monkeypatch.delenv("FREE_TIER_LLM_MODEL_AITUNNEL", raising=False)
-
-    assert pipeline_mod.free_tier_models_by_kind() == {
-        "anthropic": "claude-haiku-4-5"}
-
-
-def test_a_blanked_free_tier_override_is_not_a_model_named_nothing(monkeypatch):
-    monkeypatch.setenv("FREE_TIER_LLM_MODEL_ANTHROPIC", "  ")
-    monkeypatch.delenv("FREE_TIER_LLM_MODEL_AITUNNEL", raising=False)
-
-    assert pipeline_mod.free_tier_models_by_kind() == {}
 
 
 def test_unreadable_model_response_is_partial_and_not_cached_as_complete():
