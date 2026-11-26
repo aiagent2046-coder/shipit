@@ -410,18 +410,18 @@ def test_path_expansion_is_bounded_before_allocation_in_the_real_static_pipeline
     from app.scan import path_traversal as detector
     from app.scan.outbound_url import _MAX_SLOTS, _MAX_TEMPLATE_BYTES
 
-    original = detector._path_skeleton
+    original = detector._PathState._path_skeleton
     seen = []
 
-    def observe(expr, state):
-        result = original(expr, state)
+    def observe(self, expr):
+        result = original(self, expr)
         if result is not None:
             assert len(result[0]) <= _MAX_TEMPLATE_BYTES
             assert len(result[1]) <= _MAX_SLOTS
             seen.append((len(result[0]), len(result[1])))
         return result
 
-    monkeypatch.setattr(detector, "_path_skeleton", observe)
+    monkeypatch.setattr(detector._PathState, "_path_skeleton", observe)
     # 15 doublings suffice to reproduce the old limit violation safely.
     body = f"    v0 = {initial if operator == 'join' else f'Path({initial})'}\n"
     for i in range(1, 16):
