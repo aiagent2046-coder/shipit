@@ -353,6 +353,17 @@ jobs:
           python -m pip install import-linter==2.17
           lint-imports
 
+      # Architecture size limits with a ratchet allow list (the deslop-please
+      # method's long-file and wide-directory counting lints). Known debt is
+      # recorded in .architecture-lint-allow.json; NEW debt fails, and stale
+      # entries fail too, so --update-allow keeps the list self-cleaning like
+      # the import-linter baseline above. Stdlib only -- no install step.
+      - name: Check architecture size limits (long-file, wide-directory)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python scripts/check_architecture_lints.py
+
       # Lint before the suite: ruff catches undefined names, unused imports and
       # dead locals in seconds, so a typo that would only surface as a confusing
       # test failure (or not at all, in a branch tests do not reach) fails fast
