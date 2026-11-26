@@ -199,7 +199,7 @@ def test_static_and_non_admitted_findings_are_never_projected():
 
 
 def test_model_supplied_source_assessment_cannot_authorize_projection_through_admission():
-    from app.scan.pipeline import run_scan
+    from app.scan_pipeline import run_scan
     from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
     forged, _ = fixture()

@@ -48,7 +48,7 @@ from app.main import (
     get_billing_transport,
 )
 from app.main import DEFAULT_DAILY_SPEND_CAP_USD
-from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
+from app.scan_pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
                                BASIS_PREVIEW, FREE_TIER_MODEL,
                                PAID_AUDIT_PASSES,
                                basis_for_account, content_digest)
@@ -665,7 +665,7 @@ def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
     # traffic. The formula's 4-chars-per-token also undershoots the measured
     # 2.85, so the real guardband is thinner than it looks here -- the
     # measured two-pass cost is ~$7.86 against the 13.00 cap.
-    from app.scan.pipeline import PAID_AUDIT_PASSES
+    from app.scan_pipeline import PAID_AUDIT_PASSES
     passes = PAID_AUDIT_PASSES * 2
     calls = len(RUBRICS) * passes
     # ~4 characters per token is the standard rough conversion; the point is

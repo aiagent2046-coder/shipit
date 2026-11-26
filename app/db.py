@@ -47,7 +47,7 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import Any
 
-from app.scan.pipeline import BASIS_STATIC_ONLY
+from app.scan_pipeline import BASIS_STATIC_ONLY
 from app.scan.scoring import CATEGORIES
 
 from psycopg.rows import dict_row

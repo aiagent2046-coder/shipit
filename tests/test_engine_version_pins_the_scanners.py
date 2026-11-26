@@ -32,7 +32,7 @@ are exactly the events that have happened five times.
 WHEN THIS FAILS, do both halves:
   1. update the pinned set (WIRED_SCANNERS / EMITTED_RULE_IDS / DAMPING_
      CONTEXTS) to match reality, and
-  2. bump AUDIT_ENGINE_VERSION in app/scan/pipeline.py.
+  2. bump AUDIT_ENGINE_VERSION in app/scan_pipeline.py.
 Doing only the first reproduces the defect this file exists to prevent.
 """
 
@@ -42,7 +42,8 @@ import inspect
 import io
 import zipfile
 
-from app.scan import pipeline, static
+from app.scan import static
+from app import scan_pipeline as pipeline
 from app.scan.error_boundary import BoundaryScan
 
 # Every scanner run_static_scan feeds into the findings list, by the name it is
@@ -174,7 +175,7 @@ def test_the_wired_scanners_are_the_ones_this_version_was_stamped_for(
 ) -> None:
     assert _called_scanners(monkeypatch) == WIRED_SCANNERS, (
         "run_static_scan's scanners changed. Update WIRED_SCANNERS *and* bump "
-        "AUDIT_ENGINE_VERSION in app/scan/pipeline.py — without the bump, every "
+        "AUDIT_ENGINE_VERSION in app/scan_pipeline.py — without the bump, every "
         "repository already in the audit cache keeps being served its "
         "pre-change result and the new scanner runs on nothing."
     )
@@ -189,7 +190,7 @@ def test_the_emitted_rule_ids_are_the_ones_this_version_was_stamped_for() -> Non
 
     assert tuple(sorted(PLAIN)) == EMITTED_RULE_IDS, (
         "the static engine's rule ids changed. Update EMITTED_RULE_IDS *and* "
-        "bump AUDIT_ENGINE_VERSION in app/scan/pipeline.py — without the bump, "
+        "bump AUDIT_ENGINE_VERSION in app/scan_pipeline.py — without the bump, "
         "every repository already in the audit cache keeps being served a "
         "result the current engine would no longer produce."
     )
@@ -203,7 +204,7 @@ def test_the_damping_contexts_are_the_ones_this_version_was_stamped_for() -> Non
 
     assert tuple(sorted(NON_PRODUCTION_CONTEXTS)) == DAMPING_CONTEXTS, (
         "the damping vocabulary changed. Update DAMPING_CONTEXTS *and* bump "
-        "AUDIT_ENGINE_VERSION in app/scan/pipeline.py."
+        "AUDIT_ENGINE_VERSION in app/scan_pipeline.py."
     )
 
 

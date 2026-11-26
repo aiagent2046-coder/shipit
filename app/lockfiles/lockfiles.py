@@ -20,12 +20,12 @@ import zipfile
 import zlib
 from dataclasses import dataclass, field as dataclass_field
 
-from app.sca.bun_lock import bun_packages
-from app.sca.lockfile_primitives import (  # re-exported for existing callers
+from app.lockfiles.bun_lock import bun_packages
+from app.lockfiles.lockfile_primitives import (  # re-exported for existing callers
     Dependency, DependencyOccurrence, MAX_LOCKFILE_BYTES, normalize_pypi,
     _load_json, _NPM_NAME, _NPM_VERSION, _PYPI_NAME, _PYPI_PIN,
 )
-from app.sca.resolved_locks import pnpm_packages, uv_packages
+from app.lockfiles.resolved_locks import pnpm_packages, uv_packages
 from app.path_policy import is_non_production_path
 
 # The bound is on the LOOKUP, not on the repository: every dependency costs one

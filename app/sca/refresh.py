@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from app.scan.checks import CheckFinding
-from app.sca.lockfiles import (
+from app.lockfiles import (
     MAX_LOCKFILES,
     Dependency,
     DependencyOccurrence,
@@ -38,7 +38,9 @@ from app.sca.lockfiles import (
 from app.sca.stage import (RULE_ID, SCA_FRESHNESS_TTL_DAYS, findings_for,
                            freshness, query_dependencies, loses_cve_evidence)
 from app.sca.osv import OsvClient
-from app.scan.pipeline import RUBRICS, BASIS_STATIC_ONLY, score_findings
+from app.audit_basis import BASIS_STATIC_ONLY
+from app.scan.llm_scan import RUBRICS
+from app.scan.scoring import score_findings
 from app.scan.check_failure_scoring import failed_check_categories
 from app.scan.manifest import SCA_LIMITATIONS, sca_limitations, sca_manifest_fields
 from app.scan.project_checks import dependency_checks

@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from app.sca import bun_lock, lockfiles
-from app.sca.lockfiles import collect_dependency_inventory, unusable_lockfiles
+from app.lockfiles import bun_lock, lockfiles
+from app.lockfiles import collect_dependency_inventory, unusable_lockfiles
 from app.scan.cve_match import match_archive
 from tests.bun_fixtures import GSTACK_ADVISORIES, archive, bun, gstack_project, registry
 from tests.test_browser_cve import CATALOG

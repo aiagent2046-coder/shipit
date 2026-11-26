@@ -30,7 +30,7 @@ from typing import Protocol, TYPE_CHECKING
 
 import httpx
 
-from app.sca.lockfiles import Dependency
+from app.lockfiles import Dependency
 
 if TYPE_CHECKING:
     from app.sca.cve import CveClient

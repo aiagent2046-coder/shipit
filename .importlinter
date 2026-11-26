@@ -10,39 +10,13 @@ root_packages =
 # Baseline (2026-11-25): the 30 cycle edges measured on main are listed in
 # ignore_imports below, so the CI gate fails on NEW cycles only. This is the
 # `--update-allow` ratchet pattern: known debt is tracked, new debt fails.
-# When an edge here is actually untangled, its entry becomes unmatched and
-# (unmatched_ignore_imports_alerting=error, the default) the lint asks for
-# the entry to be removed. Do not add new entries without untangling the
-# cycle from first principles.
+# Baseline is EMPTY: all 30 measured edges are untangled from first
+# principles (fix phase complete -- see the refactor commits). The gate is
+# fully live: any new sibling cycle fails the build.
 #
-# Fix phase progress: 14 of 30 untangled from first principles and REMOVED
-# from this baseline: fixpack's gate composition layer (1), sca's
-# lockfile_primitives bottom layer (2), all six app.scan sibling pairs (6),
-# the alerts->notify operator-workflow move (1), the github_repo extraction
-# (1), the sandbox/proof contract-type moves (2), and the audit-workflow
-# extraction that untangled main<->mcp (1, also fixed a latent TypeError in
-# the MCP start-audit tool). 16 remain -- all in the domain six-pack
-# (fixpack/ingest/local_store/report/sca/scan).
 [importlinter:contract:siblings-acyclic]
 name = siblings-acyclic
 type = acyclic_siblings
 ancestors =
     app
 broken_contract_guidance = Fix from first principles: what is the intended layer of abstraction? Which module belongs at which layer? Do not do mechanical moves just to hide the cycle.
-ignore_imports =
-    app.audit_history -> app.sca.refresh
-    app.audit_history -> app.sca.snapshot
-    app.ingest.stack_detect -> app.scan.file_scope
-    app.mcp.server -> app.routes.dependencies
-    app.ops_endpoints -> app.db
-    app.sandbox_client -> app.fixpack.semantic_check
-    app.sandbox_client -> app.fixpack.verification
-    app.scan.browser -> app.report.sarif
-    app.scan.cve_match -> app.sca.lockfiles
-    app.scan.ghsa_catalog -> app.sca.lockfiles
-    app.scan.manifest -> app.sca.lockfiles
-    app.scan.pipeline -> app.fixpack.generate
-    app.scan.pipeline -> app.sca.osv
-    app.scan.pipeline -> app.sca.snapshot
-    app.scan.pipeline -> app.sca.stage
-    app.scan.static -> app.report.plain_language

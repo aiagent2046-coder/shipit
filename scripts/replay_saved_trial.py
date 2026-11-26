@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan.llm_scan import RUBRICS
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from app.scan.version import AUDIT_ENGINE_VERSION
 
 

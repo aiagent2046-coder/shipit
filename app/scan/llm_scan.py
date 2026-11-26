@@ -123,7 +123,7 @@ _LLM_DEPENDENCY_LOCKFILES = frozenset({
 # budget raise was for. 6.50 restores the same thin backstop margin.
 #
 # Raised from 6.50 to 13.00 when paid audits became passes=2
-# (PAID_AUDIT_PASSES, app/scan/pipeline.py). The old cap was sized for one
+# (PAID_AUDIT_PASSES, app/scan_pipeline.py). The old cap was sized for one
 # pass; a real repository measured $3.93/pass, so a two-pass audit lands
 # around $7.86 and the 6.50 cap would cut its second pass short -- handing
 # the paying tier, whose whole point is fuller coverage, a partial second
@@ -900,7 +900,7 @@ class LLMScanStats:
     # None when the stage ran (even if prompts=0, i.e. no rubric-relevant
     # files); a machine-readable string when it never ran at all (e.g. no
     # providers configured). Lets a consumer tell those two apart without
-    # inspecting the field's type -- see app/scan/pipeline.py.
+    # inspecting the field's type -- see app/scan_pipeline.py.
     skipped_reason: str | None = None
     # Cost-accounting totals, summed across every client.complete() call this
     # scan made (passes x rubrics). `calls` == 0 means no LLM ran (no
@@ -917,7 +917,7 @@ class LLMScanStats:
     successful_model_usage: dict[str, dict[str, int]] | None = None
     # True when the per-job spend ceiling (JOB_COST_CAP_USD) was hit mid-loop
     # and the scan stopped early. The findings returned are still real and
-    # verified -- just a partial set. app/scan/pipeline.py surfaces this in the
+    # verified -- just a partial set. app/scan_pipeline.py surfaces this in the
     # response's llm block so a truncated scan is visible, not silent.
     cost_cap_exceeded: bool = False
     # Characters actually sent, system prompt included, summed over every
@@ -1511,7 +1511,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
     return. That is the difference between recording and losing the money when
     client.complete() raises on the second rubric: the tokens the first call
     already burned are in the caller's object, whereas a locally-created one is
-    discarded with the frame. app/scan/pipeline.py passes one in for exactly
+    discarded with the frame. app/scan_pipeline.py passes one in for exactly
     that reason; the default keeps every other caller unchanged.
 
     A PROVIDER FAILURE MID-SCAN NO LONGER RAISES. It stops the loop and returns

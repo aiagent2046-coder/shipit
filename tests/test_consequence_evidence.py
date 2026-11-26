@@ -454,7 +454,7 @@ def test_syntax_integration_does_not_add_a_contradiction_or_source_excerpts(sour
 
 
 def test_fake_model_pipeline_retains_http_finding_and_penalty():
-    from app.scan.pipeline import run_scan
+    from app.scan_pipeline import run_scan
     from app.report.html import render_report
     finding = discarded(file='components/Commit.tsx')
     finding.update(severity='high', category='Frontend', confidence=0.9,

@@ -16,7 +16,7 @@ from app.llm.client import LLMClient
 from app.sca import snapshot
 from app.sca.refresh import refresh_score_threat_context
 from app.scan import kev_catalog
-from app.scan.pipeline import BASIS_PREVIEW, run_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.threat_context import build_threat_context
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM

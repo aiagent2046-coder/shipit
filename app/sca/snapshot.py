@@ -8,7 +8,7 @@ from pathlib import Path
 from app.local_store import MAX_CATALOG_BYTES, decode_catalog
 from app.scan.cve_evidence import empty_cve_summary
 from app.scan.cve_match import RULE_ID, match_archive
-from app.sca.lockfiles import normalize_pypi
+from app.lockfiles import normalize_pypi
 from app.scan.remediation_catalog import CATALOG_VERSION as REMEDIATION_CATALOG_VERSION
 from app.scan.threat_context import context_is_current
 

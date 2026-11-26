@@ -906,12 +906,12 @@ def test_an_ordinary_clean_category_is_not_marked_as_moved():
 
 def test_origin_category_survives_the_trip_through_the_pipeline():
     """The field is set by the scanner, travels as a dict, and is rebuilt into
-    a ScoredFinding by app/scan/pipeline.py — which copies only the names in
+    a ScoredFinding by app/scan_pipeline.py — which copies only the names in
     _SCORED_FIELDS. Omitting it there drops it silently: the producer still
     sets it, the report still reads it off the dict, and only the SCORE
     computes as though it were never set. Every test above would still pass.
     """
-    from app.scan.pipeline import _SCORED_FIELDS
+    from app.scan_pipeline import _SCORED_FIELDS
 
     assert "origin_category" in _SCORED_FIELDS
     finding = {k: v for k, v in vars(_f_from("Auth", "Security")).items()}
@@ -983,7 +983,7 @@ def test_the_preview_category_set_is_derived_from_the_rubrics_that_ran():
     score simply credits a category nothing examined.
     """
     from app.scan.llm_scan import RUBRICS
-    from app.scan.pipeline import FREE_TIER_RUBRICS
+    from app.scan_pipeline import FREE_TIER_RUBRICS
 
     for rubric in FREE_TIER_RUBRICS:
         assert rubric in RUBRICS, (

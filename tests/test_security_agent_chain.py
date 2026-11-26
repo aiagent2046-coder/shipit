@@ -9,7 +9,7 @@ import pytest
 
 from app.llm.client import LLMClient
 from app.scan.agent_chain import normalize_chain, run_chain
-from app.scan.pipeline import BASIS_PREVIEW, run_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.security_agent import agent_record
 from app.scan.static import run_static_scan
 from app.scan.synthetic_record import unavailable_summary

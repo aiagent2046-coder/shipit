@@ -6,7 +6,7 @@ import zipfile
 import pytest
 import yaml
 
-from app.sca.lockfiles import collect_dependency_inventory
+from app.lockfiles import collect_dependency_inventory
 from app.scan.cve_match import match_archive
 from tests.test_browser_cve import CATALOG
 
@@ -101,7 +101,7 @@ def test_pnpm_malformed_or_unsupported_is_explicit_and_isolated(text, reason):
 
 
 def test_pnpm_node_budget(monkeypatch):
-    from app.sca import resolved_locks
+    from app.lockfiles import resolved_locks
     monkeypatch.setattr(resolved_locks, 'MAX_YAML_NODES', 5)
     inv = collect_dependency_inventory(archive({'pnpm-lock.yaml': pnpm()}))
     assert inv.incomplete_manifests == {'pnpm-lock.yaml': 'parser_limit'}
@@ -155,7 +155,7 @@ def test_pnpm_gap_in_one_document_marks_whole_manifest():
 
 
 def test_pnpm_document_budget(monkeypatch):
-    from app.sca import resolved_locks
+    from app.lockfiles import resolved_locks
     monkeypatch.setattr(resolved_locks, 'MAX_YAML_DOCUMENTS', 1)
     text = '---\n' + package_manager_lockfile() + '---\n' + pnpm()
     inv = collect_dependency_inventory(archive({'pnpm-lock.yaml': text}))
@@ -205,7 +205,7 @@ source = { registry = "https://pypi.org/simple" }
 
 
 def test_uv_reference_budget_retains_pins_but_not_complete_coverage(monkeypatch):
-    from app.sca import resolved_locks
+    from app.lockfiles import resolved_locks
     monkeypatch.setattr(resolved_locks, 'MAX_UV_REFERENCE_CHECKS', 1)
     inv = collect_dependency_inventory(archive({'uv.lock': uv()}))
     assert inv.found == 1
@@ -254,7 +254,7 @@ def test_browser_cve_reads_both_companion_locks():
 
 
 def test_new_formats_share_existing_limits_and_vendor_exclusions(monkeypatch):
-    from app.sca import lockfiles
+    from app.lockfiles import lockfiles
     monkeypatch.setattr(lockfiles, 'MAX_DEPENDENCIES', 1)
     inv = collect_dependency_inventory(archive({'pnpm-lock.yaml': pnpm(), 'uv.lock': uv(),
         'node_modules/vendor/uv.lock': uv('9.9.9')}))

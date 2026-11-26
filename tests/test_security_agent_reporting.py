@@ -11,7 +11,7 @@ from app.llm.client import LLMClient
 from app.report.evidence import claim_evidence_rows, manifest_rows, security_agent_rows
 from app.report.html import render_report
 from app.scan import security_agent
-from app.scan.pipeline import BASIS_PREVIEW, run_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_security_agent import SQL, archive, sql_findings
 
 CASES = json.loads((Path(__file__).parent / "fixtures/security-agent-reports.json").read_text())

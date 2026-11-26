@@ -15,7 +15,7 @@ import tomllib
 import zipfile
 import zlib
 
-from app.sca.lockfiles import (
+from app.lockfiles import (
     collect_dependency_inventory, dependency_exclusion_reason, normalize_pypi,
     occurrence_evidence, occurrence_summary,
 )

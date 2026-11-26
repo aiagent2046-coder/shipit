@@ -10,7 +10,7 @@ from app.report.evidence import claim_evidence_rows, finding_counts, source_seve
 from app.report.html import _finding_row, render_report
 from app.scan.claim_evidence import partial_contradicted, unsupported_transport
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 

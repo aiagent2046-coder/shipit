@@ -69,7 +69,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                     client_runtime_evidence=None, client_runtime_run_id=None) -> dict:
     """Returns {"score": {...}, "findings": [ScoredFinding-as-dict]}.
 
-    The score here describes THIS stage only. app/scan/pipeline.py reads just
+    The score here describes THIS stage only. app/scan_pipeline.py reads just
     the findings and recomputes the total once it knows whether the LLM stage
     ran, so an audit's real headline never comes from this key -- but callers
     that use it directly (the tests, and anything added later) must not be

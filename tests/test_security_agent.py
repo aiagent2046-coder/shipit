@@ -17,7 +17,7 @@ from app.report.html import render_report
 from app.scan import security_agent, sql_injection
 from app.scan.browser import ScanSession, scan_archive
 from app.scan.pattern_catalog import catalog_manifest
-from app.scan.pipeline import BASIS_PREVIEW, run_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.static import run_static_scan
 from tests.test_browser_cve import CATALOG
 

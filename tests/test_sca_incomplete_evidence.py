@@ -9,7 +9,7 @@ from app.report.evidence import manifest_rows
 from app.sca.osv import OsvClient
 from app.sca.refresh import inventory_payload, refresh_stale_dependency_audits, refreshed_score
 from app.sca.stage import run_sca_stage
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from tests.test_sca_refresh import NOW, StoredRepo, stored_row
 from tests.test_sca_stage import FakeTransport, LODASH_ADVISORY, make_zip, repo_with
 

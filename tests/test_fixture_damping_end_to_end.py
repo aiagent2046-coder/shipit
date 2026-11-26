@@ -49,7 +49,7 @@ import pytest
 
 from app.llm.client import LLMClient, LLMUsage, Provider
 from app.report.html import NON_PRODUCTION_HEADING, render_report
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 
 PRODUCTION = "src/components/CardCheckout.tsx"
 FIXTURE = "src/components/CardCheckout.test.tsx"

@@ -14,7 +14,7 @@ import zipfile
 
 import pytest
 
-from app.sca import lockfiles, resolved_locks
+from app.lockfiles import lockfiles, resolved_locks
 
 
 PNPM = """lockfileVersion: '9.0'
@@ -167,7 +167,7 @@ import io
 import json
 import sys
 import zipfile
-from app.sca.lockfiles import collect_dependency_inventory
+from app.lockfiles import collect_dependency_inventory
 
 path = sys.argv[1]
 if path == "package-lock.json":

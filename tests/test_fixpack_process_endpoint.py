@@ -474,7 +474,7 @@ def test_deep_review_reuses_a_full_audit_of_identical_bytes(monkeypatch):
     audits, fixpack_repo = _review_job_setup()
     # Seed a full-basis row for exactly these bytes, as a previous purchase
     # would have left behind.
-    from app.scan.pipeline import AUDIT_ENGINE_VERSION, content_digest
+    from app.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
     from tests.test_audit_preview_history import SNAPSHOT
     audits.rows.append({
         "id": "already-there", "status": "completed",

@@ -60,7 +60,7 @@ from app.routes.dependencies import (
 )
 from app.sca.cache import needs_dependency_scan
 from app.sca.snapshot import baseline_is_current, snapshot_is_current
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, basis_for_account, content_digest
+from app.scan_pipeline import AUDIT_ENGINE_VERSION, basis_for_account, content_digest
 from app.service_flags import _emergency_stop_active
 
 logger = logging.getLogger(__name__)
@@ -330,7 +330,7 @@ async def create_audit(
     # The cache key is (content, engine version): identical content reuses a
     # prior result only if it was produced by the current audit engine, so an
     # engine change (AUDIT_ENGINE_VERSION bump) recomputes rather than serving
-    # a stale row. See app/scan/pipeline.py and AuditRepository.get_by_content_hash.
+    # a stale row. See app/scan_pipeline.py and AuditRepository.get_by_content_hash.
     stage_started = time.monotonic()
     digest = content_digest(raw)
     # Third element of the cache key: the scan depth this caller is entitled to.

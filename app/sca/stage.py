@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 from app.scan.checks import CheckFinding
 from app.scan.cve_evidence import empty_cve_summary, normalize_cve_summary
 from app.sca.cve import CveClient
-from app.sca.lockfiles import (
+from app.lockfiles import (
     Dependency,
     collect_dependency_inventory,
     occurrence_evidence,

@@ -13,7 +13,7 @@ from app.sca import snapshot
 from app.scan import cve_catalog, ghsa_catalog
 from app.scan.binary_evidence import attach_binary_reports
 from app.scan.browser import scan_archive
-from app.scan.pipeline import BASIS_PREVIEW, run_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_binary_evidence import archive, elf, encoded, report as binary_report
 from tests.test_ghsa_pipeline import DATE, GHSA, cve_record, ghsa_record
 

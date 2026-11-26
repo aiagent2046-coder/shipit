@@ -6,7 +6,7 @@ run Bun. All locked platform/dev variants are included, with scope unknown.
 """
 from __future__ import annotations
 
-from app.sca.lockfile_primitives import Dependency, MAX_LOCKFILE_BYTES, _load_json, _NPM_NAME, _NPM_VERSION
+from app.lockfiles.lockfile_primitives import Dependency, MAX_LOCKFILE_BYTES, _load_json, _NPM_NAME, _NPM_VERSION
 
 MAX_JSON_DEPTH = 64
 MAX_JSON_TOKENS = 100_000

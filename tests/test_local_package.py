@@ -38,7 +38,7 @@ def test_offline_closure_cannot_silently_add_a_server_dependency(tmp_path):
     (app / 'local_cli.py').write_text('import httpx\n')
     with pytest.raises(ValueError, match='external dependency'):
         builder.source_files(tmp_path)
-    (app / 'local_cli.py').write_text('from app.scan.pipeline import run_scan\n')
+    (app / 'local_cli.py').write_text('from app.scan_pipeline import run_scan\n')
     with pytest.raises(ValueError, match='Server orchestration'):
         builder.source_files(tmp_path)
 
@@ -55,9 +55,9 @@ def test_real_closure_and_runtime_lock_are_complete():
     files = builder.source_files(ROOT)
     names = {p.relative_to(ROOT).as_posix() for p in files}
     assert {'app/local_cli.py', 'app/local_store.py', 'app/scan/cookie_flags.py',
-            'app/scan/recommendations.py', 'app/sca/resolved_locks.py', 'app/sca/bun_lock.py',
-            'app/dependency_snapshot.py'} <= names
-    assert not names & {'app/main.py', 'app/db.py', 'app/scan/pipeline.py', 'app/scan/llm_scan.py'}
+            'app/scan/recommendations.py', 'app/lockfiles/resolved_locks.py', 'app/lockfiles/bun_lock.py',
+            'app/snapshot_record.py'} <= names
+    assert not names & {'app/main.py', 'app/db.py', 'app/scan_pipeline.py', 'app/scan/llm_scan.py'}
     lock, pins = builder.locked_requirements(ROOT, builder.DEPENDENCIES)
     assert len(pins) == 4
     assert '--hash=sha256:' in lock

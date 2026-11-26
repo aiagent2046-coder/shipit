@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from app.sca import lockfiles, resolved_locks
+from app.lockfiles import lockfiles, resolved_locks
 from app.scan.cve_match import match_archive
 
 

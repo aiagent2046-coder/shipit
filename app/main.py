@@ -103,7 +103,7 @@ from app.monitor import (
 )
 from app.monitor.diff import new_high_severity_findings
 from app.ratelimit import RateLimitExceeded, RateLimitStoreError, RateLimiter
-from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
+from app.scan_pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
                               LLM_FAILURE_BILLING, content_digest, llm_failure_kind, run_scan)
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,

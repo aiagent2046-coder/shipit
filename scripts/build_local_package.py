@@ -23,10 +23,11 @@ EXTERNAL = {"yaml", "tree_sitter", "tree_sitter_typescript", "pglast"}
 ALLOWED = {
     "app", "app.local_cli", "app.local_store", "app.logging_config", "app.log_context", "app.capabilities",
     "app.archive_names", "app.dependency_snapshot", "app.finding_text",
-    "app.path_policy", "app.project_checks", "app.threat_context",
+    "app.path_policy", "app.project_checks", "app.snapshot_record", "app.threat_context",
     "app.ingest", "app.ingest.validators", "app.report", "app.report.sarif", "app.report.plain_language",
     "app.report.dependency_snapshot", "app.report.project_checks", "app.report.threat_context",
-    "app.sca", "app.sca.lockfile_primitives", "app.sca.lockfiles", "app.sca.resolved_locks", "app.sca.bun_lock",
+    "app.sca", "app.lockfiles", "app.lockfiles.lockfile_primitives", "app.lockfiles.lockfiles",
+    "app.lockfiles.resolved_locks", "app.lockfiles.bun_lock",
 }
 
 
@@ -85,10 +86,10 @@ def source_files(root: Path) -> list[Path]:
         name = pending.pop()
         if name in seen:
             continue
+        if name in {"app.scan_pipeline", "app.scan.llm_scan"}:
+            raise ValueError(f"Server orchestration cannot enter the local package: {name}")
         if name not in ALLOWED and not (name.startswith("app.scan.") or name == "app.scan"):
             raise ValueError(f"Module outside the offline boundary: {name}")
-        if name in {"app.scan.pipeline", "app.scan.llm_scan"}:
-            raise ValueError(f"Server orchestration cannot enter the local package: {name}")
         path = module_path(root, name)
         if path is None:
             raise ValueError(f"Missing application module: {name}")

@@ -20,7 +20,7 @@ import pytest
 
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan.llm_scan import ALL_RUBRICS, RUBRICS, run_llm_scan
-from app.scan.pipeline import (BASIS_FULL, BASIS_PARTIAL, BASIS_STATIC_ONLY,
+from app.scan_pipeline import (BASIS_FULL, BASIS_PARTIAL, BASIS_STATIC_ONLY,
                                LLM_FAILURE_BILLING, LLM_FAILURE_PROVIDER,
                                _SCORED_FIELDS, llm_failure_kind, run_scan)
 from app.scan.scoring import (LLM_ONLY_CATEGORIES, ScoredFinding,

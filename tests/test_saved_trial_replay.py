@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.llm.client import LLMUsage
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from scripts import replay_saved_trial as r
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 

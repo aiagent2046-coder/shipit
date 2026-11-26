@@ -38,7 +38,7 @@ def main() -> int:
     facts = ""
     t0 = time.time()
     try:
-        from app.scan.pipeline import run_static_scan
+        from app.scan_pipeline import run_static_scan
         static = run_static_scan(io.BytesIO(raw))
         facts = facts_prompt(static.get("source_facts"), 16_000)
         print(f"static scan {time.time() - t0:.0f}s; facts_prompt "

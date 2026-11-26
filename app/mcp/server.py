@@ -345,7 +345,7 @@ async def _tool_start_audit(args: dict, ctx: dict) -> dict:
     )
     from app.github_repo import _parse_github_repo_url
     from app.llm_budget import _anon_daily_cap_exceeded
-    from app.scan.pipeline import BASIS_PREVIEW, BASIS_STATIC_ONLY
+    from app.scan_pipeline import BASIS_PREVIEW, BASIS_STATIC_ONLY
 
     repo_url = args.get("repo_url")
     if not isinstance(repo_url, str) or not repo_url.strip():

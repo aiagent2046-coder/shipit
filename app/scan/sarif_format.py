@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import urllib.parse
 
-from app.dependency_snapshot import snapshot_metadata
+from app.snapshot_record import snapshot_metadata
 from app.finding_text import plain_fields
 from app.project_checks import project_checks_record
 from app.scan.check_failures import normalize_check_failures
