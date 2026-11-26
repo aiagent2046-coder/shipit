@@ -29,20 +29,20 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from app.db import AuditRepository, RlsLiveCheckRepository
+from app.github_repo import _parse_github_repo_url
 from app.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
     validate_zip,
 )
 from app.log_context import set_log_context
-from app.proof.rls_live_check import (
+from app.proof.rls.rls_live_check import (
     MAX_TABLES,
     LiveCheckResult,
     run_live_rls_check,
 )
-from app.proof.rls_metadata import MetadataInputError, parse_access_review
-from app.ratelimit import RateLimitExceeded, RateLimiter
-from app.github_repo import _parse_github_repo_url
+from app.proof.rls.rls_metadata import MetadataInputError, parse_access_review
+from app.ratelimit import RateLimiter, RateLimitExceeded
 from app.routes._shared import _client_key
 from app.routes.dependencies import (
     get_audit_repo,

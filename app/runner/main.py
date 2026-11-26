@@ -31,13 +31,12 @@ from starlette.concurrency import run_in_threadpool
 from app.deploypack.preview import reconcile_previews
 from app.deploypack.sandbox import verify_deploy_pack
 from app.fixpack.generate import FixpackPlan
-from app.fixpack.semantic_check import RunResult, TestRunner, minimal_check, run_suite
-from app.fixpack.semantic_check import run_verification_profile
+from app.fixpack.semantic_check import RunResult, TestRunner, minimal_check, run_suite, run_verification_profile
 from app.fixpack.verification import (
     verification_profile_from_wire,
     verification_stage_to_wire,
 )
-from app.proof.cors_probe import run_cors_probe
+from app.proof.cors.cors_probe import run_cors_probe
 from app.runner.auth import require_sandbox_token
 
 app = FastAPI(title="shipit-sandbox-runner", version="0.1.0")

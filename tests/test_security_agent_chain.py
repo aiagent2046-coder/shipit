@@ -1,22 +1,21 @@
 """Exercise source-bound handoffs and independent verification without a model."""
-from copy import deepcopy
 import hashlib
 import io
 import json
 import os
+from copy import deepcopy
 
 import pytest
 
 from app.llm.client import LLMClient
 from app.scan.agent_chain import normalize_chain, run_chain
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.security_agent import agent_record
 from app.scan.static import run_static_scan
 from app.scan.synthetic_record import unavailable_summary
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_agent_synthetic_runtime import passed_summary
 from tests.test_evidence_acquisition import HTTP_SQL, RUNTIME_GAPS, SOURCE_FACTS
 from tests.test_security_agent import archive, sql_findings
-
 
 ROLES = ["detector", "researcher", "experimenter", "verifier"]
 
@@ -259,7 +258,7 @@ def test_detector_failure_blocks_research_and_experiment_but_preserves_verificat
 @pytest.mark.skipif(not os.environ.get("SQL_CONTRACT_DATABASE_URL"),
                     reason="Dedicated PostgreSQL target is required")
 def test_full_chain_runs_real_postgres_once_for_two_independent_candidates():
-    from app.proof.sql_runtime_executor import SyntheticSqlExecutor
+    from app.proof.sql.sql_runtime_executor import SyntheticSqlExecutor
 
     scan = investigate(SyntheticSqlExecutor(), {"src/a.py": HTTP_SQL, "src/b.py": HTTP_SQL})
     agent = scan["security_agent"]

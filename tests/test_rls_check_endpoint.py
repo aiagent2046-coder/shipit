@@ -437,7 +437,8 @@ def test_api_and_ledger_preserve_inconclusive_outcomes_without_response_values(
 
 def test_partial_check_reason_and_unasked_names_reach_response_and_ledger(client, ledger, monkeypatch):
     from types import SimpleNamespace
-    from app.proof import rls_live_check as live
+
+    from app.proof.rls import rls_live_check as live
 
     now = [100.0]
     monkeypatch.setattr(live, "time", SimpleNamespace(monotonic=lambda: now[0]))

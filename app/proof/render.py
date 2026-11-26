@@ -7,7 +7,7 @@ not contradict a soft warning or a hard block that the processor applied.
 
 from __future__ import annotations
 
-from app.proof.artifacts import ProofArtifact, render_artifacts_markdown
+from app.proof.core.artifacts import ProofArtifact, render_artifacts_markdown
 from app.proof_types import ProofReport
 
 # Printed under a STATIC proof section, and load-bearing rather than

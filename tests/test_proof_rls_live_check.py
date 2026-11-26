@@ -13,7 +13,7 @@ import io
 import json
 import zipfile
 
-from app.proof.rls_live_check import MAX_TABLES, run_live_rls_check
+from app.proof.rls.rls_live_check import MAX_TABLES, run_live_rls_check
 
 REF = "egoprezwkjaqacxtjwfl"
 
@@ -246,7 +246,8 @@ def test_a_refused_check_counts_nothing() -> None:
 
 def test_time_budget_preserves_completed_results_and_names_unasked_tables(monkeypatch):
     from types import SimpleNamespace
-    from app.proof import rls_live_check as live
+
+    from app.proof.rls import rls_live_check as live
 
     now = [100.0]
     monkeypatch.setattr(live, "time", SimpleNamespace(monotonic=lambda: now[0]))
@@ -267,7 +268,8 @@ def test_time_budget_preserves_completed_results_and_names_unasked_tables(monkey
 
 def test_deadline_expired_before_first_request_makes_no_request(monkeypatch):
     from types import SimpleNamespace
-    from app.proof import rls_live_check as live
+
+    from app.proof.rls import rls_live_check as live
 
     times = iter([100.0, 100.0 + live.MAX_CHECK_SECONDS])
     monkeypatch.setattr(live, "time", SimpleNamespace(monotonic=lambda: next(times)))

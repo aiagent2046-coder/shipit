@@ -28,7 +28,7 @@ from app.scan.table_names import read_named_tables
     '// const table = "profiles";\nsupabase.from(table);',
 ])
 def test_unproven_table_binding_stays_dynamic_and_out_of_probe_candidates(source):
-    from app.proof.supabase_tables import find_probe_tables
+    from app.proof.rls.supabase_tables import find_probe_tables
     bundle = make_zip({"src/client.ts": source})
     named = read_named_tables(bundle)
     assert named.from_code == set()

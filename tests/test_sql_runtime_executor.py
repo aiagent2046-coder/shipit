@@ -1,21 +1,20 @@
 """Native executor boundaries and rejection of corrupted synthetic evidence."""
 from __future__ import annotations
 
-from contextlib import contextmanager
-from copy import deepcopy
 import hashlib
 import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
 from psycopg.pq import TransactionStatus
 
-from app.proof import sql_runtime_contract as contract
-from app.proof import sql_runtime_executor as executor
-
+from app.proof.sql import sql_runtime_contract as contract
+from app.proof.sql import sql_runtime_executor as executor
 
 DSN = "postgresql://postgres:synthetic@localhost:5432/drydock_sql_contract"  # scan-allow: fake test DSN
 

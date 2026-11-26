@@ -43,10 +43,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from app.proof.rls_probe import run_rls_probe
-from app.proof.rls_metadata import AccessReviewInput, review_metadata
-from app.proof.supabase_tables import TableCandidate, find_probe_tables
-from app.proof.supabase_target import (
+from app.proof.rls.rls_metadata import AccessReviewInput, review_metadata
+from app.proof.rls.rls_probe import run_rls_probe
+from app.proof.rls.supabase_tables import TableCandidate, find_probe_tables
+from app.proof.rls.supabase_target import (
     SupabaseTarget,
     TargetRefusal,
     find_supabase_target,

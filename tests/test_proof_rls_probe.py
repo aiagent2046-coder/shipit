@@ -13,9 +13,9 @@ import json
 
 import pytest
 
-from app.proof import rls_probe
 from app.proof.compare import build_proof_report
-from app.proof.rls_probe import (
+from app.proof.rls import rls_probe
+from app.proof.rls.rls_probe import (
     TEMPLATE_ID,
     UnsafeProjectUrl,
     run_rls_probe,
@@ -151,7 +151,7 @@ def test_privileged_or_user_keys_are_refused_before_the_default_worker(monkeypat
 
 
 def test_trusted_bundle_proof_fetch_can_still_compare_leaked_and_public_keys() -> None:
-    from app.proof.supabase_target import decode_jwt_claims
+    from app.proof.rls.supabase_target import decode_jwt_claims
 
     def key(role):
         payload = base64.urlsafe_b64encode(json.dumps({

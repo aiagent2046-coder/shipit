@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.proof.registry import get_template
+from app.proof.core.registry import get_template
 from app.proof_types import TemplateId
 
 

@@ -14,7 +14,7 @@ from dataclasses import asdict
 import httpx
 
 from app.logging_config import configure_logging
-from app.proof.rls_probe import (
+from app.proof.rls.rls_probe import (
     MAX_WORKER_REQUEST_BYTES,
     MAX_WORKER_RESULT_BYTES,
     ProbeResponseError,

@@ -44,7 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.proof.compare import build_proof_report  # noqa: E402
-from app.proof.rls_probe import run_rls_probe  # noqa: E402
+from app.proof.rls.rls_probe import run_rls_probe  # noqa: E402
 from app.proof.served_bundle import (  # noqa: E402
     UnsafeDeploymentUrl,
     fetch_served_bundle,

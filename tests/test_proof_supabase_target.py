@@ -16,7 +16,7 @@ import zipfile
 
 import pytest
 
-from app.proof.supabase_target import (
+from app.proof.rls.supabase_target import (
     SupabaseTarget,
     TargetRefusal,
     decode_jwt_claims,

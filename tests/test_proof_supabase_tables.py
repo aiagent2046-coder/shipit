@@ -13,7 +13,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.proof.supabase_tables import find_probe_tables
+from app.proof.rls.supabase_tables import find_probe_tables
 
 
 def make_zip(entries: dict[str, str]) -> io.BytesIO:

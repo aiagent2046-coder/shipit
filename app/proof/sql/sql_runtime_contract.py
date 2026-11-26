@@ -9,16 +9,15 @@ patch. The caller must supply a dedicated, already-open idle connection.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import psycopg
 from psycopg.pq import TransactionStatus
 from psycopg.rows import tuple_row
-
 
 CONTRACT_ID = "sql-value-parameterization-python-psycopg3"
 MAX_ROWS = 32

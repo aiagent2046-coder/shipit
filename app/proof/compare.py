@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.proof.registry import get_template
+from app.proof.core.registry import get_template
 from app.proof_types import ExploitAttempt, ProofReport, TemplateId
 
 

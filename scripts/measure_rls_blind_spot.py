@@ -64,16 +64,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.scan.rls import (  # noqa: E402
-    RULE_ID,
-    WRITE_RULE_ID,
-    _SCHEMA_PATH_HINTS,
-    read_committed_sql,
-    scan_rls,
-)
-from app.proof.supabase_tables import (  # noqa: E402
+from app.proof.rls.supabase_tables import (  # noqa: E402
     _TYPES_MARKER,
     _TYPES_TABLE,
+)
+from app.scan.rls import (  # noqa: E402
+    _SCHEMA_PATH_HINTS,
+    RULE_ID,
+    WRITE_RULE_ID,
+    read_committed_sql,
+    scan_rls,
 )
 from app.scan.sql_schema import parse_schema  # noqa: E402
 
