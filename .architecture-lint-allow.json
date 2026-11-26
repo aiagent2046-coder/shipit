@@ -1,7 +1,5 @@
 {
-  "long_file": {
-    "tests/test_llm_scan.py": 2055
-  },
+  "long_file": {},
   "wide_directory": {
     "app": 51,
     "app/proof": 27,
