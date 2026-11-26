@@ -12,7 +12,7 @@ from app.deploypack import paid_delivery_auth
 from app.deploypack.delivery_auth import DeliveryAuthorizationError
 from app.deploypack.paid_delivery_auth import open_paid_grant
 from app.main import app, get_audit_repo, get_fixpack_repo, get_payment_repo
-from app.routes import paid_delivery
+from app.routes import billing as paid_delivery
 
 AUDIT_ID = "11111111-1111-4111-8111-111111111111"
 AUDIT_TOKEN = "a" * 32

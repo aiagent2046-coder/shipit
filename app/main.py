@@ -38,7 +38,6 @@ from app.accounts import (
 from app.audit_history import ensure_paid_baseline, refresh_cached_preview_history
 from app.audit_workflow import _AuditForm, _elapsed_ms, create_audit
 from app.billing import telegram_stars
-from app.db import monitoring_processor_lock as monitoring_processor_lock
 from app.db import (
     AuditRepository,
     FixOutcomeRepository,
@@ -49,6 +48,7 @@ from app.db import (
     database_url_from_env,
     fixpack_processor_lock,
 )
+from app.db import monitoring_processor_lock as monitoring_processor_lock
 from app.deploypack import github_app
 from app.deploypack.delivery import DeliveryError, render_pr_body
 from app.deploypack.delivery_auth import (
@@ -94,9 +94,14 @@ from app.proof import (
 from app.ratelimit import RateLimiter, RateLimitExceeded, RateLimitStoreError
 from app.routes.accounts import router as accounts_router
 from app.routes.bank_transfer import router as bank_transfer_router
-from app.routes.billing import router as billing_router
+from app.routes.billing import router as billing_router, telegram_router
+from app.routes.monitoring import (
+    _monitoring_alert_text as _monitoring_alert_text,
+    _process_one_monitoring_run as _process_one_monitoring_run,
+    process_pending_monitoring as process_pending_monitoring,
+    router as monitoring_router,
+)
 from app.routes.bundle_check import router as bundle_check_router
-from app.routes.capabilities import router as capabilities_router
 from app.routes.operator import router as operator_router
 from app.routes.reads import router as reads_router
 from app.routes.rls_check import router as rls_check_router
@@ -326,7 +331,6 @@ from app.routes.dependencies import (  # noqa: E402
     get_subscription_repo,
 )
 from app.routes.github import router as github_router  # noqa: E402
-from app.routes.telegram import router as telegram_router  # noqa: E402
 
 # Names re-exported for the test suite, listed so a linter does not read them as
 # dead imports. Keep in sync with the import block above.
@@ -1722,7 +1726,6 @@ async def create_fixpack(
 # Routers are imported at the top of the module; include_router must run here,
 # after `app` is constructed. Extracted route modules live in app/routes/.
 app.include_router(ops_router)
-app.include_router(capabilities_router)
 app.include_router(accounts_router)
 app.include_router(bank_transfer_router)
 app.include_router(github_router)
@@ -1735,16 +1738,6 @@ app.include_router(bundle_check_router)
 app.include_router(session_router)
 app.include_router(storefront_router)
 app.include_router(yookassa_router)
-from app.routes.paid_delivery import router as paid_delivery_router  # noqa: E402
-
-app.include_router(paid_delivery_router)
-from app.routes.monitoring import (  # noqa: E402
-    _monitoring_alert_text as _monitoring_alert_text,
-    _process_one_monitoring_run as _process_one_monitoring_run,
-    process_pending_monitoring as process_pending_monitoring,
-    router as monitoring_router,
-)
-
 app.include_router(monitoring_router)
 # Off unless MCP_ENABLED is set: the router is always mounted, and the
 # endpoint itself answers 404 when the flag is unset. Mounting
