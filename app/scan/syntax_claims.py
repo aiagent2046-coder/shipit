@@ -13,7 +13,6 @@ import stat
 import zipfile
 from typing import BinaryIO
 
-from pglast import ast, parse_sql, scan
 from pglast.parser import ParseError
 from tree_sitter import Language, Parser
 import tree_sitter_typescript

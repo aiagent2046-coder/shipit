@@ -26,7 +26,7 @@ from app.sca.lockfile_primitives import (  # re-exported for existing callers
     _load_json, _NPM_NAME, _NPM_VERSION, _PYPI_NAME, _PYPI_PIN,
 )
 from app.sca.resolved_locks import pnpm_packages, uv_packages
-from app.scan.secrets import is_non_production_path
+from app.path_policy import is_non_production_path
 
 # The bound is on the LOOKUP, not on the repository: every dependency costs one
 # entry in a network request, and an audit must not become unbounded work

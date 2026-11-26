@@ -22,7 +22,7 @@ from app.scan.query_read_identity import valid_query_read_identity
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.manifest import SCA_LIMITATIONS
 from app.report.cve import cve_rows, cve_notices
-from app.report.dependency_snapshot import SCOPE_REASONS, snapshot_rows, snapshot_notices, snapshot_finding_rows
+from app.dependency_snapshot import SCOPE_REASONS, snapshot_rows, snapshot_notices, snapshot_finding_rows
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.check_failures import normalize_check_failures
 from app.scan.security_agent import agent_record, deserialization_observation, sql_driver_rows, sql_observation

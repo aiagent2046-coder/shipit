@@ -13,6 +13,12 @@ import re
 import zipfile
 
 from app.scan import consequence_evidence as c
+from app.scan.external_call_primitives import (  # re-exported: tests and callers use e._names
+    _ancestor, _args, _asserted, _callback_reentry_claim, _declaration,
+    _fetch_return_helper, _introduced, _local_function, _own, _pair,
+    _pattern_name, _retry_shape, _review, _selected, _stable,
+    _terminal_classifier, _tokens, _top_statement,
+)
 from app.scan import guard_context as g
 from app.scan import imported_error_context as i
 
@@ -36,14 +42,6 @@ COUNT_ASSUMPTIONS = [
     "Both counts read the same committed-row view, including their own completed insert and earlier commits.",
     "No matching rows are deleted or excluded by a changing filter between the two inserts and counts.",
 ]
-
-from app.scan.external_call_primitives import (  # re-exported: tests and callers use e._names
-    _ancestor, _args, _asserted, _callback_reentry_claim, _declaration,
-    _fetch_return_helper, _introduced, _local_function, _own, _pair,
-    _pattern_name, _retry_shape, _review, _selected, _stable,
-    _terminal_classifier, _tokens, _top_statement,
-)
-
 
 
 

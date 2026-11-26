@@ -7,7 +7,7 @@ import pytest
 
 from app.llm.client import LLMClient
 from app.local_cli import _dependency_task, inspect_project
-from app.report.dependency_snapshot import snapshot_finding_rows
+from app.dependency_snapshot import snapshot_finding_rows
 from app.report.html import render_report
 from app.report.plain_language import plain_fields
 from app.scan.browser import scan_archive

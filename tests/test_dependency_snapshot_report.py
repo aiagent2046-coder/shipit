@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.report.dependency_snapshot import snapshot_coverage, snapshot_metadata, snapshot_notices, snapshot_rows
+from app.dependency_snapshot import snapshot_coverage, snapshot_metadata, snapshot_notices, snapshot_rows
 from app.report.evidence import claim_evidence_rows, evidence_label, manifest_rows, non_model_status_notices
 from app.report.html import render_report
 from app.report.sarif import build_sarif

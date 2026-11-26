@@ -222,12 +222,12 @@ def test_package_build_copies_checksums_and_relocates_threat_modules(tmp_path):
     raw = (package / 'data/kev-catalog.json').read_bytes()
     assert hashlib.sha256(raw).hexdigest() == info['kev_catalog_sha256']
     assert (package / 'data/kev-catalog.json.sha256').read_text().strip() == info['kev_catalog_sha256']
-    for name in ('scan/kev_catalog.py', 'scan/threat_context.py', 'report/threat_context.py'):
+    for name in ('scan/kev_catalog.py', 'scan/threat_context.py', 'threat_context.py'):
         assert (package / name).is_file()
     script = (
         'import json, sys; sys.path.insert(0, sys.argv[1]); '
         'from drydock_local.scan.threat_context import build_threat_context; '
-        'from drydock_local.report.threat_context import threat_context_record; '
+        'from drydock_local.threat_context import threat_context_record; '
         'print(json.dumps(threat_context_record(build_threat_context([]))))'
     )
     isolated = json.loads(subprocess.check_output([sys.executable, '-I', '-c', script, str(source)], text=True))

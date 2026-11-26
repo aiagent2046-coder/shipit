@@ -22,6 +22,8 @@ DEPENDENCIES = {"pyyaml", "tree-sitter", "tree-sitter-typescript", "pglast"}
 EXTERNAL = {"yaml", "tree_sitter", "tree_sitter_typescript", "pglast"}
 ALLOWED = {
     "app", "app.local_cli", "app.local_store", "app.logging_config", "app.log_context", "app.capabilities",
+    "app.archive_names", "app.dependency_snapshot", "app.finding_text",
+    "app.path_policy", "app.project_checks", "app.threat_context",
     "app.ingest", "app.ingest.validators", "app.report", "app.report.sarif", "app.report.plain_language",
     "app.report.dependency_snapshot", "app.report.project_checks", "app.report.threat_context",
     "app.sca", "app.sca.lockfile_primitives", "app.sca.lockfiles", "app.sca.resolved_locks", "app.sca.bun_lock",

@@ -1,7 +1,7 @@
 """A missing package-index result must not silently dismiss baseline evidence."""
 from copy import deepcopy
 
-from app.report.dependency_snapshot import unrepeated_dependency_matches
+from app.dependency_snapshot import unrepeated_dependency_matches
 from app.report.html import render_report
 
 
