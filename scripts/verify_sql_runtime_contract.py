@@ -8,9 +8,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import psycopg
@@ -18,7 +18,7 @@ import psycopg
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.proof.sql_runtime_contract import run_contract  # noqa: E402
+from app.proof.sql.sql_runtime_contract import run_contract  # noqa: E402
 
 
 class TargetError(ValueError):

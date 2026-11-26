@@ -19,8 +19,8 @@ from pathlib import Path
 import pytest
 
 from app.proof.compare import build_proof_report
-from app.proof.cors_oracle import PROBE_ORIGIN
-from app.proof.cors_probe import TEMPLATE_ID, run_cors_probe
+from app.proof.cors.cors_oracle import PROBE_ORIGIN
+from app.proof.cors.cors_probe import TEMPLATE_ID, run_cors_probe
 
 
 class _Boot:
@@ -184,7 +184,7 @@ def test_the_probe_only_ever_addresses_loopback() -> None:
     turn the runner into an SSRF relay against its own network. The URL is
     built from the port we published and nothing else — asserted against the
     real _default_fetch, not the injected one."""
-    import app.proof.cors_probe as probe_mod
+    import app.proof.cors.cors_probe as probe_mod
 
     seen: dict = {}
 
@@ -226,7 +226,7 @@ def test_the_probe_sends_a_credential() -> None:
     import sys
     import types as pytypes
 
-    import app.proof.cors_probe as probe_mod
+    import app.proof.cors.cors_probe as probe_mod
 
     seen: dict = {}
 

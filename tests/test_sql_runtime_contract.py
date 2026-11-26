@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 import json
 import os
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
 from psycopg.pq import TransactionStatus
 
-from app.proof import sql_runtime_contract as contract
-
+from app.proof.sql import sql_runtime_contract as contract
 
 # Capture before other tests temporarily alter environment variables.
 _TEST_DSN = os.environ.get("SQL_CONTRACT_DATABASE_URL")

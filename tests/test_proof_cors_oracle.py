@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.proof.cors_oracle import PROBE_ORIGIN, evaluate_cors_response
+from app.proof.cors.cors_oracle import PROBE_ORIGIN, evaluate_cors_response
 
 _OTHER = "https://app.customer.example"
 

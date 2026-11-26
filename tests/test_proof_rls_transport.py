@@ -14,7 +14,7 @@ import json
 import httpx
 import pytest
 
-from app.proof import rls_probe as probe
+from app.proof.rls import rls_probe as probe
 
 PROJECT = "https://abcdefghijklmnopqrst.supabase.co"
 KEY = "synthetic-public-test-key"
@@ -216,7 +216,8 @@ def test_shared_budget_cancels_native_request_and_preserves_partial_run(monkeypa
     import base64
     import io
     import zipfile
-    from app.proof import rls_live_check as live
+
+    from app.proof.rls import rls_live_check as live
 
     def segment(value):
         return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")

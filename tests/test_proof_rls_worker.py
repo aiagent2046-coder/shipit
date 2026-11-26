@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from app.proof import rls_probe as probe
+from app.proof.rls import rls_probe as probe
 
 KEY = "synthetic-public-key-private-pipe-only"
 PUBLISHABLE_KEY = "sb_publishable_syntheticWorkerTestKey_12345678"

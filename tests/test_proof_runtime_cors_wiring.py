@@ -14,8 +14,8 @@ import pytest
 
 import app.proof.stage as stage_mod
 from app.proof.compare import build_proof_report
+from app.proof.cors.runtime_cors import runtime_cors_applicable, runtime_cors_enabled
 from app.proof.render import render_proof_markdown
-from app.proof.runtime_cors import runtime_cors_applicable, runtime_cors_enabled
 from app.proof_types import ExploitAttempt, ProofReport
 
 

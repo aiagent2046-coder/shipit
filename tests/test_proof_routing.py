@@ -7,7 +7,7 @@ import io
 import zipfile
 from dataclasses import dataclass, field
 
-from app.proof.routing import select_templates
+from app.proof.core.routing import select_templates
 from app.proof.stage import ProofStageResult, _pick_primary, run_proof_stage
 from app.proof_types import ExploitAttempt, ProofReport
 

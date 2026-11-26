@@ -1,18 +1,25 @@
 """Exercise the planner/executor boundary, not just the standalone SQL harness."""
-from copy import deepcopy
 import hashlib
 import io
 import json
 import os
+from copy import deepcopy
 
 import pytest
 
 from app.llm.client import LLMClient
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.security_agent import agent_record
 from app.scan.static import run_static_scan
-from app.scan.synthetic_record import (CONTRACT_ID, FIXTURE_SHA256, SCHEMA_SHA256, SUMMARY_KEYS,
-    normalize_synthetic_contract, normalize_synthetic_summary, unavailable_summary)
+from app.scan.synthetic_record import (
+    CONTRACT_ID,
+    FIXTURE_SHA256,
+    SCHEMA_SHA256,
+    SUMMARY_KEYS,
+    normalize_synthetic_contract,
+    normalize_synthetic_summary,
+    unavailable_summary,
+)
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_evidence_acquisition import HTTP_SQL, RUNTIME_GAPS
 from tests.test_security_agent import archive, sql_findings
 
@@ -185,7 +192,7 @@ def test_native_command_preserves_existing_output_before_any_execution(tmp_path,
 
 @pytest.mark.skipif(not os.environ.get("SQL_CONTRACT_DATABASE_URL"), reason="Dedicated PostgreSQL target is required")
 def test_agent_selects_and_runs_real_postgres_contract(tmp_path):
-    from app.proof.sql_runtime_executor import SyntheticSqlExecutor
+    from app.proof.sql.sql_runtime_executor import SyntheticSqlExecutor
 
     canary = tmp_path / "project-executed"
     result = investigate(SyntheticSqlExecutor(), {"src/query.py": HTTP_SQL,

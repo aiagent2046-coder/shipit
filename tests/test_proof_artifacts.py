@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.proof.artifacts import (
+from app.proof.core.artifacts import (
     artifacts_to_json,
     build_artifacts,
     render_artifacts_markdown,

@@ -31,8 +31,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.proof.rls_probe import run_rls_probe  # noqa: E402
-from app.proof.supabase_target import TargetRefusal, target_from_key  # noqa: E402
+from app.proof.rls.rls_probe import run_rls_probe  # noqa: E402
+from app.proof.rls.supabase_target import TargetRefusal, target_from_key  # noqa: E402
 
 CONSENT_PHRASE = "i-own-this-project"
 

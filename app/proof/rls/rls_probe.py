@@ -38,7 +38,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from app.proof.rls_oracle import RlsVerdict, evaluate_rls_response
+from app.proof.rls.rls_oracle import RlsVerdict, evaluate_rls_response
 from app.proof_types import ExploitAttempt
 
 TEMPLATE_ID = "rls_open_runtime"
@@ -208,7 +208,7 @@ def _request_headers(anon_key: str) -> dict[str, str]:
     key validation; this lower-level guard also refuses privileged credentials
     for direct probe and worker callers.
     """
-    from app.proof.supabase_target import decode_jwt_claims, is_publishable_key
+    from app.proof.rls.supabase_target import decode_jwt_claims, is_publishable_key
 
     key = (anon_key or "").strip()
     if not key or not key.isascii() or any(ord(char) <= 32 or ord(char) == 127 for char in key):
@@ -248,10 +248,10 @@ def _default_fetch(base: str, anon_key: str, table: str,
     if len(request) > MAX_WORKER_REQUEST_BYTES:
         raise ValueError("invalid worker request")
     with subprocess.Popen(
-        [sys.executable, "-m", "app.proof.rls_fetch_worker"],
+        [sys.executable, "-m", "app.proof.rls.rls_fetch_worker"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        cwd=Path(__file__).resolve().parents[2],
+        cwd=Path(__file__).resolve().parents[3],
     ) as process:
         try:
             output, _ = process.communicate(

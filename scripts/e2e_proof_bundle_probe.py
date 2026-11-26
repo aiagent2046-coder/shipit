@@ -78,7 +78,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.proof.compare import build_proof_report  # noqa: E402
-from app.proof.rls_probe import run_rls_probe  # noqa: E402
+from app.proof.rls.rls_probe import run_rls_probe  # noqa: E402
 from app.scan.secrets import _is_demo_jwt, _jwt_severity  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent

@@ -10,7 +10,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from app.proof.rls_metadata import parse_access_review, review_metadata
+from app.proof.rls.rls_metadata import parse_access_review, review_metadata
 
 DATABASE = os.environ.get("DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DATABASE, reason="requires disposable PostgreSQL")

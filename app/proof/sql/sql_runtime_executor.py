@@ -9,21 +9,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
-from app.proof import sql_runtime_contract as contract
+from app.proof.sql import sql_runtime_contract as contract
 from scripts.verify_sql_runtime_contract import TargetError, target_options, unavailable
-
 
 CONTRACT_ID = contract.CONTRACT_ID
 WALL_TIMEOUT_SECONDS = 60
 MAX_OUTPUT_BYTES = 256 * 1024
 _POLL_SECONDS = 0.05
-_ROOT = Path(__file__).resolve().parents[2]
+_ROOT = Path(__file__).resolve().parents[3]
 _WORKER = _ROOT / "scripts" / "verify_sql_runtime_contract.py"
 _STAGES = ("before", "after", "mutation")
 _CASES = ("normal", "missing", "empty", "unicode", "quote", "backslash", "sql_payload",

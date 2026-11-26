@@ -67,8 +67,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from app.proof.rls_oracle import evaluate_rls_response
-from app.proof.rls_probe import (
+from app.proof.rls.rls_oracle import evaluate_rls_response
+from app.proof.rls.rls_probe import (
     UnsafeProjectUrl,
     _safe_table_name,
     validate_project_url,

@@ -6,7 +6,7 @@ import io
 import zipfile
 
 from app.proof import run_proof_pair
-from app.proof.workspace import apply_plan_to_zip
+from app.proof.core.workspace import apply_plan_to_zip
 
 
 def _zip_with(files: dict[str, str], *, wrapper: str = "repo/") -> bytes:

@@ -6,7 +6,7 @@ import io
 import zipfile
 
 from app.proof.compare import run_proof_pair
-from app.proof.registry import get_template, list_templates
+from app.proof.core.registry import get_template, list_templates
 
 
 def _zip_with(files: dict[str, str]) -> bytes:

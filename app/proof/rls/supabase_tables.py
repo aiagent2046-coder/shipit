@@ -50,6 +50,7 @@ from typing import BinaryIO
 
 from app.scan.rls import private_shape, read_committed_sql
 from app.scan.sql_schema import parse_schema
+
 # The matchers moved to app/scan/table_names.py when a second consumer
 # appeared (app/scan/schema_drift.py). They are re-exported here because
 # scripts/measure_rls_blind_spot.py imports `_TYPES_MARKER` and `_TYPES_TABLE`

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.proof.rls_oracle import evaluate_rls_response, summarise_rows
+from app.proof.rls.rls_oracle import evaluate_rls_response, summarise_rows
 
 ROWS = [
     {"id": "u1", "email": "founder@example.com", "sentiment": "positive"},

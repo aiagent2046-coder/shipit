@@ -22,8 +22,9 @@ findings sit in files the plan rewrites.
 """
 
 from app.proof.compare import build_proof_report, run_proof_pair
+from app.proof.core.registry import TEMPLATE_IDS, get_template, list_templates
+from app.proof.core.workspace import apply_plan_to_zip
 from app.proof.gate import decide_proof_gate, proof_gate_mode
-from app.proof.registry import TEMPLATE_IDS, get_template, list_templates
 from app.proof.render import (
     render_proof_markdown,
     render_proof_sections,
@@ -31,7 +32,6 @@ from app.proof.render import (
 )
 from app.proof.stage import ProofStageResult, run_proof_stage
 from app.proof_types import ExploitAttempt, ProofReport, proof_report_to_json
-from app.proof.workspace import apply_plan_to_zip
 
 __all__ = [
     "TEMPLATE_IDS",
