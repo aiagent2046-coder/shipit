@@ -38,6 +38,49 @@ def _stage(value: object) -> bool:
     return isinstance(value, dict) and isinstance(value.get("status"), str) and value["status"] in STATUSES
 
 
+def _forensics_record(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    if (
+        value.get("status") not in ("completed", "partial", "unavailable")
+        or value.get("runtime_verified") is not False
+        or value.get("automatic_patch") is not False
+        or not _count(value.get("max_delta_score"))
+        or not _count(value.get("flagged_files"))
+        or not _count(value.get("ffi_bridges"))
+        or not isinstance(value.get("cross_boundary_chains"), list)
+        or not isinstance(value.get("observations"), list)
+    ):
+        return None
+    clean_obs = []
+    for obs in value["observations"][:32]:
+        if (not isinstance(obs, dict) or _text(obs.get("kind"), 128) is None
+                or obs.get("verification_status") != "unverified"):
+            return None
+        row = {"kind": obs["kind"], "verification_status": "unverified"}
+        for field in ("source_file", "binary_path", "language"):
+            if field in obs and _text(obs[field], 1024) is not None:
+                row[field] = obs[field]
+        for field in ("source_delta_score", "max_delta_score"):
+            if field in obs and _count(obs[field]):
+                row[field] = obs[field]
+        for field in ("sink_imports", "signal_kinds", "kev_cve_ids"):
+            if (field in obs and isinstance(obs[field], list)
+                    and all(_text(x, 128) is not None for x in obs[field][:16])):
+                row[field] = list(obs[field][:16])
+        clean_obs.append(row)
+    return {
+        "status": value["status"],
+        "runtime_verified": False,
+        "automatic_patch": False,
+        "max_delta_score": value["max_delta_score"],
+        "flagged_files": value["flagged_files"],
+        "ffi_bridges": value["ffi_bridges"],
+        "cross_boundary_chains": len(value["cross_boundary_chains"]),
+        "observations": clean_obs,
+    }
+
+
 def project_checks_record(value: object) -> dict | None:
     """Drop unknown/raw facts and fail visibly for malformed saved evidence."""
     if value is None:
@@ -168,11 +211,16 @@ def project_checks_record(value: object) -> dict | None:
             clean["provider"] = provider
         facts = artifact.get("facts")
         if isinstance(facts, dict):
-            clean["fact_counts"] = {
+            counts = {
                 key: len(facts[key])
                 for key in ("functions", "imports")
                 if isinstance(facts.get(key), list) and len(facts[key]) <= 1000
             }
+            if isinstance(facts.get("exports"), list) and len(facts["exports"]) <= 1000:
+                counts["exports"] = len(facts["exports"])
+            if isinstance(facts.get("call_edges"), list) and len(facts["call_edges"]) <= 4000:
+                counts["call_edges"] = len(facts["call_edges"])
+            clean["fact_counts"] = counts
         clean_artifacts.append(clean)
     if (
         (
@@ -190,11 +238,17 @@ def project_checks_record(value: object) -> dict | None:
     reason = dependencies.get("reason")
     if reason is not None and _text(reason) is None:
         return invalid
+    forensics_clean = None
+    if "forensics" in value and value["forensics"] is not None:
+        forensics_clean = _forensics_record(value["forensics"])
+        if forensics_clean is None:
+            return invalid
     return {
         "schema": 1,
         "archive_sha256": value["archive_sha256"],
         "runtime_verified": False,
         **({"threat_context": threat_context_record(value["threat_context"])} if "threat_context" in value else {}),
+        **({"forensics": forensics_clean} if forensics_clean is not None else {}),
         "source": {key: source[key] for key in ("status", "checks_run", "checks_not_run", "findings", "agent_status")},
         "dependencies": {
             "status": dependencies["status"],
@@ -253,6 +307,25 @@ def project_checks_rows(value: object) -> list[tuple[str, str]]:
         ),
         ("Project archive SHA-256", record["archive_sha256"]),
     ]
+    if "forensics" in record:
+        f_rec = record["forensics"]
+        rows.append((
+            "Forensic correlation",
+            f"{label(f_rec['status'])}; max Code DNA score: {f_rec['max_delta_score']}; "
+            f"FFI bridges: {f_rec['ffi_bridges']}; cross-boundary chains: {f_rec['cross_boundary_chains']}; "
+            f"observations: {len(f_rec['observations'])}. Static correlation only; runtime unverified.",
+        ))
+        for idx, obs in enumerate(f_rec["observations"], 1):
+            parts = [obs["kind"].replace("_", " ")]
+            if "source_file" in obs:
+                parts.append(f"source: {obs['source_file']}")
+            if "binary_path" in obs:
+                parts.append(f"binary: {obs['binary_path']}")
+            if "sink_imports" in obs:
+                parts.append("sinks: " + ", ".join(obs["sink_imports"]))
+            if "kev_cve_ids" in obs:
+                parts.append("KEV: " + ", ".join(obs["kev_cve_ids"]))
+            rows.append((f"Forensic observation {idx}", "; ".join(parts) + " (unverified)."))
     if dependencies["reason"]:
         rows.append(("Dependency check scope", dependencies["reason"]))
     rows.append(("Catalog SHA-256", dependencies["catalog_sha256"] or "Not recorded"))

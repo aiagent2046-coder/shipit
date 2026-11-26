@@ -484,6 +484,7 @@ async def _tool_get_audit(args: dict, ctx: dict) -> dict:
         "finding_count": len(findings),
         "findings_returned": min(len(findings), MAX_FINDINGS_RETURNED),
         "findings": [_public_finding(f) for f in findings[:MAX_FINDINGS_RETURNED]],
+        **({"forensics": _public_forensics(score)} if _public_forensics(score) is not None else {}),
         "untrusted_data_note": UNTRUSTED_EXPLANATION,
     }
 
@@ -573,6 +574,53 @@ def _detail_text(exc: HTTPException) -> str:
         text = detail.get("detail") or ""
         return f"{reason}: {text}".strip().rstrip(":")
     return str(detail)
+
+
+def _public_forensics(score: object) -> dict | None:
+    """Allowlisted forensic summary with every repository-controlled path fenced."""
+    if not isinstance(score, dict):
+        return None
+    manifest = score.get("scan_manifest")
+    if not isinstance(manifest, dict):
+        return None
+    project_checks = manifest.get("project_checks")
+    if not isinstance(project_checks, dict):
+        return None
+    from app.project_checks import project_checks_record
+
+    normalized = project_checks_record(project_checks)
+    if not isinstance(normalized, dict) or "forensics" not in normalized:
+        return None
+    f_rec = normalized["forensics"]
+    fenced_obs = []
+    for obs in f_rec.get("observations", [])[:20]:
+        item: dict[str, Any] = {
+            "kind": obs["kind"],
+            "verification_status": obs["verification_status"],
+        }
+        if "source_file" in obs:
+            item["source_file"] = fence_optional(obs["source_file"])
+        if "binary_path" in obs:
+            item["binary_path"] = fence_optional(obs["binary_path"])
+        if "language" in obs:
+            item["language"] = obs["language"]
+        for num_key in ("source_delta_score", "max_delta_score"):
+            if num_key in obs:
+                item[num_key] = obs[num_key]
+        for list_key in ("sink_imports", "signal_kinds", "kev_cve_ids"):
+            if list_key in obs:
+                item[list_key] = list(obs[list_key])
+        fenced_obs.append(item)
+    return {
+        "status": f_rec["status"],
+        "runtime_verified": False,
+        "automatic_patch": False,
+        "max_delta_score": f_rec["max_delta_score"],
+        "flagged_files": f_rec["flagged_files"],
+        "ffi_bridges": f_rec["ffi_bridges"],
+        "cross_boundary_chains": f_rec["cross_boundary_chains"],
+        "observations": fenced_obs,
+    }
 
 
 def _public_finding(finding: object) -> dict:

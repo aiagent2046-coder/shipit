@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 
 from app.scan.binary_evidence import collect_binary_evidence
+from app.scan.forensic_chain import run_forensic_investigation
 from app.scan.threat_context import build_threat_context
+from app.scan.version import AUDIT_ENGINE_VERSION
 
 
 def dependency_checks(sca: dict, findings: int | None = None) -> dict:
@@ -49,11 +51,33 @@ def project_checks(data: bytes, static: dict, sca: dict, dependency_findings: in
     agent = static.get('security_agent') or {}
     source_incomplete = failures or incomplete or agent.get('status') in {'partial', 'unavailable'}
     source_status = 'unavailable' if not checks else 'partial' if source_incomplete else 'completed'
+    binary_static = collect_binary_evidence(data)
+    threat_ctx = build_threat_context(dependency_records or [], catalog=threat_catalog, as_of=threat_as_of)
+    forensics = run_forensic_investigation(
+        data,
+        engine_version=AUDIT_ENGINE_VERSION,
+        dependency_records=dependency_records,
+        threat_catalog=threat_catalog,
+        threat_as_of=threat_as_of,
+        precomputed_binary=binary_static,
+        precomputed_threat=threat_ctx,
+    )
     return {
         'schema': 1, 'archive_sha256': hashlib.sha256(data).hexdigest(), 'runtime_verified': False,
         'source': {'status': source_status, 'checks_run': len(checks), 'checks_not_run': len(failures),
                    'findings': len(static.get('findings') or []), 'agent_status': agent.get('status', 'not_run')},
         'dependencies': dependency_checks(sca, dependency_findings),
-        'binary_static': collect_binary_evidence(data),
-        'threat_context': build_threat_context(dependency_records or [], catalog=threat_catalog, as_of=threat_as_of),
+        'binary_static': binary_static,
+        'threat_context': threat_ctx,
+        'forensics': {
+            'status': forensics['status'],
+            'runtime_verified': False,
+            'automatic_patch': False,
+            'max_delta_score': forensics['code_dna']['max_delta_score'],
+            'flagged_files': len(forensics['code_dna']['flagged_files']),
+            'ffi_bridges': len(forensics['code_dna']['ffi_bridges']),
+            'cross_boundary_chains': forensics['cross_boundary_chains'],
+            'observations': forensics['forensic_observations'],
+            'chain_receipts': forensics['forensic_chain']['receipts'],
+        },
     }

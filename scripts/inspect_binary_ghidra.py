@@ -22,9 +22,11 @@ MAX_BINARY_BYTES = 10 * 1024 * 1024
 MAX_OUTPUT_BYTES = 1024 * 1024
 MAX_LOG_BYTES = 2 * 1024 * 1024
 MAX_FACTS = 1000
+MAX_EDGES = 4000
 WALL_SECONDS = 120
 EXPORTER = Path(__file__).with_name("ghidra") / "ExportDrydockFacts.java"
 ADDRESS = re.compile(r"[A-Za-z_][A-Za-z0-9_]*:[0-9a-fA-F]{1,16}\Z")
+WL_HASH_RE = re.compile(r"[0-9a-f]{64}\Z")
 LIMITATIONS = ["static_discovery_only", "function_recovery_not_proven_complete", "imports_are_not_vulnerabilities",
                "external_locations_are_not_runtime_addresses", "target_not_executed", "no_security_verdict"]
 
@@ -76,37 +78,95 @@ def parse_result(data: bytes, binary_sha256: str) -> dict:
         raise Unavailable("output_limit")
     try:
         value = json.loads(data, object_pairs_hook=_unique, parse_constant=_nonfinite)
-        keys = {"version", "ghidra_version", "executable_sha256", "executable_format", "language_id",
-                "compiler_spec_id", "image_base", "analysis_timed_out", "truncated", "functions", "imports"}
-        if (type(value) is not dict or set(value) != keys or type(value["version"]) is not int
-                or value["version"] != 1 or value["ghidra_version"] != VERSION
+        if type(value) is not dict or type(value.get("version")) is not int or value["version"] not in (1, 2):
+            raise Unavailable("invalid_result")
+        version = value["version"]
+        base_keys = {"version", "ghidra_version", "executable_sha256", "executable_format", "language_id",
+                     "compiler_spec_id", "image_base", "analysis_timed_out", "truncated", "functions", "imports"}
+        keys = base_keys if version == 1 else (base_keys | {"exports", "call_edges"})
+        if (set(value) != keys or value["ghidra_version"] != VERSION
                 or value["executable_sha256"] != binary_sha256
                 or value["executable_format"] != "Executable and Linking Format (ELF)"
                 or value["language_id"] != "x86:LE:64:default" or value["compiler_spec_id"] != "gcc"
                 or type(value["analysis_timed_out"]) is not bool or type(value["truncated"]) is not bool
                 or not isinstance(value["image_base"], str) or not ADDRESS.fullmatch(value["image_base"])):
             raise Unavailable("invalid_result")
-        for field, expected in (("functions", {"entry", "name", "body_addresses"}),
+
+        fn_base_v2 = {"entry", "name", "body_addresses", "basic_blocks", "cfg_edges", "indirect_calls", "is_thunk"}
+        fn_topo_v2 = fn_base_v2 | {"back_edges", "branch_blocks", "cyclomatic", "wl_hash"}
+        fn_ints = {"body_addresses", "basic_blocks", "cfg_edges", "indirect_calls",
+                   "back_edges", "branch_blocks", "cyclomatic"}
+        function_entries = set()
+        import_locations = set()
+
+        for field, expected in (("functions", {"entry", "name", "body_addresses"} if version == 1 else fn_base_v2),
                                 ("imports", {"library", "name", "external_location"})):
             rows = value[field]
             if type(rows) is not list or len(rows) > MAX_FACTS:
                 raise Unavailable("invalid_result")
             identifiers = []
             for row in rows:
-                if type(row) is not dict or set(row) != expected:
+                if type(row) is not dict:
+                    raise Unavailable("invalid_result")
+                is_topo_fn = version == 2 and field == "functions" and set(row) == fn_topo_v2
+                valid_shape = (set(row) == expected) or is_topo_fn
+                if not valid_shape:
                     raise Unavailable("invalid_result")
                 for name, item in row.items():
-                    if name == "body_addresses":
+                    if name in fn_ints:
                         if type(item) is not int or not 0 <= item <= 2**64 - 1:
+                            raise Unavailable("invalid_result")
+                    elif name == "is_thunk":
+                        if type(item) is not bool:
+                            raise Unavailable("invalid_result")
+                    elif name == "wl_hash":
+                        if not isinstance(item, str) or not WL_HASH_RE.fullmatch(item):
                             raise Unavailable("invalid_result")
                     elif not isinstance(item, str) or not 1 <= len(item) <= 256:
                         raise Unavailable("invalid_result")
                 location = row.get("entry", row.get("external_location"))
                 if not ADDRESS.fullmatch(location):
                     raise Unavailable("invalid_result")
-                identifiers.append(row["entry"] if field == "functions" else (
-                    row["library"], row["name"], row["external_location"]))
+                if field == "functions":
+                    function_entries.add(row["entry"])
+                    identifiers.append(row["entry"])
+                else:
+                    import_locations.add(row["external_location"])
+                    identifiers.append((row["library"], row["name"], row["external_location"]))
             if identifiers != sorted(set(identifiers)):
+                raise Unavailable("invalid_result")
+
+        if version == 2:
+            exports = value["exports"]
+            if type(exports) is not list or len(exports) > MAX_FACTS:
+                raise Unavailable("invalid_result")
+            export_ids = []
+            for row in exports:
+                if (type(row) is not dict or set(row) != {"entry", "name"}
+                        or not isinstance(row["entry"], str) or not 1 <= len(row["entry"]) <= 256
+                        or not isinstance(row["name"], str) or not 1 <= len(row["name"]) <= 256
+                        or not ADDRESS.fullmatch(row["entry"]) or row["entry"] not in function_entries):
+                    raise Unavailable("invalid_result")
+                export_ids.append((row["entry"], row["name"]))
+            if export_ids != sorted(set(export_ids)):
+                raise Unavailable("invalid_result")
+
+            edges = value["call_edges"]
+            if type(edges) is not list or len(edges) > MAX_EDGES:
+                raise Unavailable("invalid_result")
+            edge_ids = []
+            for row in edges:
+                if (type(row) is not dict or set(row) != {"caller", "target", "target_kind"}
+                        or not isinstance(row["caller"], str) or not 1 <= len(row["caller"]) <= 256
+                        or not isinstance(row["target"], str) or not 1 <= len(row["target"]) <= 256
+                        or row["target_kind"] not in ("internal", "import")
+                        or not ADDRESS.fullmatch(row["caller"]) or not ADDRESS.fullmatch(row["target"])
+                        or row["caller"] not in function_entries
+                        or (row["target_kind"] == "internal" and row["target"] not in function_entries)
+                        or (row["target_kind"] == "import" and row["target"] not in import_locations)):
+                    raise Unavailable("invalid_result")
+                edge_ids.append((row["caller"], row["target"], row["target_kind"]))
+            if edge_ids != sorted(set(edge_ids)):
                 raise Unavailable("invalid_result")
         return value
     except (KeyError, TypeError, UnicodeError, json.JSONDecodeError, RecursionError) as error:
@@ -176,7 +236,6 @@ def run_headless(command: list[str], environment: dict, cwd: Path, result: Path,
             return handle.read(MAX_OUTPUT_BYTES + 1)
     finally:
         if process is not None:
-            # launch.sh leaves a shell parent; kill/reap the entire session on every exit.
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -257,7 +316,6 @@ def main() -> int:
     args = parser.parse_args()
     if args.diagnostic_log is not None and args.diagnostic_log.exists():
         parser.error("diagnostic log must be a new file")
-    # Refuse overwrites before spending resources or launching anything.
     with args.output.open("x", encoding="utf-8") as output:
         report = inspect(args.binary.absolute(), args.ghidra_archive.absolute(), args.java_home.absolute(),
                          args.diagnostic_log.absolute() if args.diagnostic_log else None)

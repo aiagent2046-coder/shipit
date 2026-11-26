@@ -30,12 +30,19 @@ MAX_REPORTS = 8
 MAX_ARTIFACTS = 32
 MAX_BINARY_BYTES = 10 * 1024 * 1024
 MAX_FACTS = 1000
+MAX_EDGES = 4000
+SENSITIVE_BINARY_IMPORTS = frozenset({
+    'system', 'popen', 'execve', 'execvp', 'execvpe', 'execl', 'execlp', 'posix_spawn', 'posix_spawnp',
+    'dlopen', 'dlsym', 'mprotect', 'memfd_create', 'ptrace',
+    'socket', 'connect', 'bind', 'listen', 'accept', 'sendto', 'recvfrom',
+})
 GHIDRA_VERSION = '12.2'
 DISTRIBUTION_SHA256 = '2c2cd776db3c1f6a097ba418922378ac3649cadd5e844a6f5f088ae628a7be67'
 # Pinned exporter bytes, validated against the standalone producer in tests.
-EXPORTER_SHA256 = 'a75d80df2ebd40282c3a574357c412509af7bc621a651066736946972ad45ec6'
+EXPORTER_SHA256 = '980bd10259451c2564bf9cb64f894ba324114ac7041c573e499d20ce171f1031'
 PROFILE = 'elf-x86-64-static-v1'
 ADDRESS = re.compile(r'[A-Za-z_][A-Za-z0-9_]*:[0-9a-fA-F]{1,16}\Z')
+WL_HASH_RE = re.compile(r'[0-9a-f]{64}\Z')
 PRODUCER_LIMITATIONS = [
     'static_discovery_only', 'function_recovery_not_proven_complete', 'imports_are_not_vulnerabilities',
     'external_locations_are_not_runtime_addresses', 'target_not_executed', 'no_security_verdict',
@@ -125,38 +132,96 @@ def _text(value):
 
 
 def _facts(value, digest):
-    keys = {'version', 'ghidra_version', 'executable_sha256', 'executable_format', 'language_id',
-            'compiler_spec_id', 'image_base', 'analysis_timed_out', 'truncated', 'functions', 'imports'}
-    if (type(value) is not dict or set(value) != keys or type(value['version']) is not int
-            or value['version'] != 1 or value['ghidra_version'] != GHIDRA_VERSION
+    if type(value) is not dict or type(value.get('version')) is not int or value['version'] not in (1, 2):
+        raise ValueError('invalid_report')
+    version = value['version']
+    base_keys = {'version', 'ghidra_version', 'executable_sha256', 'executable_format', 'language_id',
+                 'compiler_spec_id', 'image_base', 'analysis_timed_out', 'truncated', 'functions', 'imports'}
+    expected_keys = base_keys if version == 1 else (base_keys | {'exports', 'call_edges'})
+    if (set(value) != expected_keys or value['ghidra_version'] != GHIDRA_VERSION
             or value['executable_sha256'] != digest
             or value['executable_format'] != 'Executable and Linking Format (ELF)'
             or value['language_id'] != 'x86:LE:64:default' or value['compiler_spec_id'] != 'gcc'
             or type(value['analysis_timed_out']) is not bool or type(value['truncated']) is not bool
             or not _text(value['image_base']) or not ADDRESS.fullmatch(value['image_base'])):
         raise ValueError('invalid_report')
-    for name, expected in (('functions', {'entry', 'name', 'body_addresses'}),
+
+    fn_base_v2 = {'entry', 'name', 'body_addresses', 'basic_blocks', 'cfg_edges', 'indirect_calls', 'is_thunk'}
+    fn_topo_v2 = fn_base_v2 | {'back_edges', 'branch_blocks', 'cyclomatic', 'wl_hash'}
+    fn_int_fields = {'body_addresses', 'basic_blocks', 'cfg_edges', 'indirect_calls',
+                     'back_edges', 'branch_blocks', 'cyclomatic'}
+
+    function_entries = set()
+    import_locations = set()
+
+    for name, expected in (('functions', {'entry', 'name', 'body_addresses'} if version == 1 else fn_base_v2),
                            ('imports', {'library', 'name', 'external_location'})):
         rows = value[name]
         if type(rows) is not list or len(rows) > MAX_FACTS:
             raise ValueError('invalid_report')
         identifiers = []
         for row in rows:
-            if type(row) is not dict or set(row) != expected:
+            if type(row) is not dict:
+                raise ValueError('invalid_report')
+            valid_shape = (set(row) == expected) or (version == 2 and name == 'functions' and set(row) == fn_topo_v2)
+            if not valid_shape:
                 raise ValueError('invalid_report')
             for field, item in row.items():
-                if field == 'body_addresses':
+                if field in fn_int_fields:
                     if type(item) is not int or not 0 <= item <= 2**64 - 1:
+                        raise ValueError('invalid_report')
+                elif field == 'is_thunk':
+                    if type(item) is not bool:
+                        raise ValueError('invalid_report')
+                elif field == 'wl_hash':
+                    if not isinstance(item, str) or not WL_HASH_RE.fullmatch(item):
                         raise ValueError('invalid_report')
                 elif not _text(item):
                     raise ValueError('invalid_report')
             location = row.get('entry', row.get('external_location'))
             if not ADDRESS.fullmatch(location):
                 raise ValueError('invalid_report')
-            identifiers.append(row['entry'] if name == 'functions' else (
-                row['library'], row['name'], row['external_location']))
+            if name == 'functions':
+                function_entries.add(row['entry'])
+                identifiers.append(row['entry'])
+            else:
+                import_locations.add(row['external_location'])
+                identifiers.append((row['library'], row['name'], row['external_location']))
         if identifiers != sorted(set(identifiers)):
             raise ValueError('invalid_report')
+
+    if version == 2:
+        exports = value['exports']
+        if type(exports) is not list or len(exports) > MAX_FACTS:
+            raise ValueError('invalid_report')
+        export_ids = []
+        for row in exports:
+            if (type(row) is not dict or set(row) != {'entry', 'name'}
+                    or not _text(row['entry']) or not _text(row['name'])
+                    or not ADDRESS.fullmatch(row['entry'])
+                    or row['entry'] not in function_entries):
+                raise ValueError('invalid_report')
+            export_ids.append((row['entry'], row['name']))
+        if export_ids != sorted(set(export_ids)):
+            raise ValueError('invalid_report')
+
+        edges = value['call_edges']
+        if type(edges) is not list or len(edges) > MAX_EDGES:
+            raise ValueError('invalid_report')
+        edge_ids = []
+        for row in edges:
+            if (type(row) is not dict or set(row) != {'caller', 'target', 'target_kind'}
+                    or not _text(row['caller']) or not _text(row['target'])
+                    or row['target_kind'] not in ('internal', 'import')
+                    or not ADDRESS.fullmatch(row['caller']) or not ADDRESS.fullmatch(row['target'])
+                    or row['caller'] not in function_entries
+                    or (row['target_kind'] == 'internal' and row['target'] not in function_entries)
+                    or (row['target_kind'] == 'import' and row['target'] not in import_locations)):
+                raise ValueError('invalid_report')
+            edge_ids.append((row['caller'], row['target'], row['target_kind']))
+        if edge_ids != sorted(set(edge_ids)):
+            raise ValueError('invalid_report')
+
     return value
 
 
@@ -201,7 +266,6 @@ def _report(report, digest, size):
         status, reason = 'completed', 'static_export_completed'
     if report['status'] != status or report['reason'] != reason:
         raise ValueError('report_status_mismatch')
-    # JSON roundtrip both detaches caller-owned objects and preserves labels strictly as data.
     return _json(_encode({'status': status, 'reason': reason, 'provider': provider, 'facts': facts}))
 
 
@@ -269,7 +333,6 @@ def collect_binary_evidence(data: bytes) -> dict:
                     result['artifacts_omitted'] += 1
                 continue
             detected[path] = kind
-        # Include missing targets explicitly instead of silently dropping their reports.
         paths = sorted(set(detected) | set(reports))
         if len(paths) > MAX_ARTIFACTS:
             result['artifacts_omitted'] += len(paths) - MAX_ARTIFACTS
@@ -359,3 +422,57 @@ def attach_binary_reports(data: bytes, attachments: list[tuple[str, bytes]]) -> 
     combined = output.getvalue()
     validate_zip(io.BytesIO(combined), len(combined))
     return combined
+
+
+def summarize_binary_reachability(facts: dict) -> dict | None:
+    """Compute bounded static reachability from exported entry points to sensitive imports."""
+    if not isinstance(facts, dict) or facts.get('version') != 2:
+        return None
+    fn_by_entry = {row['entry']: row for row in facts.get('functions', [])}
+    imp_by_loc = {row['external_location']: row for row in facts.get('imports', [])}
+    adjacency: dict[str, list[tuple[str, str]]] = {}
+    for edge in facts.get('call_edges', []):
+        adjacency.setdefault(edge['caller'], []).append((edge['target'], edge['target_kind']))
+
+    reachable_sinks = []
+    for exp in facts.get('exports', []):
+        start = exp['entry']
+        visited = {start}
+        queue = [(start, [start])]
+        while queue:
+            current, path = queue.pop(0)
+            if len(path) > 16:
+                continue
+            for target, kind in adjacency.get(current, ()):
+                if kind == 'import':
+                    imp = imp_by_loc.get(target)
+                    if imp and imp['name'] in SENSITIVE_BINARY_IMPORTS:
+                        reachable_sinks.append({
+                            'export_entry': start,
+                            'export_name': exp['name'],
+                            'import_library': imp['library'],
+                            'import_name': imp['name'],
+                            'external_location': target,
+                            'hop_count': len(path),
+                            'call_chain': list(path),
+                        })
+                elif target not in visited and target in fn_by_entry:
+                    visited.add(target)
+                    queue.append((target, [*path, target]))
+
+    flat_dispatchers = [
+        {'entry': row['entry'], 'name': row['name'],
+         'basic_blocks': row['basic_blocks'], 'indirect_calls': row['indirect_calls']}
+        for row in facts.get('functions', [])
+        if not row['is_thunk'] and row['indirect_calls'] > 0 and row['basic_blocks'] <= 2
+    ]
+    from app.scan.cfg_topology import analyze_function_topologies
+    topology = analyze_function_topologies(facts.get('functions', []))
+    return {
+        'schema': 1,
+        'export_count': len(facts.get('exports', [])),
+        'call_edge_count': len(facts.get('call_edges', [])),
+        'reachable_sensitive_imports': reachable_sinks,
+        'indirect_call_stubs': flat_dispatchers,
+        'topology': topology,
+    }
