@@ -182,4 +182,3 @@ def test_tarjan_scc_distinguishes_goto_error_cleanup_from_flattened_state_machin
     ])
 
     assert [r["name"] for r in topo["flattened_dispatchers"]] == ["ollvm_dispatcher"]
-
