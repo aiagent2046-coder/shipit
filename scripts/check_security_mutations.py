@@ -75,7 +75,7 @@ MUTATIONS = (
         "tests/test_authorization_properties.py::test_rejected_rls_capabilities_do_not_fetch_write_or_spend_owner_budget",
     ),
     Mutation(
-        "payment-valid-replay-refused", "app/db.py",
+        "payment-valid-replay-refused", "app/db/_billing.py",
         'if row is None or row["tier"] != TIER_PRO:',
         'if row is None or row["tier"] == TIER_PRO:',
         "tests/test_billing_properties_postgres.py::test_reordered_replays_preserve_independent_grants",

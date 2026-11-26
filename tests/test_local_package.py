@@ -58,6 +58,7 @@ def test_real_closure_and_runtime_lock_are_complete():
             'app/scan/recommendations.py', 'app/lockfiles/resolved_locks.py', 'app/lockfiles/bun_lock.py',
             'app/snapshot_record.py'} <= names
     assert not names & {'app/main.py', 'app/db.py', 'app/scan_pipeline.py', 'app/scan/llm_scan.py'}
+    assert not any(n.startswith('app/db/') for n in names)
     lock, pins = builder.locked_requirements(ROOT, builder.DEPENDENCIES)
     assert len(pins) == 4
     assert '--hash=sha256:' in lock
