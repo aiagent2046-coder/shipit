@@ -89,6 +89,92 @@ public class ExportDrydockFacts extends HeadlessScript {
         return backEdges;
     }
 
+    private static int[] computeCyclicSccMetrics(int nodeCount, List<List<Integer>> succs) {
+        if (nodeCount == 0) return new int[]{0, 0};
+        int[] indices = new int[nodeCount];
+        Arrays.fill(indices, -1);
+        int[] lowlink = new int[nodeCount];
+        boolean[] onStack = new boolean[nodeCount];
+        int[] tarjanStack = new int[nodeCount];
+        int tarjanTop = 0;
+        int currentIndex = 0;
+        int maxSccBlocks = 0;
+        int maxSccHubIn = 0;
+
+        for (int start = 0; start < nodeCount; start++) {
+            if (indices[start] != -1) continue;
+            List<int[]> callStack = new ArrayList<>();
+            indices[start] = currentIndex;
+            lowlink[start] = currentIndex;
+            currentIndex++;
+            tarjanStack[tarjanTop++] = start;
+            onStack[start] = true;
+            callStack.add(new int[]{start, 0});
+
+            while (!callStack.isEmpty()) {
+                int[] frame = callStack.get(callStack.size() - 1);
+                int v = frame[0];
+                int ci = frame[1];
+                List<Integer> children = succs.get(v);
+                if (ci < children.size()) {
+                    frame[1] = ci + 1;
+                    int w = children.get(ci);
+                    if (indices[w] == -1) {
+                        indices[w] = currentIndex;
+                        lowlink[w] = currentIndex;
+                        currentIndex++;
+                        tarjanStack[tarjanTop++] = w;
+                        onStack[w] = true;
+                        callStack.add(new int[]{w, 0});
+                    } else if (onStack[w]) {
+                        if (indices[w] != -1) {
+                            lowlink[v] = Math.min(lowlink[v], indices[w]);
+                        }
+                    }
+                } else {
+                    callStack.remove(callStack.size() - 1);
+                    if (!callStack.isEmpty()) {
+                        int parent = callStack.get(callStack.size() - 1)[0];
+                        lowlink[parent] = Math.min(lowlink[parent], lowlink[v]);
+                    }
+                    if (lowlink[v] == indices[v]) {
+                        List<Integer> comp = new ArrayList<>();
+                        while (true) {
+                            int w = tarjanStack[--tarjanTop];
+                            onStack[w] = false;
+                            comp.add(w);
+                            if (w == v) break;
+                        }
+                        boolean cyclic = comp.size() != 1;
+                        if (!cyclic && !comp.isEmpty()) {
+                            int only = comp.get(0);
+                            cyclic = succs.get(only).contains(only);
+                        }
+                        if (cyclic) {
+                            Set<Integer> compSet = new HashSet<>(comp);
+                            int hubIn = 0;
+                            Map<Integer, Integer> inDeg = new HashMap<>();
+                            for (int u : comp) {
+                                for (int dst : succs.get(u)) {
+                                    if (compSet.contains(dst)) {
+                                        int nextIn = inDeg.getOrDefault(dst, 0) + 1;
+                                        inDeg.put(dst, nextIn);
+                                        if (nextIn > hubIn) hubIn = nextIn;
+                                    }
+                                }
+                            }
+                            if (comp.size() > maxSccBlocks || (comp.size() == maxSccBlocks && hubIn > maxSccHubIn)) {
+                                maxSccBlocks = comp.size();
+                                maxSccHubIn = hubIn;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return new int[]{maxSccBlocks, maxSccHubIn};
+    }
+
     private String resolveTarget(FunctionManager manager, Address target, Set<String> outKind) {
         Function callee = manager.getFunctionAt(target);
         if (callee != null) {
@@ -295,6 +381,7 @@ public class ExportDrydockFacts extends HeadlessScript {
             String wlHash = sha256Hex("wl1|n=" + nBlocks + "|" + String.join(",", finalMultiset));
 
             int backEdges = countBackEdgesDfs(nBlocks, succs);
+            int[] sccMetrics = computeCyclicSccMetrics(nBlocks, succs);
             int cyclomatic = nBlocks > 0 ? Math.max(1, cfgEdges - nBlocks + 2) : 1;
 
             Map<String, Object> row = new LinkedHashMap<>();
@@ -307,6 +394,8 @@ public class ExportDrydockFacts extends HeadlessScript {
             row.put("branch_blocks", branchBlocks);
             row.put("cyclomatic", cyclomatic);
             row.put("indirect_calls", indirectCalls);
+            row.put("max_scc_blocks", sccMetrics[0]);
+            row.put("max_scc_hub_in", sccMetrics[1]);
             row.put("is_thunk", function.isThunk());
             row.put("wl_hash", wlHash);
             functions.add(row);

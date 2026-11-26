@@ -174,14 +174,16 @@ def run_forensic_investigation(
                 })
 
         for f in dna["flagged_files"]:
-            if f["delta_score"] >= 6:
+            sig_kinds = sorted({s["kind"] for s in f["signals"]})
+            has_active_signal = any(k != "silent_exception_swallow" for k in sig_kinds)
+            if f["delta_score"] >= 6 and has_active_signal:
                 observations.append({
                     "kind": "high_obfuscation_delta_source",
                     "verification_status": "unverified",
                     "source_file": f["file"],
                     "language": f["language"],
                     "source_delta_score": f["delta_score"],
-                    "signal_kinds": sorted({s["kind"] for s in f["signals"]}),
+                    "signal_kinds": sig_kinds,
                 })
 
         for art in topo["artifacts"]:

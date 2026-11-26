@@ -94,8 +94,9 @@ def parse_result(data: bytes, binary_sha256: str) -> dict:
 
         fn_base_v2 = {"entry", "name", "body_addresses", "basic_blocks", "cfg_edges", "indirect_calls", "is_thunk"}
         fn_topo_v2 = fn_base_v2 | {"back_edges", "branch_blocks", "cyclomatic", "wl_hash"}
+        fn_scc_v2 = fn_topo_v2 | {"max_scc_blocks", "max_scc_hub_in"}
         fn_ints = {"body_addresses", "basic_blocks", "cfg_edges", "indirect_calls",
-                   "back_edges", "branch_blocks", "cyclomatic"}
+                   "back_edges", "branch_blocks", "cyclomatic", "max_scc_blocks", "max_scc_hub_in"}
         function_entries = set()
         import_locations = set()
 
@@ -108,7 +109,7 @@ def parse_result(data: bytes, binary_sha256: str) -> dict:
             for row in rows:
                 if type(row) is not dict:
                     raise Unavailable("invalid_result")
-                is_topo_fn = version == 2 and field == "functions" and set(row) == fn_topo_v2
+                is_topo_fn = version == 2 and field == "functions" and set(row) in (fn_topo_v2, fn_scc_v2)
                 valid_shape = (set(row) == expected) or is_topo_fn
                 if not valid_shape:
                     raise Unavailable("invalid_result")
