@@ -19,96 +19,105 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import (
-    Depends, FastAPI, Form, HTTPException, Request, UploadFile,
+    Depends,
+    FastAPI,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from app import alerts, monitor
-from app.service_flags import (  # noqa: F401  (re-exported for the test suite)
-    _emergency_stop_active,
-    _llm_paid_ops_enabled,
-    _reset_service_flag_cache,
-)
-from app.audit_workflow import _AuditForm, _elapsed_ms, create_audit
-from app.llm_budget import (  # noqa: F401  (re-exported for the test suite)
-    DEFAULT_DAILY_SPEND_CAP_USD, _ANON_SPEND_ALERT_FRACTION,
-    _anon_daily_cap_exceeded,
-)
+from app import alerts, sandbox_client
 from app.accounts import (
     CSRF_HEADER,
     validate_api_key_pepper_configured,
 )
+from app.audit_history import ensure_paid_baseline, refresh_cached_preview_history
+from app.audit_workflow import _AuditForm, _elapsed_ms, create_audit
 from app.billing import telegram_stars
-from app.ops_endpoints import router as ops_router
-from app.routes.accounts import router as accounts_router
-from app.routes.bank_transfer import router as bank_transfer_router
-from app.routes.billing import router as billing_router
-from app.routes.capabilities import router as capabilities_router
-from app.routes.operator import router as operator_router
-from app.routes.reads import router as reads_router
-from app.routes.bundle_check import router as bundle_check_router
-from app.routes.rls_check import router as rls_check_router
-from app.routes.session import router as session_router
-from app.routes.storefront import router as storefront_router
-from app.routes.yookassa import router as yookassa_router
+from app.db import monitoring_processor_lock as monitoring_processor_lock
 from app.db import (
     AuditRepository,
     FixOutcomeRepository,
     FixpackJobRepository,
     LlmUsageRepository,
-    MonitoringRunRepository,
     PaymentRepository,
     ProcessorLockBusy,
-    ServiceFlagsRepository,
-    SubscriptionRepository,
     database_url_from_env,
     fixpack_processor_lock,
-    monitoring_processor_lock,
 )
-from app.audit_history import refresh_cached_preview_history, ensure_paid_baseline
-from app.sca.snapshot import baseline_is_current
-from app.sca.refresh import inventory_payload
 from app.deploypack import github_app
 from app.deploypack.delivery import DeliveryError, render_pr_body
-from app.deploypack.paid_delivery_auth import paid_delivery_token, get_paid_delivery_store
 from app.deploypack.delivery_auth import (
-    DeliveryAuthorizationError, authorize_repository_delivery, validate_delivery_token,
+    DeliveryAuthorizationError,
+    authorize_repository_delivery,
+    validate_delivery_token,
 )
 from app.deploypack.generate import UnsupportedForDeployPack
+from app.deploypack.paid_delivery_auth import get_paid_delivery_store, paid_delivery_token
 from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
 from app.deploypack.preview import PreviewRegistry
+from app.fixpack.gate import run_semantic_check
 from app.fixpack.generate import (
-    has_auto_fixable_findings,
     build_fixpack_plan,
+    has_auto_fixable_findings,
+)
+from app.fixpack.generate import (
     render_pr_body as render_fixpack_pr_body,
+)
+from app.fixpack.generate import (
     render_pr_title as render_fixpack_pr_title,
 )
-from app.fixpack.gate import run_semantic_check
+from app.ingest.stack_detect import detect_stack
+from app.ingest.validators import (
+    MAX_ARCHIVE_BYTES,
+    ArchiveValidationError,
+    validate_zip,
+)
+from app.llm.client import LLMClient
+from app.llm_budget import (  # noqa: F401  (re-exported for the test suite)
+    _ANON_SPEND_ALERT_FRACTION,
+    DEFAULT_DAILY_SPEND_CAP_USD,
+    _anon_daily_cap_exceeded,
+)
+from app.log_context import log_context, set_log_context
+from app.logging_config import configure_logging, environment_from_env
+from app.ops_endpoints import router as ops_router
 from app.proof import (
     decide_proof_gate,
     render_proof_markdown,
     run_proof_stage,
 )
-from app.ingest.github_fetch import RepoFetchError
-from app.ingest.stack_detect import detect_stack
-from app import sandbox_client
+from app.ratelimit import RateLimiter, RateLimitExceeded, RateLimitStoreError
+from app.routes.accounts import router as accounts_router
+from app.routes.bank_transfer import router as bank_transfer_router
+from app.routes.billing import router as billing_router
+from app.routes.bundle_check import router as bundle_check_router
+from app.routes.capabilities import router as capabilities_router
+from app.routes.operator import router as operator_router
+from app.routes.reads import router as reads_router
+from app.routes.rls_check import router as rls_check_router
+from app.routes.session import router as session_router
+from app.routes.storefront import router as storefront_router
+from app.routes.yookassa import router as yookassa_router
 from app.sandbox_client import SandboxRunnerUnavailable
-from app.llm.client import LLMClient
-from app.log_context import log_context, set_log_context
-from app.logging_config import configure_logging, environment_from_env
-from app.monitor import (
-    repo_url_from_full_name,
+from app.sca.refresh import inventory_payload
+from app.sca.snapshot import baseline_is_current
+from app.scan_pipeline import (
+    AUDIT_ENGINE_VERSION,
+    BASIS_FULL,
+    LLM_FAILURE_BILLING,
+    content_digest,
+    llm_failure_kind,
+    run_scan,
 )
-from app.monitor.diff import new_high_severity_findings
-from app.ratelimit import RateLimitExceeded, RateLimitStoreError, RateLimiter
-from app.scan_pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
-                              LLM_FAILURE_BILLING, content_digest, llm_failure_kind, run_scan)
-from app.ingest.validators import (
-    MAX_ARCHIVE_BYTES,
-    ArchiveValidationError,
-    validate_zip,
+from app.service_flags import (  # noqa: F401  (re-exported for the test suite)
+    _emergency_stop_active,
+    _llm_paid_ops_enabled,
+    _reset_service_flag_cache,
 )
 
 logger = logging.getLogger(__name__)
@@ -291,14 +300,12 @@ from app.github_repo import (  # noqa: E402
     _VALID_OWNER_REPO_SEGMENT,
     _parse_github_repo_url,
 )
+from app.mcp.server import router as mcp_router  # noqa: E402
 from app.routes._shared import (  # noqa: E402
     _client_key,
     _require_bearer_token,
     _secret_equals,
 )
-from app.routes.github import router as github_router  # noqa: E402
-from app.routes.telegram import router as telegram_router  # noqa: E402
-from app.mcp.server import router as mcp_router  # noqa: E402
 from app.routes.dependencies import (  # noqa: E402
     get_account_repo,
     get_audit_job_repo,
@@ -318,6 +325,8 @@ from app.routes.dependencies import (  # noqa: E402
     get_service_flags_repo,
     get_subscription_repo,
 )
+from app.routes.github import router as github_router  # noqa: E402
+from app.routes.telegram import router as telegram_router  # noqa: E402
 
 # Names re-exported for the test suite, listed so a linter does not read them as
 # dead imports. Keep in sync with the import block above.
@@ -343,14 +352,6 @@ __all__ = [
     "get_service_flags_repo",
     "get_subscription_repo",
 ]
-
-
-
-
-
-
-
-
 
 
 async def _record_llm_usage(
@@ -425,14 +426,6 @@ async def _record_llm_usage(
 # their spend is bounded by PRO_DAILY_AUDIT_LIMIT (a call count) instead.
 
 
-
-
-
-
-
-
-
-
 async def _run_scan_offthread(*args, **kwargs):
     """run_scan on the threadpool: it is blocking, and its LLM stage can take
     minutes, so it must never occupy the event loop.
@@ -449,12 +442,6 @@ async def _run_scan_offthread(*args, **kwargs):
     the single definition of "how an audit scan is run", shared by the worker
     (which imports it) and the monitoring path -- the two must not drift."""
     return await run_in_threadpool(run_scan, *args, **kwargs)
-
-
-
-
-
-
 
 
 async def run_repo_audit(
@@ -596,9 +583,6 @@ async def run_repo_audit(
     }
 
 
-
-
-
 # Fix Pack processor lease tuning. A 'running' job whose lease is older
 # than STALE_LEASE_MINUTES is treated as a crashed worker and reaped; a
 # real generation (repo fetch + plan + Docker semantic check + PR) is
@@ -628,30 +612,6 @@ def _monitoring_process_token() -> str | None:
     env-var pattern as FIXPACK_PROCESS_TOKEN. Unset -> the endpoint 503s rather
     than accept a no-op auth check."""
     return os.environ.get("MONITORING_PROCESS_TOKEN") or None
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @app.exception_handler(Exception)
@@ -724,190 +684,6 @@ async def rate_limit_store_handler(
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-async def _process_one_monitoring_run(
-    run: dict, *, monitoring_repo: MonitoringRunRepository,
-    subscription_repo: SubscriptionRepository, audit_repo: AuditRepository,
-    llm_client: LLMClient, repo_fetcher, transport,
-    llm_usage_repo: LlmUsageRepository,
-) -> str:
-    """Do the real monitoring work for one claimed run: re-audit the repo, diff
-    against its previous audit, and DM every active subscriber the NEW
-    critical/high findings. Returns the outcome ('notified', 'no_new',
-    'unfetchable', 'unauditable', 'no_subscription', or 'failed') and advances
-    the run to a terminal state so a re-run of the processor doesn't pick it up
-    again.
-
-    This is the slow half lifted verbatim from the old synchronous
-    _handle_monitoring_push, now off the HTTP path. The diff is taken against
-    the latest completed audit of the SAME repo captured BEFORE run_repo_audit
-    persists this run's audit, so a subscriber is told only about findings that
-    are newly present (new_high_severity_findings, keyed on rule_id+file).
-
-    Every failure is made visible (mark_failed with a diagnosable error + a
-    logged traceback), the same hardening as _process_one_paid_job -- a 'failed'
-    run must never be silent. A caught failure is terminal; only a true crash
-    (the run left stuck 'running') is recovered by the stale-lease reaper."""
-    run_id = run["id"]
-    repo_full_name = run["repo_full_name"]
-    # Same ambient-context binding _process_one_paid_job does, for the same
-    # reason: this is the other durable queue, and its drain loop is the only
-    # place that knows which run the lines below belong to. Bare set (not
-    # log_context()) matches that function -- the loop is sequential, so each
-    # claimed run overwrites the previous one's ids rather than nesting.
-    set_log_context(job_id=str(run_id))
-    try:
-        subs = await subscription_repo.list_active_for_repo(repo_full_name)
-        if not subs:
-            # Every subscription lapsed between enqueue and now -- nothing to
-            # notify. Benign; close the run out.
-            await monitoring_repo.mark_done(run_id)
-            return "no_subscription"
-
-        # Baseline BEFORE the new audit persists, so the diff reflects only what
-        # this push introduced.
-        # BASIS_FULL: this path re-audits at full depth, so only full prior
-        # audits are a comparable baseline. A free static-only row in the
-        # baseline would make every LLM finding look newly appeared.
-        #
-        # The UNION of prior audits, not the latest one. A single-pass scan is
-        # a sample: measured on four same-engine runs of unchanged code
-        # (2026-08-18), high-severity keys reproduce at ~65-84% and one real
-        # critical showed in 2 of 4 -- against a latest-only baseline, about
-        # every third high on a re-audit would DM the subscriber as "new"
-        # with nothing pushed. Seen in ANY prior audit means not news.
-        prior = await audit_repo.list_findings_by_repo_url(
-            repo_full_name, BASIS_FULL)
-        previous_findings = [f for findings in prior for f in findings]
-
-        try:
-            result = await run_repo_audit(
-                repo_url_from_full_name(repo_full_name), llm_client=llm_client,
-                audit_repo=audit_repo, repo_fetcher=repo_fetcher,
-                llm_usage_repo=llm_usage_repo, job_type="monitoring",
-            )
-        except RepoFetchError:
-            # Repo went private/was deleted (404, indistinguishable by design).
-            # Benign terminal state; the interval claim already stopped
-            # re-enqueues.
-            await monitoring_repo.mark_done(run_id)
-            return "unfetchable"
-
-        if result is None:
-            await monitoring_repo.mark_done(run_id)
-            return "unauditable"
-
-        # The audit this run produced (or reused from the content-hash cache).
-        # run_repo_audit doesn't bind it, so without this the notify half of the
-        # run can't be joined to the audit it is diffing.
-        set_log_context(audit_id=str(result["audit_id"]))
-
-        new_findings = new_high_severity_findings(
-            previous_findings, result["findings"]
-        )
-        notified = 0
-        if new_findings:
-            token = telegram_stars.bot_token_from_env()
-            text = _monitoring_alert_text(repo_full_name, new_findings)
-            for sub in subs:
-                chat_id = sub.get("telegram_chat_id") or sub.get("telegram_user_id")
-                if not (chat_id and token):
-                    continue
-                try:
-                    await telegram_stars.send_message(
-                        str(chat_id), text, token=token, transport=transport
-                    )
-                    notified += 1
-                except Exception:  # noqa: BLE001 -- one bad DM must not abort the rest
-                    logger.warning("monitoring alert send failed", exc_info=True)
-
-        await monitoring_repo.mark_done(run_id)
-        return "notified" if new_findings else "no_new"
-    except Exception as exc:  # noqa: BLE001 -- every failure must be recorded
-        # Fetch/audit/persist/notify errors land here. Log the full traceback
-        # and persist a short reason so the failure is diagnosable from both the
-        # logs and a `select ... from monitoring_runs` query -- never silent.
-        logger.exception("monitoring run %s failed during processing", run_id)
-        await monitoring_repo.mark_failed(run_id, _failure_detail(exc))
-        return "failed"
-
-
-def _monitoring_alert_text(repo_full_name: str, new_findings: list[dict]) -> str:
-    """One DM summarizing the new critical/high findings from a monitored push.
-    Lists up to a handful by rule/file so the subscriber knows what changed
-    without us dumping an unbounded wall of text."""
-    n = len(new_findings)
-    lines = [
-        f"⚠️ Continuous monitoring: {n} new "
-        f"critical/high finding{'s' if n != 1 else ''} in {repo_full_name}",
-        "",
-    ]
-    shown = new_findings[:10]
-    for f in shown:
-        sev = (f.get("severity") or "").upper()
-        rule = f.get("rule_id") or "?"
-        path = f.get("file") or "?"
-        lines.append(f"• [{sev}] {rule} — {path}")
-    if n > len(shown):
-        lines.append(f"… and {n - len(shown)} more")
-    return "\n".join(lines)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _reject_if_nothing_to_fix(audit: dict) -> None:
     """409 when this audit has no finding a Fix Pack could ever rewrite.
 
@@ -972,10 +748,6 @@ async def _reject_if_fixpack_already_live(fixpack_repo, audit_id: str) -> None:
                       "extra work.",
         },
     )
-
-
-
-
 
 
 async def _resolve_pr_token(owner: str, repo: str) -> str | None:
@@ -1751,138 +1523,6 @@ async def process_paid_fixpacks(
     return summary
 
 
-@app.post("/internal/monitoring/process-pending")
-async def process_pending_monitoring(
-    request: Request,
-    subscription_repo: SubscriptionRepository = Depends(get_subscription_repo),
-    monitoring_repo: MonitoringRunRepository = Depends(get_monitoring_repo),
-    audit_repo: AuditRepository = Depends(get_audit_repo),
-    llm_client: LLMClient = Depends(get_llm_client),
-    repo_fetcher=Depends(get_repo_fetcher),
-    transport=Depends(get_billing_transport),
-    llm_usage_repo: LlmUsageRepository = Depends(get_llm_usage_repo),
-    service_flags_repo: ServiceFlagsRepository = Depends(get_service_flags_repo),
-) -> dict:
-    """Operational endpoint: drain the pending continuous-monitoring backlog.
-    The GitHub push webhook enqueues one 'pending' run per eligible push and
-    ACKs immediately (see MONITORING_ASYNC_PLAN.md); this drains those runs off
-    the HTTP path -- re-audit the repo, diff against its previous audit, and DM
-    subscribers the new critical/high findings. Meant for a scheduled caller (a
-    systemd timer, same as the Fix Pack processor and the reaper -- this repo
-    ships no unit file).
-
-    Mirrors POST /internal/fixpack/process-paid exactly: a session advisory lock
-    so two overlapping timer firings don't stampede; a stale-lease reap first (a
-    crashed worker's run back to 'pending', bounded by attempts, else 'failed');
-    then claim runs one at a time, each atomically leased 'pending' -> 'running'
-    so a single run can never be processed by two passes at once.
-
-    Requires `Authorization: Bearer <MONITORING_PROCESS_TOKEN>`, constant-time
-    compared. 503 if the token isn't configured on this deployment -- an
-    unconfigured processor is an operational gap to notice, not a silent no-op.
-
-    Returns a summary the scheduler can log. If another run already holds the
-    lock, returns {"skipped_locked": true} instead."""
-    token = _monitoring_process_token()
-    if not token:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "monitoring_process_not_configured",
-                    "detail": "MONITORING_PROCESS_TOKEN is not set on this deployment"},
-        )
-    _require_bearer_token(request, token)
-
-    # Emergency stop applies to monitoring too (each run is an LLM-spending
-    # re-audit). A background drain has no user to 503, so it soft-degrades:
-    # leave the backlog 'pending' and return without claiming anything. The
-    # stop's operator alert has already fired inside _emergency_stop_active.
-    paused, _note = await _emergency_stop_active(service_flags_repo)
-    if paused:
-        return {"skipped_paused": True}
-
-    # Monitoring is withdrawn from sale (#184). Gating only the webhook closed
-    # the entrance and left this drain able to process whatever was already
-    # queued. Production's queue happened to be empty when that shipped, but
-    # "happened to be" is not a guarantee, and every run here is an
-    # LLM-spending re-audit of a product nobody can buy.
-    #
-    # Soft-degrade like the emergency stop above: a background drain has no
-    # user to 503, so leave the backlog untouched and say so. Unlike the
-    # emergency stop, ALERT -- a pending run existing at all while the product
-    # is withdrawn means something got past the webhook gate or predates it,
-    # and the operator needs the row id to find out which.
-    if not monitor.MONITORING_FOR_SALE:
-        queued = await monitoring_repo.pending_summary()
-        total = (queued or {}).get("total", 0)
-        if total:
-            listed = ", ".join(
-                f"{r['id']} ({r['repo_full_name']})"
-                for r in (queued or {}).get("runs", [])
-            )
-            await alerts.notify_operator(
-                f"Drydock: {total} monitoring run(s) are queued while "
-                f"monitoring is WITHDRAWN from sale. Nothing was processed and "
-                f"nothing was charged, but a push got past the webhook gate or "
-                f"these rows predate it \u2014 worth finding out which.\n\n"
-                f"Oldest first: {listed}\n\n"
-                f"Inspect: select * from monitoring_runs where id in (...);"
-            )
-        return {"skipped_not_for_sale": True, "pending": total}
-
-    summary = {"processed": 0, "notified": 0, "no_new": 0, "unfetchable": 0,
-               "unauditable": 0, "no_subscription": 0, "failed": 0, "requeued": 0}
-    try:
-        async with monitoring_processor_lock():
-            reaped = await monitoring_repo.reap_stale_running(
-                max_age_minutes=STALE_LEASE_MINUTES,
-                max_attempts=MAX_JOB_ATTEMPTS,
-            )
-            summary["requeued"] = reaped["requeued"]
-            summary["failed"] += reaped["failed"]
-
-            while True:
-                run = await monitoring_repo.claim_one_pending()
-                if run is None:
-                    break
-                summary["processed"] += 1
-                outcome = await _process_one_monitoring_run(
-                    run, monitoring_repo=monitoring_repo,
-                    subscription_repo=subscription_repo, audit_repo=audit_repo,
-                    llm_client=llm_client, repo_fetcher=repo_fetcher,
-                    transport=transport, llm_usage_repo=llm_usage_repo,
-                )
-                if outcome in summary:
-                    summary[outcome] += 1
-                else:
-                    summary["failed"] += 1
-    except ProcessorLockBusy:
-        # Another run holds the lock — benign. The scheduler logs and moves on.
-        return {"skipped_locked": True}
-    return summary
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 create_audit = app.post(
     "/v1/audits", status_code=202,
     openapi_extra={"requestBody": {"content": {
@@ -2096,7 +1736,16 @@ app.include_router(session_router)
 app.include_router(storefront_router)
 app.include_router(yookassa_router)
 from app.routes.paid_delivery import router as paid_delivery_router  # noqa: E402
+
 app.include_router(paid_delivery_router)
+from app.routes.monitoring import (  # noqa: E402
+    _monitoring_alert_text as _monitoring_alert_text,
+    _process_one_monitoring_run as _process_one_monitoring_run,
+    process_pending_monitoring as process_pending_monitoring,
+    router as monitoring_router,
+)
+
+app.include_router(monitoring_router)
 # Off unless MCP_ENABLED is set: the router is always mounted, and the
 # endpoint itself answers 404 when the flag is unset. Mounting
 # conditionally would make the flag a restart-time decision that an
