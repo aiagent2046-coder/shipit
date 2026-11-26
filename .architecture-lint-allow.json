@@ -3,7 +3,6 @@
   "wide_directory": {
     "app": 51,
     "app/proof": 27,
-    "app/routes": 18,
     "app/scan": 130,
     "scripts": 88,
     "tests": 444

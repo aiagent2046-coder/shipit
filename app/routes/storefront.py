@@ -10,7 +10,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.billing import bank_transfer, yookassa
+from app.capabilities import manifest
 from app.notify import telegram
+from app.scan_pipeline import AUDIT_ENGINE_VERSION
 
 router = APIRouter()
 
@@ -100,3 +102,9 @@ async def get_billing_details() -> dict:
         "bank": bank_transfer.bank_details_from_env(),
         "telegram_bot": telegram.bot_username_from_env(),
     }
+
+
+@router.get("/v1/capabilities")
+async def capabilities() -> dict:
+    """Every static check, the rule ids it can emit, and what it cannot see."""
+    return manifest(AUDIT_ENGINE_VERSION)
