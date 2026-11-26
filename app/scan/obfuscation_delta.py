@@ -62,7 +62,7 @@ PY_SUFFIXES = (".py",)
 JS_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx")
 EXCLUDED_PARTS = frozenset({
     "node_modules", ".git", ".next", "dist", "build", "vendor", "__pycache__", ".venv",
-    "tests", "test", "fixtures",
+    "tests", "test", "fixtures", "benchmarks", "benchmark", "bench",
 })
 
 STDLIB_SURFACE_MODULES = {

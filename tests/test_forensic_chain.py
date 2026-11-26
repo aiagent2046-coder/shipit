@@ -257,3 +257,22 @@ def test_ffi_matcher_resolves_posix_lib_prefix_and_cpython_wheel_abi_names():
         "pkg/_crypto_accel.cpython-312-x86_64-linux-gnu.so"
     ]
     assert _match_ffi_to_artifact("other_dir/hook.so", artifacts) == []
+
+def test_pure_silent_exception_swallow_and_benchmarks_do_not_trigger_high_obfuscation_observation():
+    swallows = "\n".join(
+        f"def f{i}():\n    try:\n        return {i}\n    except Exception:\n        pass\n"
+        for i in range(7)
+    )
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("pkg/core.py", swallows)
+        zf.writestr(
+            "pkg/benchmarks/bench_heavy.py",
+            "x = getattr(__import__('o'+'s'), 'sys'+'tem')\n",
+        )
+    zbytes = buf.getvalue()
+    res = run_forensic_investigation(zbytes, engine_version="test-cal-v1")
+    assert res["code_dna"]["files_analyzed"] == 1
+    assert not any(o["kind"] == "high_obfuscation_delta_source" for o in res["forensic_observations"])

@@ -134,3 +134,52 @@ def test_stripped_decoder_stub_is_caught_purely_by_cfg_topology_and_wl_signature
         and "cfg-loop-indirect-stager-v1" in o["signal_kinds"]
         for o in obs
     )
+
+def test_tarjan_scc_distinguishes_goto_error_cleanup_from_flattened_state_machine():
+
+    from app.scan.cfg_topology import analyze_function_topologies
+
+
+
+    # 1. Cython/CPython goto-error shape: 16 blocks, 12 branches all jumping forward to cleanup block 15
+
+    goto_blocks = [{"is_return": i == 15, "direct_calls": 0, "indirect_calls": 0} for i in range(16)]
+
+    goto_edges = [(i, i + 1) for i in range(14)] + [(i, 15) for i in range(12)] + [(14, 15)]
+
+    goto_dna = compute_cfg_dna(goto_blocks, goto_edges)
+
+    assert goto_dna["max_scc_blocks"] == 0 and goto_dna["max_scc_hub_in"] == 0
+
+
+
+    # 2. True OLLVM/CFF dispatcher: header(0) -> 12 state blocks(1..12) -> latch(13) -> header(0), plus exit(14..15)
+
+    cff_blocks = [{"is_return": i == 15, "direct_calls": 0, "indirect_calls": 0} for i in range(16)]
+
+    cff_edges = (
+
+        [(0, s) for s in range(1, 11)]
+
+        + [(s, 13) for s in range(1, 11)]
+
+        + [(10, 11), (11, 12), (12, 13), (13, 0), (0, 14), (14, 15)]
+
+    )
+
+    cff_dna = compute_cfg_dna(cff_blocks, cff_edges)
+
+    assert cff_dna["max_scc_blocks"] >= 14 and cff_dna["max_scc_hub_in"] >= 8
+
+
+
+    topo = analyze_function_topologies([
+
+        {"entry": "ram:00101000", "name": "cython_goto_cleanup", "is_thunk": False, **goto_dna},
+
+        {"entry": "ram:00102000", "name": "ollvm_dispatcher", "is_thunk": False, **cff_dna},
+
+    ])
+
+    assert [r["name"] for r in topo["flattened_dispatchers"]] == ["ollvm_dispatcher"]
+
