@@ -12,7 +12,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from app.report.sarif import build_sarif
+from app.scan.sarif_format import build_sarif
 from app.scan.manifest import scan_manifest
 from app.scan.kev_catalog import load_catalog as load_kev_catalog
 from app.scan.static import run_static_scan

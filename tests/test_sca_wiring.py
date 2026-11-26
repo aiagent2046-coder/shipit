@@ -17,7 +17,7 @@ from app.llm.client import LLMClient
 from app.report.evidence import manifest_rows
 from app.sca.osv import OsvClient
 from app.sca.stage import (SCA_ENABLED_ENV, RULE_ID, freshness, sca_client_for)
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, run_scan
+from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
 from tests.test_sca_stage import FakeTransport, LODASH_ADVISORY, make_zip
 
 

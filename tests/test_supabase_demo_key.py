@@ -41,7 +41,7 @@ import pytest
 
 from app.report.html import render_report
 from app.report.plain_language import PLAIN
-from app.scan.pipeline import run_static_scan
+from app.scan_pipeline import run_static_scan
 
 # The token from that migration, reproduced byte for byte: HS256 over
 # {"iss":"supabase-demo","role":"service_role","exp":1983812996} with the

@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from app.scan.pipeline import BASIS_STATIC_ONLY
-from app.sca.lockfiles import (
+from app.scan_pipeline import BASIS_STATIC_ONLY
+from app.lockfiles import (
     MAX_LOCKFILES,
     collect_dependency_inventory,
     dependency_occurrences,

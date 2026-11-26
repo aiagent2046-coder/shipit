@@ -10,7 +10,7 @@ import posixpath
 import re
 
 from app.scan import consequence_evidence as c
-from app.scan import external_call_assessment as e
+from app.scan import external_call_primitives as e
 from app.scan import guard_context as g
 from app.scan import imported_error_context as i
 

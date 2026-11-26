@@ -279,6 +279,7 @@ def test_preflight_failures_keep_cors_and_never_read_body(monkeypatch):
     from fastapi import FastAPI
     from starlette.requests import Request
 
+    import app.audit_workflow as audit_mod
     import app.main as main
     from app.ratelimit import RateLimitStoreError
 
@@ -318,7 +319,7 @@ def test_preflight_failures_keep_cors_and_never_read_body(monkeypatch):
     async def paused(repo):
         return True, "operator pause"
 
-    monkeypatch.setattr(main, "_emergency_stop_active", paused)
+    monkeypatch.setattr(audit_mod, "_emergency_stop_active", paused)
     response = client.post("/v1/audits", **kwargs)
     assert response.status_code == 503
     assert response.json()["detail"] == {"reason": "service_paused", "detail": "operator pause"}

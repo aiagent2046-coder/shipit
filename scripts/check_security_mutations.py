@@ -36,7 +36,7 @@ class Mutation:
 
 MUTATIONS = (
     Mutation(
-        "cve-exclusive-upper-bound", "app/scan/cve_match.py",
+        "cve-exclusive-upper-bound", "app/scan/advisory_evaluation.py",
         "upper_relation > 0 or (exclusive is not None and upper_relation == 0)",
         "upper_relation > 0",
         "tests/test_cve_properties.py::test_generated_cve_and_osv_bounds_follow_integer_interval",
@@ -48,14 +48,14 @@ MUTATIONS = (
         "tests/test_cve_properties.py::test_source_uncertainty_and_evidence_survive_source_reordering",
     ),
     Mutation(
-        "dependency-second-origin-dropped", "app/sca/lockfiles.py",
+        "dependency-second-origin-dropped", "app/lockfiles/lockfiles.py",
         "occurrences=occurrences,",
         "occurrences=occurrences[:1],",
         "tests/test_dependency_occurrence_properties.py::"
         "test_two_manifests_retain_both_origins_without_duplicate_assessments",
     ),
     Mutation(
-        "malformed-manifest-gap-hidden", "app/sca/lockfiles.py",
+        "malformed-manifest-gap-hidden", "app/lockfiles/lockfiles.py",
         "incomplete[manifest] = reason",
         "pass  # deliberately lose a selected manifest's failure",
         "tests/test_manifest_fuzz_integration.py::"

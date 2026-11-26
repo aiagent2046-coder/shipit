@@ -5,9 +5,9 @@ import zipfile
 import pytest
 
 from app.fixpack.generate import FixpackPlan
+from app.fixpack.gate import run_semantic_check
 from app.fixpack.semantic_check import (
     RunResult,
-    run_semantic_check,
     verified_build_gate_enabled,
 )
 from app.fixpack.verification import (

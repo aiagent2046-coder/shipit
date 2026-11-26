@@ -10,9 +10,9 @@ import asyncio
 
 from app.llm.accounting import estimate_stats_cost
 from app.scan import llm_scan
-from app.scan.pipeline import FREE_TIER_MODEL, FREE_TIER_MODEL_BY_KIND, FREE_TIER_RUBRICS
+from app.scan_pipeline import FREE_TIER_MODEL, FREE_TIER_MODEL_BY_KIND, FREE_TIER_RUBRICS
 
-from app.scan.pipeline import BASIS_PREVIEW
+from app.scan_pipeline import BASIS_PREVIEW
 from app.db import DatabaseNotConfigured
 from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
 from app.scan.cve_match import RULE_ID as SNAPSHOT_RULE_ID

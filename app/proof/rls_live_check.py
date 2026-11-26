@@ -51,7 +51,7 @@ from app.proof.supabase_target import (
     TargetRefusal,
     find_supabase_target,
 )
-from app.proof.types import ExploitAttempt
+from app.proof_types import ExploitAttempt
 
 # Each candidate is one request against a customer's project. Twelve is enough
 # to cover every private-shaped table in all but the largest schemas measured

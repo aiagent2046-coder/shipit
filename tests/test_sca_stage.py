@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from app.sca import osv as osv_module
-from app.sca.lockfiles import Dependency
+from app.lockfiles import Dependency
 from app.sca.osv import OsvClient, OsvUnavailable
 from app.sca.stage import CHECKS_RUN_KEY, RULE_ID, run_sca_stage
 

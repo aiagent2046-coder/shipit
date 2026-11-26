@@ -93,7 +93,7 @@ def test_budgets_and_prompt_do_not_mutate_inventory(monkeypatch):
 
 def test_actual_payment_helpers_survive_function_prompt_budget():
     paths = ['app/db.py', 'app/billing/__init__.py', 'app/billing/bank_transfer.py',
-             'app/main.py', 'app/worker/main.py']
+             'app/main.py', 'app/worker/main.py', 'app/llm_budget.py']
     r = collect_source_facts(archive({p: Path(p).read_text() for p in paths}))
     prompt = facts_prompt(r)
     assert len(prompt) <= 16000

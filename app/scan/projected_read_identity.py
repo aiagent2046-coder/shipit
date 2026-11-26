@@ -129,7 +129,7 @@ def projected_read_identity(finding, resolver):
 
 def _resolve(finding, resolver):
     from app.scan import guard_context as g
-    from app.scan.issue_identity import MAX_CHECKS, _lines, _owning_scope, _span
+    from app.scan.identity_primitives import MAX_CHECKS, _lines, _owning_scope, _span
 
     claim = projected_read_claim(finding)
     start, end, path = finding.get("line_start"), finding.get("line_end"), finding.get("file")

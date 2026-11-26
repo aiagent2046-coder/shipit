@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+from app.sandbox_types import SandboxResult
 from pathlib import Path
 from typing import Callable
 
@@ -188,15 +188,6 @@ def _build_proxy_argv() -> list[str]:
     ]
 
 
-@dataclass
-class SandboxResult:
-    ok: bool
-    detail: str
-    build_log: str = ""
-    # Populated whenever a container actually started, success or not,
-    # so a caller that wants to keep it alive (previews) can find it.
-    container: str | None = None
-    image_tag: str | None = None
 
 
 def docker_available() -> bool:

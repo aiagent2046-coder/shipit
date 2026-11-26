@@ -5,6 +5,7 @@ literal, single-premise titles can deactivate a whole finding. A counterexample
 to one premise of a compound finding remains visible alongside that finding.
 """
 import re
+from bisect import bisect_right
 from collections import Counter
 
 from tree_sitter import Language, Parser
@@ -372,6 +373,65 @@ def _limit(own, constants, bindings, free, target):
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _claim_result(result: str, detail: str, **location) -> dict:
+    return {"kind": "sql_update_where", "result": result,
+            "claim": KINDS.get("sql_update_where", "Unsupported syntax claim."),
+            "detail": detail, **location}
+
+
+def update_where_proof(source: str, start: int, end: int, *, target: str = "") -> dict:
+    """Whether the cited PostgreSQL UPDATE statement has a WHERE clause of its
+    own. The claim-kind handler the dispatcher below delegates to; it builds
+    its result dict here, from KINDS, so neither claim module imports the
+    other's syntax side."""
+    from pglast import ast, parse_sql, scan
+    # pglast exposes character offsets. Use the next statement's location:
+    # stmt_len is not reliable after multibyte text in pglast 7.7.
+    line_starts = [0] + [i + 1 for i, char in enumerate(source) if char == "\n"]
+    tokens = [t for t in scan(source) if t.name not in ("SQL_COMMENT", "C_COMMENT")]
+    candidates = []
+    index = 0
+    statements = parse_sql(source)
+    for position, statement in enumerate(statements):
+        lo = statement.stmt_location
+        hi = statements[position + 1].stmt_location if position + 1 < len(statements) else len(source)
+        relevant = []
+        while index < len(tokens) and tokens[index].start < hi:
+            if tokens[index].start >= lo:
+                relevant.append(tokens[index])
+            index += 1
+        if not relevant:
+            continue
+        first, last = relevant[0], relevant[-1]
+        a, b = bisect_right(line_starts, first.start), bisect_right(line_starts, last.end)
+        if start <= b and end >= a:
+            candidates.append((statement.stmt, a, b))
+    if len(candidates) != 1 or not isinstance(candidates[0][0], ast.UpdateStmt):
+        return _claim_result("not_checked", "The cited range does not identify one top-level PostgreSQL UPDATE.")
+    update, a, b = candidates[0]
+    if target and (update.relation is None or update.relation.relname != target):
+        return _claim_result("not_checked", "The selected UPDATE has a different relation target.")
+    # An UPDATE inside a CTE or nested statement needs its own location binding.
+    todo = [update]
+    updates = 0
+    while todo:
+        n = todo.pop()
+        if isinstance(n, ast.UpdateStmt):
+            updates += 1
+        if isinstance(n, ast.Node):
+            todo.extend(getattr(n, field) for field in n)
+        elif isinstance(n, (tuple, list)):
+            todo.extend(n)
+    if updates != 1:
+        return _claim_result("not_checked", "Multiple UPDATE nodes inside the statement; target is ambiguous.")
+    present = update.whereClause is not None
+    return _claim_result("contradicted" if present else "observed",
+                         "The selected UPDATE has its own WHERE clause. Its selectivity and safety were not tested."
+                         if present else "The selected UPDATE has no WHERE clause of its own. Intent and effects "
+                         "were not tested; a WHERE inside a subquery/CTE does not restrict the outer UPDATE.",
+                         line_start=a, line_end=b)
+
+
 def check_source(data, path, request):
     if request["kind"] == "ownership_guard_absent":
         from app.scan.ownership_claims import check_source as check_ownership
@@ -384,9 +444,8 @@ def check_source(data, path, request):
         if not path.endswith(".sql"):
             return result
         from pglast.parser import ParseError
-        from app.scan.syntax_claims import _sql
         try:
-            proof = _sql(data.decode("utf-8"), start, end, target=request.get("target", ""))
+            proof = update_where_proof(data.decode("utf-8"), start, end, target=request.get("target", ""))
         except (ParseError, UnicodeError, ValueError):
             return result
         anchor_start, anchor_end = request.get("anchor_line_start", start), request.get("anchor_line_end", end)

@@ -11,7 +11,7 @@ from app.llm.accounting import provider_usage_summary
 from app.llm.client import LLMClient, Provider
 from app.main import _record_llm_usage
 from app.scan.llm_scan import run_llm_scan
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 
 
 def archive():

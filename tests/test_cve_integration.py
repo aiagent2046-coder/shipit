@@ -16,7 +16,7 @@ from app.sca.cve import CveClient
 from app.sca.osv import OsvClient
 from app.sca.refresh import refresh_stale_dependency_audits
 from app.sca.stage import run_sca_stage, sca_client_for
-from app.scan.pipeline import run_scan, AUDIT_ENGINE_VERSION
+from app.scan_pipeline import run_scan, AUDIT_ENGINE_VERSION
 from tests.test_cve_client import FIRST, published
 from tests.test_sca_stage import FakeTransport, LODASH_ADVISORY, one_advisory, repo_with
 from tests.test_sca_refresh import StoredRepo, stored_row, NOW

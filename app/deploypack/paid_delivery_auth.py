@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from app.deploypack.delivery_auth import (
     DeliveryAuthorizationError, authorize_repository_delivery, validate_delivery_token,
 )
-from app.routes._shared import _parse_github_repo_url
+from app.github_repo import _parse_github_repo_url
 
 GRANT_TTL_SECONDS = 7 * 24 * 60 * 60
 

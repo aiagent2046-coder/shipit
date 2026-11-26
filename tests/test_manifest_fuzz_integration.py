@@ -8,7 +8,7 @@ import zipfile
 import pytest
 
 from app import local_cli, local_store
-from app.sca import lockfiles
+from app.lockfiles import lockfiles
 from app.scan import cve_match
 
 

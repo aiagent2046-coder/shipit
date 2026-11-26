@@ -10,8 +10,8 @@ from app.report.html import render_report
 from app.scan.claim_evidence import model_claim_evidence
 from app.scan.recommendation_contract import require_prerequisites
 from app.scan.recommendations import TIMING_SAFE_EQUAL_KIND, prepare_recommendation
+from app.scan.recommendations import prepare_recommendation as prepare_rls
 from app.scan.rls_recommendations import client_change_prerequisites
-from app.scan.rls_recommendations import prepare_recommendation as prepare_rls
 from app.scan.scoring import ScoredFinding
 from tests.test_llm_scan import FakeLLM, VULN_TS, make_zip, valid_finding
 from tests.test_rls_recommendations import collect, policy

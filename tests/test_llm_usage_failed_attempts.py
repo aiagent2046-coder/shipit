@@ -30,7 +30,7 @@ import pytest
 import app.db as db_mod
 from app.db import AuditJobRepository, AuditRepository, LlmUsageRepository
 from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
-from app.scan.pipeline import PAID_AUDIT_PASSES
+from app.scan_pipeline import PAID_AUDIT_PASSES
 from app.worker import main as worker
 from app.worker.main import JobExecutionError, _execute_job
 
@@ -116,7 +116,7 @@ class _LLM(LLMClient):
 
 # Every test in this file is about LLM spend, and only a paying account
 # reaches the provider now: the free tier is static-only by policy
-# (basis_for_account in app/scan/pipeline.py). An anonymous job here would
+# (basis_for_account in app/scan_pipeline.py). An anonymous job here would
 # record nothing and the file would pass while testing nothing.
 _ACCOUNT_ID = "22222222-2222-2222-2222-222222222222"
 

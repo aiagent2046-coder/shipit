@@ -10,7 +10,7 @@ import pytest
 from app.llm.client import LLMClient
 from app.scan import kev_catalog
 from app.scan.browser import ScanSession, scan_archive
-from app.scan.pipeline import BASIS_PREVIEW, run_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests import test_project_checks as shared_checks
 from tests.test_sca_stage import LODASH_ADVISORY, client_for, one_advisory, repo_with
 

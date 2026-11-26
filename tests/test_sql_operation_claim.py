@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.scan.atomic_claims import KINDS, update_where_proof
 from app.scan.claim_narrative import narrative_projection
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.issue_identity import SourceIssueResolver
@@ -135,3 +136,33 @@ def test_selector_cannot_choose_from_ambiguous_or_unsupported_sql(source):
     row = {**report_rows()[0], "line_start": 1, "line_end": 1}
     row["operation_claim"] = selector(row)
     assert SourceIssueResolver(archive({row["file"]: source})).identity(row) is None
+
+
+def test_update_where_proof_output_is_pinned_after_the_cycle_fix_motion():
+    """Behavior pin for the import-cycles fix phase (PR: untangle cycles).
+
+    update_where_proof moved from syntax_claims to atomic_claims verbatim.
+    This is the documented exception of the prompt-fingerprint guard in
+    test_llm_scan.py: no AUDIT_ENGINE_VERSION bump, because the output was
+    shown byte-identical to the old _sql (8-case differential run in the
+    commit message) and the model-visible claim text is unchanged -- a bump
+    would re-run the LLM for every cached audit to produce identical results.
+    The exact dicts are pinned here so the exception stays honest.
+    """
+    observed = update_where_proof("UPDATE t SET x = 1;", 1, 1)
+    assert observed == {
+        "kind": "sql_update_where",
+        "result": "observed",
+        "claim": "The cited PostgreSQL UPDATE has no WHERE clause of its own.",
+        "detail": ("The selected UPDATE has no WHERE clause of its own. Intent and effects "
+                   "were not tested; a WHERE inside a subquery/CTE does not restrict "
+                   "the outer UPDATE."),
+        "line_start": 1, "line_end": 1,
+    }
+    assert observed["claim"] == KINDS["sql_update_where"]
+
+    contradicted = update_where_proof("UPDATE t SET x = 1 WHERE id = 2;", 1, 1)
+    assert contradicted["result"] == "contradicted"
+    assert contradicted["claim"] == KINDS["sql_update_where"]
+    assert contradicted["detail"] == ("The selected UPDATE has its own WHERE clause. "
+                                      "Its selectivity and safety were not tested.")

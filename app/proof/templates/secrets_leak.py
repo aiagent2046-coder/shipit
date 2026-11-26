@@ -14,7 +14,7 @@ from __future__ import annotations
 import io
 import time
 
-from app.proof.types import ExploitAttempt
+from app.proof_types import ExploitAttempt
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS, scan_secrets
 
 # Findings at or above this severity count as a successful "exploit"

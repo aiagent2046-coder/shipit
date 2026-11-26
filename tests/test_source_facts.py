@@ -5,7 +5,7 @@ from pathlib import Path
 from app.llm.client import LLMClient
 from app.scan import source_facts
 from app.scan.llm_scan import build_prompt, fit_to_window
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 

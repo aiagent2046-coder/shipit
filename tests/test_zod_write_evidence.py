@@ -6,7 +6,7 @@ import pytest
 from app.scan.zod_write_evidence import KIND, ZodWriteVerifier
 from app.scan.syntax_claims import SyntaxVerifier
 from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from app.report.html import render_report
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 

@@ -55,8 +55,12 @@ const paths = (await readdir(join(root, 'app/scan')))
   .map(name => `app/scan/${name}`);
 paths.push('app/__init__.py', 'app/capabilities.py', 'app/ingest/__init__.py',
   'app/ingest/validators.py', 'app/report/__init__.py', 'app/report/plain_language.py',
-  'app/report/sarif.py', 'app/report/project_checks.py', 'app/report/threat_context.py', 'app/report/dependency_snapshot.py', 'app/sca/__init__.py', 'app/sca/lockfiles.py',
-  'app/sca/resolved_locks.py', 'app/sca/bun_lock.py');
+  'app/report/sarif.py', 'app/project_checks.py', 'app/threat_context.py',
+  'app/dependency_snapshot.py', 'app/archive_names.py', 'app/finding_text.py',
+  'app/path_policy.py', 'app/snapshot_record.py',
+  'app/lockfiles/__init__.py', 'app/lockfiles/lockfiles.py',
+  'app/lockfiles/lockfile_primitives.py', 'app/lockfiles/resolved_locks.py',
+  'app/lockfiles/bun_lock.py');
 for (const path of paths.sort()) files[path] = await readFile(join(root, path), 'utf8');
 // KEV is an inert, pinned data snapshot. Include it in the engine receipt so
 // browser scans remain offline and source changes cannot reuse old intelligence.

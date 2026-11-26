@@ -30,7 +30,7 @@ from app.proof.render import (
     render_proof_with_artifacts,
 )
 from app.proof.stage import ProofStageResult, run_proof_stage
-from app.proof.types import ExploitAttempt, ProofReport, proof_report_to_json
+from app.proof_types import ExploitAttempt, ProofReport, proof_report_to_json
 from app.proof.workspace import apply_plan_to_zip
 
 __all__ = [

@@ -28,7 +28,7 @@ from app.scan import (llm_scan, source_facts, operation_context, function_contex
                       cross_rubric_dedup, auth_source_assessment, url_token_assessment,
                       external_operation_context, external_operation_identity, file_scope,
                       claim_narrative, query_read_identity, issue_identity)
-from app.scan import pipeline as pipeline_mod
+from app import scan_pipeline as pipeline_mod
 from app.scan.secrets import damp_for_non_production_path
 from app.scan.llm_scan import (
     RUBRICS,
@@ -45,14 +45,14 @@ from app.scan.llm_scan import (
     system_prompt_for,
     verify_finding,
 )
-from app.scan.pipeline import AUDIT_ENGINE_VERSION
+from app.scan_pipeline import AUDIT_ENGINE_VERSION
 from app.scan.scoring import CATEGORIES
 
 # sha256 of everything that decides what the model is shown -- the prompts,
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "78ae8ac0c2c599a0"
+PROMPT_FINGERPRINT = "0a591101417775ed"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -1129,7 +1129,7 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
 
     When this fails:
 
-      1. bump AUDIT_ENGINE_VERSION in app/scan/pipeline.py, and
+      1. bump AUDIT_ENGINE_VERSION in app/scan_pipeline.py, and
       2. paste the new fingerprint below.
 
     Two lines of ceremony. Step 1 is the one that matters and the one nobody
@@ -1248,7 +1248,7 @@ def test_changing_what_the_model_sees_forces_an_engine_version_bump():
 
     assert fingerprint == PROMPT_FINGERPRINT, (
         f"what the model is shown changed (fingerprint {fingerprint}). Bump "
-        f"AUDIT_ENGINE_VERSION in app/scan/pipeline.py -- it is currently "
+        f"AUDIT_ENGINE_VERSION in app/scan_pipeline.py -- it is currently "
         f"{AUDIT_ENGINE_VERSION!r} -- then update PROMPT_FINGERPRINT in this "
         "file. Without the bump, every repository already audited keeps "
         "receiving results from the old engine."
@@ -1869,7 +1869,7 @@ def test_run_scan_at_preview_depth_does_not_credit_unrun_rubrics():
     test against compute_scores keeps passing, because each one hands the
     argument in by hand. This one makes run_scan derive it.
     """
-    from app.scan.pipeline import BASIS_PREVIEW, run_scan
+    from app.scan_pipeline import BASIS_PREVIEW, run_scan
 
     raw = make_zip({
         "package.json": b'{"dependencies":{"next":"14"}}',
@@ -1899,7 +1899,7 @@ def test_run_scan_at_preview_depth_does_not_credit_unrun_rubrics():
 def test_run_scan_at_full_depth_still_credits_every_category():
     """The control: a paid audit runs every rubric and nothing is unexamined.
     Without this, "exclude everything" would pass the test above."""
-    from app.scan.pipeline import run_scan
+    from app.scan_pipeline import run_scan
 
     raw = make_zip({
         "package.json": b'{"dependencies":{"next":"14"}}',

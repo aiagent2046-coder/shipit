@@ -34,7 +34,7 @@ def isolated_scan(*, javascript=False):
                     "tree_sitter", "tree_sitter_typescript", "tree_sitter_javascript", "pglast"
                 }:
                     raise ModuleNotFoundError("native dependency deliberately absent", name=fullname)
-                if fullname in {"app.scan.pipeline", "app.scan.llm_scan", "app.sca.osv"}:
+                if fullname in {"app.scan_pipeline", "app.scan.llm_scan", "app.sca.osv"}:
                     raise AssertionError("browser imported a remote stage")
         sys.meta_path.insert(0, NoNative())
         from app.scan.browser import scan_archive

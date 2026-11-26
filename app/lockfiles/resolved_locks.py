@@ -11,7 +11,7 @@ from itertools import islice
 
 import yaml
 
-from app.sca.lockfiles import Dependency, _NPM_NAME, _NPM_VERSION, _PYPI_NAME, _PYPI_PIN, normalize_pypi
+from app.lockfiles.lockfile_primitives import Dependency, _NPM_NAME, _NPM_VERSION, _PYPI_NAME, _PYPI_PIN, normalize_pypi
 
 MAX_YAML_NODES = 100_000
 MAX_YAML_DEPTH = 64

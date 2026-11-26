@@ -12,7 +12,7 @@ import re
 from app.scan import consequence_evidence as c
 from app.scan import guard_context as g
 from app.scan import imported_error_context as i
-from app.scan.auth_source_assessment import _ast_tokens, _consts, _native_import, _top
+from app.scan.ast_primitives import _ast_tokens, _consts, _native_import, _top
 
 KIND = "url_token_header_transport"
 MAX_PAGES = 32

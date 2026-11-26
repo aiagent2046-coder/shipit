@@ -9,7 +9,7 @@ from typing import BinaryIO
 
 from app.capabilities import CHECKS_RUN, EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE
 from app.ingest.validators import validate_zip
-from app.report.plain_language import plain_fields
+from app.finding_text import plain_fields
 from app.scan.auth_read import scan_auth_read
 from app.scan.auth_write import scan_auth_write
 from app.scan.claim_evidence import static_claim_evidence
@@ -69,7 +69,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                     client_runtime_evidence=None, client_runtime_run_id=None) -> dict:
     """Returns {"score": {...}, "findings": [ScoredFinding-as-dict]}.
 
-    The score here describes THIS stage only. app/scan/pipeline.py reads just
+    The score here describes THIS stage only. app/scan_pipeline.py reads just
     the findings and recomputes the total once it knows whether the LLM stage
     ran, so an audit's real headline never comes from this key -- but callers
     that use it directly (the tests, and anything added later) must not be

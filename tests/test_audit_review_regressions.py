@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.llm.client import LLMClient, LLMError
 from app.report.html import render_report
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from app.scan.source_facts import collect_source_facts, facts_prompt
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 

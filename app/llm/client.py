@@ -436,7 +436,7 @@ class LLMClient:
         it, temperature 0 stays -- an unset temperature is the provider
         default (usually 1.0) and produces finding sets that differ more
         between runs. It was never the whole story even there: the docstring
-        of app/scan/pipeline.py:content_digest records that the scan "returns
+        of app/scan_pipeline.py:content_digest records that the scan "returns
         a different findings set (and thus a different score) run to run even
         at temperature=0", which is why the content-digest cache, not this
         parameter, is what makes a re-audit reproducible.

@@ -14,7 +14,7 @@ from app.scan import evidence_acquisition, security_agent
 from app.scan.agent_chain import normalize_chain
 from app.scan.browser import scan_archive
 from app.scan.evidence_record import normalize_acquisition
-from app.scan.pipeline import BASIS_PREVIEW, run_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_security_agent import archive
 
 

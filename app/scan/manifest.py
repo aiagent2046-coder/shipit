@@ -11,7 +11,7 @@ from app.scan.security_agent import agent_record
 from app.scan.check_failures import normalize_check_failures
 from app.scan.project_checks import project_checks
 from app.scan.cve_evidence import normalize_cve_summary
-from app.sca.lockfiles import OSV_ECOSYSTEM
+from app.lockfiles import OSV_ECOSYSTEM
 
 
 SCA_LIMITATIONS = frozenset({

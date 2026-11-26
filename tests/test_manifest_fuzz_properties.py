@@ -13,7 +13,7 @@ import pytest
 from hypothesis import given, settings, strategies as st
 import yaml
 
-from app.sca.lockfiles import collect_dependency_inventory
+from app.lockfiles import collect_dependency_inventory
 from app.scan.cve_match import match_archive
 
 

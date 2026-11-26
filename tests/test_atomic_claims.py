@@ -5,7 +5,7 @@ import pytest
 
 from app.scan.atomic_claims import check_source
 from app.scan.claim_evidence import syntax_contradicted
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from app.scan.syntax_claims import SyntaxVerifier
 from app.report.html import render_report
 from app.report.evidence import finding_counts

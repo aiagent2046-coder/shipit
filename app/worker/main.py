@@ -65,7 +65,7 @@ from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
 from app.log_context import log_context, set_log_context
 from app.logging_config import configure_logging
-from app.scan.pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
+from app.scan_pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
                               BASIS_PREVIEW, FREE_TIER_MODEL,
                               FREE_TIER_MODEL_BY_KIND,
                               FREE_TIER_RUBRICS, PAID_AUDIT_PASSES,

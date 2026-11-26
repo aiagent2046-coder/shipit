@@ -15,7 +15,7 @@ import zipfile
 
 import pytest
 
-from app.sca.lockfiles import (MAX_DEPENDENCIES, MAX_LOCKFILES,
+from app.lockfiles import (MAX_DEPENDENCIES, MAX_LOCKFILES,
                                collect_dependencies, collect_dependency_inventory,
                                normalize_pypi, unusable_lockfiles)
 

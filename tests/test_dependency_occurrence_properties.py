@@ -10,7 +10,7 @@ import zipfile
 import pytest
 from hypothesis import example, given, settings, strategies as st
 
-from app.sca import lockfiles
+from app.lockfiles import lockfiles
 from app.scan.cve_match import match_archive
 
 

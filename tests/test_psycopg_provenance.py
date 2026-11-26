@@ -163,7 +163,7 @@ def test_online_preview_and_browser_exports_share_the_driver_decision(monkeypatc
     import subprocess
     from app.llm.client import LLMClient
     from app.scan.browser import scan_archive
-    from app.scan.pipeline import BASIS_PREVIEW, run_scan
+    from app.scan_pipeline import BASIS_PREVIEW, run_scan
 
     def forbidden(*args, **kwargs):
         raise AssertionError('Static provenance must not use a network, subprocess or model')

@@ -24,10 +24,10 @@ from app.local_cli import inspect_project
 from app.main import app, get_audit_repo
 from app.report.sarif import build_sarif
 from app.sca.cache import needs_dependency_scan
-from app.scan import pipeline
+from app import scan_pipeline as pipeline
 from app.scan.browser import scan_archive
 from app.scan.cve_match import match_archive
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, BASIS_FULL, BASIS_PREVIEW, run_scan
+from app.scan_pipeline import AUDIT_ENGINE_VERSION, BASIS_FULL, BASIS_PREVIEW, run_scan
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM
 from tests.test_audit_determinism import _post, force_pro_account

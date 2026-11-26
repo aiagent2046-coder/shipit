@@ -7,10 +7,12 @@ import zipfile
 
 import pytest
 
-from app.sca import lockfiles, snapshot
+from app.lockfiles import lockfiles
+
+from app.sca import snapshot
 from app.scan import cve_match
 from app.scan.manifest import sca_manifest_fields
-from app.scan.pipeline import score_findings
+from app.scan_pipeline import score_findings
 
 
 PRIMARY = "GHSA-2345-2345-2345"

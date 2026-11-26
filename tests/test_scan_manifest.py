@@ -10,7 +10,7 @@ from app.report.evidence import model_status_notice, source_severity_counts
 from app.report.html import render_report
 from app.report.plain_language import plain_fields
 from app.scan.manifest import scan_manifest
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, run_scan
+from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
 from tests.test_audit_llm_wiring import AUTH_ZIP, FakeLLM, make_zip
 
 
@@ -127,7 +127,7 @@ def test_successful_preview_and_full_reviews_have_no_failure_notice():
 
 @pytest.mark.parametrize("flag", ["cost_cap_exceeded", "input_truncated"])
 def test_limited_model_review_cannot_be_cached_as_full(monkeypatch, flag):
-    from app.scan import pipeline
+    from app import scan_pipeline as pipeline
     from app.scan.llm_scan import LLMScanStats
 
     def limited(*args, **kwargs):

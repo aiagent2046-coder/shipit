@@ -23,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
+import app.audit_workflow as audit_mod
 from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
 from app.mcp.server import MAX_FINDINGS_RETURNED, TOOLS
 from app.mcp.untrusted import FENCE_CLOSE, FENCE_OPEN
@@ -176,7 +177,7 @@ def mcp(monkeypatch):
         get_fixpack_repo: lambda: fixpacks,
         get_llm_usage_repo: lambda: usage,
         get_rate_limiter: lambda: limiter,
-        get_account_repo: lambda: None,
+        get_account_repo: lambda: _UnconfiguredAccountRepo(),
         get_audit_job_repo: lambda: None,
         get_service_flags_repo: lambda: None,
         get_repo_fetcher: lambda: (lambda owner, repo: b""),
@@ -190,6 +191,16 @@ def mcp(monkeypatch):
     finally:
         for dep in overrides:
             app.dependency_overrides.pop(dep, None)
+
+
+class _UnconfiguredAccountRepo:
+    """The repository's not-configured contract: no account resolves.
+
+    The start-audit path resolves the caller before the (faked)
+    create_audit runs, so the fixture needs a repo that speaks the
+    contract instead of a bare None."""
+    async def get_by_key_hash(self, key_hash):
+        return None
 
 
 class _Bundle:
@@ -604,7 +615,7 @@ def test_a_spent_key_budget_is_a_tool_error_not_a_crash(mcp, monkeypatch):
     async def _never_called(**kwargs):
         raise AssertionError("create_audit must not run on a spent budget")
 
-    monkeypatch.setattr(main_mod, "create_audit", _never_called)
+    monkeypatch.setattr(audit_mod, "create_audit", _never_called)
     for _ in range(3):
         mcp.limiter.check(f"mcp:{mcp.key_id}")
 
@@ -626,7 +637,7 @@ def test_a_cache_hit_links_the_audit_to_this_key_and_reports_its_real_basis(
         return {"audit_id": audit_id, "access_token": "tok", "reused": True,
                 "score": {"basis": "static_only"}, "findings": [{"title": "x"}]}
 
-    monkeypatch.setattr(main_mod, "create_audit", _cached)
+    monkeypatch.setattr(audit_mod, "create_audit", _cached)
 
     payload = _payload(mcp.call("drydock_start_audit",
                                 {"repo_url": "https://github.com/o/r"}))
@@ -645,7 +656,7 @@ def test_a_queued_audit_forecasts_the_basis_and_says_it_is_a_forecast(
     async def _queued(**kwargs):
         return {"job_id": "job-1", "access_token": "tok", "state": "queued"}
 
-    monkeypatch.setattr(main_mod, "create_audit", _queued)
+    monkeypatch.setattr(audit_mod, "create_audit", _queued)
 
     payload = _payload(mcp.call("drydock_start_audit",
                                 {"repo_url": "https://github.com/o/r"}))
@@ -659,7 +670,7 @@ def test_a_spent_llm_budget_is_forecast_as_static_only(mcp, monkeypatch):
     async def _queued(**kwargs):
         return {"job_id": "job-1", "access_token": "tok", "state": "queued"}
 
-    monkeypatch.setattr(main_mod, "create_audit", _queued)
+    monkeypatch.setattr(audit_mod, "create_audit", _queued)
     mcp.usage.spend = 10_000.0
 
     payload = _payload(mcp.call("drydock_start_audit",
@@ -678,7 +689,7 @@ def test_an_intake_refusal_reaches_the_model_with_its_reason(mcp, monkeypatch):
         raise HTTPException(status_code=422, detail={
             "reason": "repo_not_found", "detail": "no such public repository"})
 
-    monkeypatch.setattr(main_mod, "create_audit", _refuses)
+    monkeypatch.setattr(audit_mod, "create_audit", _refuses)
 
     payload = _payload(mcp.call("drydock_start_audit",
                                 {"repo_url": "https://github.com/o/r"}))

@@ -20,7 +20,7 @@ from app.sca.refresh import (dependencies_from_payload, inventory_payload,
                              refresh_stale_dependency_audits, refreshed_findings,
                              refreshed_score, score_inputs_from_stored)
 from app.sca.stage import RULE_ID, SCA_FRESHNESS_TTL_DAYS, freshness
-from app.scan.pipeline import AUDIT_ENGINE_VERSION, run_scan, score_findings
+from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan, score_findings
 from tests.test_sca_stage import FakeTransport, LODASH_ADVISORY, make_zip
 
 NOW = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)

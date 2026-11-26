@@ -5,7 +5,7 @@
 
 Static scan always runs; LLM scan runs only if providers are configured
 in the environment (.env). Prints the report as JSON to stdout. Shares
-the scan pipeline with the API (app/scan/pipeline.py) — same findings,
+the scan pipeline with the API (app/scan_pipeline.py) — same findings,
 same scoring, same honest "skipped"/"failed" states for the LLM stage.
 """
 
@@ -24,7 +24,7 @@ from app.ingest.stack_detect import detect_stack
 from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.sca.stage import sca_client_for
 from app.llm.client import LLMClient
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 
 
 def _github_archive_prefix(raw: bytes) -> str | None:

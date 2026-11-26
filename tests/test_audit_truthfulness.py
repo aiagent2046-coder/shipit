@@ -12,7 +12,7 @@ import pytest
 
 from app.llm.client import LLMClient
 from app.report.html import render_report
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import AUTH_ZIP, FakeLLM, make_zip
 
 CASES = json.loads((Path(__file__).parent / "data/audit_truthfulness_cases.json").read_text())

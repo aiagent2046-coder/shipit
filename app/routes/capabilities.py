@@ -15,7 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.capabilities import manifest
-from app.scan.pipeline import AUDIT_ENGINE_VERSION
+from app.scan_pipeline import AUDIT_ENGINE_VERSION
 
 router = APIRouter()
 

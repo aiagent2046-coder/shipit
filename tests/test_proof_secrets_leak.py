@@ -15,7 +15,7 @@ import pytest
 from app.proof.compare import build_proof_report, run_proof_pair
 from app.proof.registry import TEMPLATE_IDS, get_template, list_templates
 from app.proof.render import render_proof_markdown
-from app.proof.types import (
+from app.proof_types import (
     ExploitAttempt,
     proof_report_from_json,
     proof_report_to_json,

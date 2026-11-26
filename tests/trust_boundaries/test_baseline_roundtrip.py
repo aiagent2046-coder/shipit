@@ -13,7 +13,7 @@ import pytest
 
 from app.audit_history import ensure_paid_baseline
 from app.report.html import render_report
-from app.scan import pipeline
+from app import scan_pipeline as pipeline
 from app.scan.llm_scan import LLMScanStats
 from app.scan.secrets import MAX_SCANNED_FILE_BYTES
 

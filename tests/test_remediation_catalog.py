@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.scan import remediation_catalog
-from app.scan.cve_match import evaluate_advisory
+from app.scan.advisory_evaluation import evaluate_advisory
 from app.scan.remediation_catalog import UpgradeBudget, plan_dependency_upgrade
 
 

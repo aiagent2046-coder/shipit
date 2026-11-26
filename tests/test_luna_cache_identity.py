@@ -77,7 +77,8 @@ def test_api_and_worker_share_startup_identity_without_changing_offline_version(
 import json
 import os
 from app import main
-from app.scan import pipeline, version
+from app.scan import version
+from app import scan_pipeline as pipeline
 from app.worker import main as worker
 initial = [main.AUDIT_ENGINE_VERSION, worker.AUDIT_ENGINE_VERSION,
            pipeline.AUDIT_ENGINE_VERSION, version.AUDIT_ENGINE_VERSION]

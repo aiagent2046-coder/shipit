@@ -6,7 +6,7 @@ import json
 
 from app.report.html import _finding_row, render_report
 from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
-from app.scan.pipeline import run_scan
+from app.scan_pipeline import run_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 from tests.test_http_success import component

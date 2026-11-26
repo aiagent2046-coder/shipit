@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 # Direct script execution needs the repository root before application imports.
 from app.ingest.validators import MAX_ARCHIVE_BYTES, ArchiveValidationError  # noqa: E402
 from app.llm.client import LLMClient  # noqa: E402
-from app.scan.pipeline import BASIS_PREVIEW, run_scan  # noqa: E402
+from app.scan_pipeline import BASIS_PREVIEW, run_scan  # noqa: E402
 
 MAX_EVIDENCE_BYTES = 64 * 1024
 

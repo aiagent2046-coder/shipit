@@ -32,7 +32,7 @@ from app.ingest.stack_detect import detect_stack  # noqa: E402
 from app.ingest.validators import validate_zip  # noqa: E402
 from app.llm.client import LLMClient  # noqa: E402
 from app.scan.llm_scan import RUBRICS  # noqa: E402
-from app.scan.pipeline import run_scan  # noqa: E402
+from app.scan_pipeline import run_scan  # noqa: E402
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 

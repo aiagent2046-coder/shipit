@@ -20,7 +20,7 @@ from app.capabilities import (CAPABILITIES, CHECKS_RUN, DECLARED_RULE_IDS,
                               EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE, manifest)
 from app.main import app
 from app.scan import static
-from app.scan.pipeline import AUDIT_ENGINE_VERSION
+from app.scan_pipeline import AUDIT_ENGINE_VERSION
 from app.scan.static import run_static_scan
 from tests.detectors.test_golden_corpus import emitted_rule_ids
 

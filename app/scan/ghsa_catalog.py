@@ -14,7 +14,7 @@ import json
 import re
 
 from app.scan.cve_evidence import _date
-from app.sca.lockfiles import normalize_pypi
+from app.lockfiles import normalize_pypi
 
 REPOSITORY = "https://github.com/github/advisory-database"
 GHSA_PAGE = "https://github.com/advisories/"

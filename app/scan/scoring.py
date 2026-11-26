@@ -623,3 +623,45 @@ def compute_scores(findings: list[ScoredFinding],
             "unexamined": unexamined,
             "unexamined_with_findings": unexamined_with_findings,
             "reported_elsewhere": reported_elsewhere}
+
+
+# Every field that must survive the round trip out of the scanners, through
+# the findings dicts (which persist to findings_json) and back into a
+# ScoredFinding for the scorer. A field missing here is dropped silently: the
+# producer sets it, the report can still read it off the dict, and only the
+# SCORE quietly computes as though it were never set. "origin_category" is the
+# one that makes an emptied-by-recategorisation category visible, so leaving
+# it out restores exactly the defect it was added to fix, with every test
+# against compute_scores still passing.
+_SCORED_FIELDS = ("rule_id", "title", "severity", "confidence",
+                  "category", "file", "line", "masked", "explanation",
+                  "fix_hint", "context", "origin_category", "source",
+                  "verification_status", "verification_method", "claim_evidence")
+
+
+def score_findings(findings: list[dict], *, llm_ran: bool,
+                   llm_categories: frozenset[str],
+                   incomplete_static: frozenset[str],
+                   failed_static: frozenset[str] = frozenset()) -> dict:
+    """The single place a finding list becomes a score.
+
+    Extracted so the dependency refresh can rescore an audit it did not run
+    (app/sca/refresh.py) without owning a second copy of this expression: a
+    second copy is how the refreshed total would drift from the total a full
+    scan of the same findings produces, silently, one rule at a time.
+    """
+    return compute_scores(
+        [ScoredFinding(**{k: f[k] for k in _SCORED_FIELDS if k in f})
+         for f in findings],
+        llm_ran=llm_ran,
+        # Derived from the rubrics that ran, never written out: a preview
+        # covers one of them, and a category no rubric looked at must not
+        # score 10.0 off the back of the ones that did. Reading RUBRICS is
+        # what keeps this correct when the free tier's rubric list is changed
+        # by an env var.
+        llm_categories=llm_categories,
+        # A static producer that ran out of read budget did not finish, so the
+        # absence of its finding is not evidence of a clean category.
+        incomplete_static=incomplete_static,
+        failed_static=failed_static,
+    )

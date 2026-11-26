@@ -8,7 +8,7 @@ import os
 import pytest
 
 from app.llm.client import LLMClient
-from app.scan.pipeline import BASIS_PREVIEW, run_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.security_agent import agent_record
 from app.scan.static import run_static_scan
 from app.scan.synthetic_record import (CONTRACT_ID, FIXTURE_SHA256, SCHEMA_SHA256, SUMMARY_KEYS,

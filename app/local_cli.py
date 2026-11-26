@@ -21,7 +21,7 @@ from app.ingest.validators import ArchiveValidationError
 from app.local_store import connect, default_state_dir, load_catalog, update_catalog
 from app.logging_config import configure_logging
 from app.report.plain_language import plain_fields
-from app.report.threat_context import threat_context_record, threat_context_rows
+from app.threat_context import threat_context_record, threat_context_rows
 from app.scan.browser import ScanSession
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS
 from app.scan.security_agent import agent_record

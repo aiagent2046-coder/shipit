@@ -9,7 +9,7 @@ from app.llm.client import LLMClient
 from app.main import app, get_audit_repo, run_repo_audit
 from app.sca.cache import complete_cached_dependencies, needs_dependency_scan
 from app.sca.stage import RULE_ID
-from app.scan.pipeline import content_digest, run_scan
+from app.scan_pipeline import content_digest, run_scan
 from app.worker import main as worker
 from tests.conftest import run_audit_job
 from tests.test_audit_determinism import _post, force_pro_account

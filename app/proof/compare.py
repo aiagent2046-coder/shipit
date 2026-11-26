@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.proof.registry import get_template
-from app.proof.types import ExploitAttempt, ProofReport, TemplateId
+from app.proof_types import ExploitAttempt, ProofReport, TemplateId
 
 
 def build_proof_report(
