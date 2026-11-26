@@ -54,7 +54,8 @@ def _forensics_record(value: object) -> dict | None:
         return None
     clean_obs = []
     for obs in value["observations"][:32]:
-        if not isinstance(obs, dict) or _text(obs.get("kind"), 128) is None or obs.get("verification_status") != "unverified":
+        if (not isinstance(obs, dict) or _text(obs.get("kind"), 128) is None
+                or obs.get("verification_status") != "unverified"):
             return None
         row = {"kind": obs["kind"], "verification_status": "unverified"}
         for field in ("source_file", "binary_path", "language"):
@@ -64,7 +65,8 @@ def _forensics_record(value: object) -> dict | None:
             if field in obs and _count(obs[field]):
                 row[field] = obs[field]
         for field in ("sink_imports", "signal_kinds", "kev_cve_ids"):
-            if field in obs and isinstance(obs[field], list) and all(_text(x, 128) is not None for x in obs[field][:16]):
+            if (field in obs and isinstance(obs[field], list)
+                    and all(_text(x, 128) is not None for x in obs[field][:16])):
                 row[field] = list(obs[field][:16])
         clean_obs.append(row)
     return {

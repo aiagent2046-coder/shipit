@@ -9,6 +9,11 @@ from __future__ import annotations
 import ast
 import base64
 import binascii
+import builtins
+import ctypes
+import os
+import subprocess
+import sys
 from hashlib import sha256
 import io
 from pathlib import PurePosixPath
@@ -61,13 +66,13 @@ EXCLUDED_PARTS = frozenset({
 })
 
 STDLIB_SURFACE_MODULES = {
-    "sys": set(dir(__import__("sys"))),
-    "os": set(dir(__import__("os"))),
-    "builtins": set(dir(__import__("builtins"))),
-    "subprocess": set(dir(__import__("subprocess"))),
-    "ctypes": set(dir(__import__("ctypes"))),
-    "binascii": set(dir(__import__("binascii"))),
-    "base64": set(dir(__import__("base64"))),
+    "sys": set(dir(sys)),
+    "os": set(dir(os)),
+    "builtins": set(dir(builtins)),
+    "subprocess": set(dir(subprocess)),
+    "ctypes": set(dir(ctypes)),
+    "binascii": set(dir(binascii)),
+    "base64": set(dir(base64)),
 }
 
 WEIGHTS = {
@@ -319,19 +324,28 @@ def analyze_python_obfuscation(
                 mod = imported_modules.get(val.value.id)
                 if mod in DANGEROUS_MODULES and val.attr in DANGEROUS_ATTRS:
                     sink_aliases.append({"alias": target_name, "module": mod, "symbol": val.attr, "span": _span(node)})
-                    signals.append({"kind": "dangerous_callable_alias", "module": mod, "symbol": val.attr, "span": _span(node)})
+                    signals.append({
+                        "kind": "dangerous_callable_alias", "module": mod,
+                        "symbol": val.attr, "span": _span(node),
+                    })
             elif isinstance(val, ast.Name) and val.id in imported_symbols:
                 mod, sym = imported_symbols[val.id]
                 if mod in DANGEROUS_MODULES and sym in DANGEROUS_ATTRS:
                     sink_aliases.append({"alias": target_name, "module": mod, "symbol": sym, "span": _span(node)})
-                    signals.append({"kind": "dangerous_callable_alias", "module": mod, "symbol": sym, "span": _span(node)})
+                    signals.append({
+                        "kind": "dangerous_callable_alias", "module": mod,
+                        "symbol": sym, "span": _span(node),
+                    })
 
         if isinstance(node, ast.Call):
             fn = node.func
             if isinstance(fn, ast.Name) and fn.id == "getattr" and len(node.args) >= 2:
                 resolved_attr, ops = _fold_string_expr(node.args[1], const_env)
                 if resolved_attr in DANGEROUS_ATTRS:
-                    signals.append({"kind": "dynamic_getattr_sink", "symbol": resolved_attr, "split_ops": ops, "span": _span(node)})
+                    signals.append({
+                        "kind": "dynamic_getattr_sink", "symbol": resolved_attr,
+                        "split_ops": ops, "span": _span(node),
+                    })
                 elif resolved_attr and len(node.args) == 2:
                     recv = node.args[0]
                     recv_mod = None
@@ -356,7 +370,10 @@ def analyze_python_obfuscation(
             ) and node.args:
                 resolved_mod, ops = _fold_string_expr(node.args[0], const_env)
                 if resolved_mod and resolved_mod.split(".")[0] in DANGEROUS_MODULES:
-                    signals.append({"kind": "dynamic_import_sink", "module": resolved_mod.split(".")[0], "split_ops": ops, "span": _span(node)})
+                    signals.append({
+                        "kind": "dynamic_import_sink", "module": resolved_mod.split(".")[0],
+                        "split_ops": ops, "span": _span(node),
+                    })
             elif isinstance(fn, ast.Attribute) and fn.attr == "join" and len(node.args) == 1:
                 folded_join, ops = _fold_string_expr(node, const_env)
                 if folded_join and ops >= 1 and _contains_sensitive_token(folded_join):
@@ -536,7 +553,10 @@ def analyze_js_obfuscation(
             if idx is not None:
                 prop, ops = _ts_fold_string(idx, source_bytes, js_env)
                 if prop in DANGEROUS_ATTRS:
-                    signals.append({"kind": "computed_member_sink", "symbol": prop, "split_ops": ops, "span": _ts_span(node)})
+                    signals.append({
+                        "kind": "computed_member_sink", "symbol": prop,
+                        "split_ops": ops, "span": _ts_span(node),
+                    })
         elif node.type == "call_expression":
             fn = node.child_by_field_name("function")
             args_node = node.child_by_field_name("arguments")
@@ -561,7 +581,10 @@ def analyze_js_obfuscation(
                 mod_name, ops = _ts_fold_string(args[0], source_bytes, js_env)
                 if mod_name:
                     if ops >= 1 and mod_name in DANGEROUS_MODULES:
-                        signals.append({"kind": "dynamic_import_sink", "module": mod_name, "split_ops": ops, "span": _ts_span(node)})
+                        signals.append({
+                            "kind": "dynamic_import_sink", "module": mod_name,
+                            "split_ops": ops, "span": _ts_span(node),
+                        })
                     if mod_name.endswith((".node", ".so")):
                         if ops >= 1:
                             signals.append({"kind": "split_ffi_library_path", "ops": ops, "span": _ts_span(node)})
@@ -712,11 +735,14 @@ def _build_cross_file_const_envs(
                                         orig = cur.child_by_field_name("name")
                                         alias = cur.child_by_field_name("alias") or orig
                                         if orig is not None and alias is not None:
-                                            o_txt = raw[orig.start_byte:orig.end_byte].decode("utf-8", errors="ignore")
-                                            a_txt = raw[alias.start_byte:alias.end_byte].decode("utf-8", errors="ignore")
+                                            o_b = raw[orig.start_byte:orig.end_byte]
+                                            a_b = raw[alias.start_byte:alias.end_byte]
+                                            o_txt = o_b.decode("utf-8", errors="ignore")
+                                            a_txt = a_b.decode("utf-8", errors="ignore")
                                             imports_by_file[path].append((a_txt, target_js, o_txt))
                                             if child.type == "export_statement":
-                                                imports_by_file[path].append((f"__reexport__:{a_txt}", target_js, o_txt))
+                                                re_key = f"__reexport__:{a_txt}"
+                                                imports_by_file[path].append((re_key, target_js, o_txt))
                                     else:
                                         stack.extend(cur.named_children)
 

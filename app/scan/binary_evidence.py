@@ -39,7 +39,7 @@ SENSITIVE_BINARY_IMPORTS = frozenset({
 GHIDRA_VERSION = '12.2'
 DISTRIBUTION_SHA256 = '2c2cd776db3c1f6a097ba418922378ac3649cadd5e844a6f5f088ae628a7be67'
 # Pinned exporter bytes, validated against the standalone producer in tests.
-EXPORTER_SHA256 = '308df1f82dcd19db38166c478279d2ac9d287e17a0e2dcc9d224dc3385a97e77'
+EXPORTER_SHA256 = '980bd10259451c2564bf9cb64f894ba324114ac7041c573e499d20ce171f1031'
 PROFILE = 'elf-x86-64-static-v1'
 ADDRESS = re.compile(r'[A-Za-z_][A-Za-z0-9_]*:[0-9a-fA-F]{1,16}\Z')
 WL_HASH_RE = re.compile(r'[0-9a-f]{64}\Z')

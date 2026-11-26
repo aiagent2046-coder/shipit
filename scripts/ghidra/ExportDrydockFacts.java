@@ -61,11 +61,10 @@ public class ExportDrydockFacts extends HeadlessScript {
 
     private static int countBackEdgesDfs(int nodeCount, List<List<Integer>> succs) {
         if (nodeCount == 0) return 0;
-        int[] state = new int[nodeCount]; // 0 = unvisited, 1 = visiting, 2 = visited
+        int[] state = new int[nodeCount];
         int backEdges = 0;
         for (int root = 0; root < nodeCount; root++) {
             if (state[root] != 0) continue;
-            // Explicit iterative DFS stack: [node, nextChildIndex]
             List<int[]> stack = new ArrayList<>();
             state[root] = 1;
             stack.add(new int[]{root, 0});
@@ -137,10 +136,9 @@ public class ExportDrydockFacts extends HeadlessScript {
             entryPoints.add(epIter.next());
         }
 
-
-        List> functions = new ArrayList<>();
-        List> exports = new ArrayList<>();
-        List> callEdges = new ArrayList<>();
+        List<Map<String, Object>> functions = new ArrayList<>();
+        List<Map<String, Object>> exports = new ArrayList<>();
+        List<Map<String, Object>> callEdges = new ArrayList<>();
         Set<String> seenEdges = new HashSet<>();
 
         FunctionIterator iterator = functionManager.getFunctions(true);
@@ -151,7 +149,6 @@ public class ExportDrydockFacts extends HeadlessScript {
             String entry = function.getEntryPoint().toString(true);
             String name = bounded(function.getName());
 
-            // 1. Collect basic blocks in canonical address order (index 0 is entry when present).
             List<CodeBlock> rawBlocks = new ArrayList<>();
             CodeBlockIterator blockIter = blockModel.getCodeBlocksContaining(function.getBody(), monitor);
             while (blockIter.hasNext()) {
@@ -159,7 +156,6 @@ public class ExportDrydockFacts extends HeadlessScript {
                 rawBlocks.add(blockIter.next());
             }
             rawBlocks.sort(Comparator.comparing(b -> b.getFirstStartAddress().toString(true)));
-            // Ensure the block containing function entry sits at index 0 for deterministic entry-rooted DFS.
             for (int i = 1; i < rawBlocks.size(); i++) {
                 if (rawBlocks.get(i).contains(function.getEntryPoint())) {
                     CodeBlock entryBlk = rawBlocks.remove(i);
@@ -263,7 +259,6 @@ public class ExportDrydockFacts extends HeadlessScript {
                 }
             }
 
-            // 2. Compute Loop & Branch DNA metrics + 3-round Directed Weisfeiler-Lehman hash.
             int branchBlocks = 0;
             String[] colors = new String[nBlocks];
             for (int i = 0; i < nBlocks; i++) {
@@ -335,7 +330,7 @@ public class ExportDrydockFacts extends HeadlessScript {
             .thenComparing(row -> (String) row.get("target"))
             .thenComparing(row -> (String) row.get("target_kind")));
 
-        List> imports = new ArrayList<>();
+        List<Map<String, Object>> imports = new ArrayList<>();
         String[] libraries = currentProgram.getExternalManager().getExternalLibraryNames();
         Arrays.sort(libraries);
         outer: for (String library : libraries) {

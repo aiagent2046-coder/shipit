@@ -153,7 +153,8 @@ def run_forensic_investigation(
 
         observations = []
         for chain in chains:
-            if chain["reachable_sensitive_imports"] and (chain["source_delta_score"] >= 3 or chain["ffi_split_ops"] > 0):
+            has_delta = chain["source_delta_score"] not in (0, 1, 2) or bool(chain["ffi_split_ops"])
+            if chain["reachable_sensitive_imports"] and has_delta:
                 observations.append({
                     "kind": "obfuscated_ffi_to_sensitive_binary_sink",
                     "verification_status": "unverified",
@@ -208,7 +209,9 @@ def run_forensic_investigation(
             observations.append({
                 "kind": "kev_exposure_with_obfuscated_code_dna",
                 "verification_status": "unverified",
-                "kev_cve_ids": sorted({row["cve_id"] for row in kev_matches if isinstance(row, dict) and "cve_id" in row}),
+                "kev_cve_ids": sorted({
+                    row["cve_id"] for row in kev_matches if isinstance(row, dict) and "cve_id" in row
+                }),
                 "max_delta_score": dna["max_delta_score"],
             })
 

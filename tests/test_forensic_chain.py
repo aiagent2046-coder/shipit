@@ -227,8 +227,10 @@ def test_hunt_exploit_dna_extracts_invariant_fingerprint_offline():
     spec.loader.exec_module(mod)
 
     variants = [
-        "import ctypes\ndef a():\n    try:\n        lib = ctypes.CDLL('./a/' + 'b.so')\n        x = getattr(__import__('o'+'s'), 'sys'+'tem')\n    except Exception:\n        pass\n",
-        "import ctypes as c\ndef b():\n    try:\n        h = c.CDLL('lib' + 'x.so')\n        y = getattr(__import__('sub'+'process'), 'Po'+'pen')\n    except:\n        pass\n",
+        "import ctypes\ndef a():\n    try:\n        lib = ctypes.CDLL('./a/' + 'b.so')\n"
+        "        x = getattr(__import__('o'+'s'), 'sys'+'tem')\n    except Exception:\n        pass\n",
+        "import ctypes as c\ndef b():\n    try:\n        h = c.CDLL('lib' + 'x.so')\n"
+        "        y = getattr(__import__('sub'+'process'), 'Po'+'pen')\n    except:\n        pass\n",
     ]
     prof = mod.profile_bodies(variants, language="python", filename="sample.py")
     assert prof["unique_parseable"] == 2

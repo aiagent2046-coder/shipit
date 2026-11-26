@@ -47,7 +47,10 @@ def test_mcp_forensics_fences_prompt_injection_filenames_and_exposes_wl_stager()
             "analysis_timed_out": False,
             "truncated": False,
             "functions": [
-                {"entry": "ram:00401000", "name": "FUN_00401000", "body_addresses": 36, "is_thunk": False, **stager_dna},
+                {
+                    "entry": "ram:00401000", "name": "FUN_00401000",
+                    "body_addresses": 36, "is_thunk": False, **stager_dna,
+                },
             ],
             "imports": [{"library": "libc.so.6", "name": "execve", "external_location": "EXTERNAL:00000001"}],
             "exports": [{"entry": "ram:00401000", "name": "FUN_00401000"}],

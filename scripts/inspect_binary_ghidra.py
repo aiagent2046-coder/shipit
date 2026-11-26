@@ -108,7 +108,8 @@ def parse_result(data: bytes, binary_sha256: str) -> dict:
             for row in rows:
                 if type(row) is not dict:
                     raise Unavailable("invalid_result")
-                valid_shape = (set(row) == expected) or (version == 2 and field == "functions" and set(row) == fn_topo_v2)
+                is_topo_fn = version == 2 and field == "functions" and set(row) == fn_topo_v2
+                valid_shape = (set(row) == expected) or is_topo_fn
                 if not valid_shape:
                     raise Unavailable("invalid_result")
                 for name, item in row.items():

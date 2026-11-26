@@ -5,7 +5,6 @@ import json
 from app.scan import binary_evidence as binary
 from app.scan.cfg_topology import (
     KNOWN_TOPOLOGY_SIGNATURES,
-    analyze_function_topologies,
     compute_cfg_dna,
 )
 from app.scan.forensic_chain import run_forensic_investigation

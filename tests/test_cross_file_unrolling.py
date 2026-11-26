@@ -59,7 +59,10 @@ def test_three_file_split_python_payload_and_ffi_bridge_are_reconstructed_to_ghi
             "analysis_timed_out": False,
             "truncated": False,
             "functions": [
-                {"entry": "ram:00101000", "name": "entry_fn", "body_addresses": 20, "basic_blocks": 1, "cfg_edges": 0, "indirect_calls": 0, "is_thunk": False},
+                {
+                    "entry": "ram:00101000", "name": "entry_fn", "body_addresses": 20,
+                    "basic_blocks": 1, "cfg_edges": 0, "indirect_calls": 0, "is_thunk": False,
+                },
             ],
             "imports": [
                 {"library": "libc.so.6", "name": "execve", "external_location": "EXTERNAL:00000001"},
