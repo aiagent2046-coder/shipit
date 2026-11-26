@@ -1,12 +1,11 @@
 {
   "long_file": {
-    "app/main.py": 2105,
     "tests/test_llm_scan.py": 2055
   },
   "wide_directory": {
     "app": 51,
     "app/proof": 27,
-    "app/routes": 17,
+    "app/routes": 18,
     "app/scan": 130,
     "scripts": 88,
     "tests": 444
