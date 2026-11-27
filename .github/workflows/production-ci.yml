@@ -355,8 +355,8 @@ jobs:
 
       # Architecture size limits with a ratchet allow list (the deslop-please
       # method's long-file and wide-directory counting lints). Known debt is
-      # recorded in .architecture-lint-allow.json; NEW debt fails, and stale
-      # entries fail too, so --update-allow keeps the list self-cleaning like
+      # strict zero-debt limits (<= 15 directory members, <= 2000 lines per .py
+      # file) with no allow-list exemptions.
       # the import-linter baseline above. Stdlib only -- no install step.
       - name: Check architecture size limits (long-file, wide-directory)
         shell: bash
