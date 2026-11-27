@@ -4,7 +4,7 @@ names and titles come from a hostile archive and from the LLM.
 
 import pytest
 
-from app.report.html import NON_PRODUCTION_HEADING, render_report
+from app.pipeline.report.html import NON_PRODUCTION_HEADING, render_report
 
 
 def result(findings: list[dict]) -> dict:
@@ -70,8 +70,9 @@ def test_empty_findings_render_clean_state():
 
 
 def test_report_endpoint_renders_persisted_audit():
-    import app.main as main_mod
     from fastapi.testclient import TestClient
+
+    import app.main as main_mod
 
     def _row(audit_id):
         return {
@@ -115,8 +116,9 @@ def test_report_endpoint_renders_persisted_audit():
 def test_report_endpoint_422s_on_missing_score_json():
     """A row with a null/malformed score_json must yield a clean 422,
     not an unhandled KeyError -> 500 from inside render_report."""
-    import app.main as main_mod
     from fastapi.testclient import TestClient
+
+    import app.main as main_mod
 
     class FakeRepo:
         async def get_authorized(self, audit_id, access_token):
@@ -203,7 +205,7 @@ def test_the_section_does_not_tell_the_reader_these_files_never_run():
     level up. What is true of every row here, and what the reassurance
     underneath actually rests on, is that none of it serves the reader's
     users."""
-    from app.report.html import NON_PRODUCTION_NOTE
+    from app.pipeline.report.html import NON_PRODUCTION_NOTE
 
     html = render_report(result([_PROD, _CI_SERVICE]))
     _, _, section = html.partition(NON_PRODUCTION_HEADING)
@@ -343,7 +345,7 @@ def test_producer_confidence_never_becomes_confirmation(source, rule, label):
 
 
 def test_coverage_distinguishes_skipped_partial_and_legacy():
-    from app.report.evidence import coverage_rows
+    from app.pipeline.report.evidence import coverage_rows
 
     f = dict(_finding(), category="Auth")
     score = {"basis": "static_only", "categories": {}}
@@ -360,7 +362,7 @@ def test_coverage_distinguishes_skipped_partial_and_legacy():
     ["auth_read_consistency", "auth_write_consistency"],
 ])
 def test_local_route_coverage_does_not_claim_broader_authorization(checks):
-    from app.report.evidence import coverage_rows
+    from app.pipeline.report.evidence import coverage_rows
 
     score = {"basis": "static_only", "categories": {},
              "scan_manifest": {"static_checks": checks}}

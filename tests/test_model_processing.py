@@ -6,8 +6,8 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from app.foundation.llm.client import LLMClient, LLMUsage
-from app.report.evidence import manifest_rows
-from app.report.html import render_report
+from app.pipeline.report.evidence import manifest_rows
+from app.pipeline.report.html import render_report
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.function_context import collect_function_context
 from app.scan.llm_scan import run_llm_scan

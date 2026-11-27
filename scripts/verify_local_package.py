@@ -9,23 +9,22 @@ Only the harness uses subprocesses; scanning must not use the network or execute
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack, closing, redirect_stdout
+import hashlib
 import importlib
 import importlib.metadata
 import importlib.util
 import io
-import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import socket
 import subprocess
 import sys
 import tempfile
-from unittest.mock import patch
 import urllib.request
-
+from contextlib import ExitStack, closing, redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
 
 CAMEL_ROUTES = '''from fastapi import APIRouter, Depends
 router = APIRouter()
@@ -135,7 +134,7 @@ def installed_metadata():
     require(requirements == DEPENDENCIES, f"Unexpected standalone requirements: {requirements}")
     entrypoints = [entry for entry in distribution.entry_points
                    if entry.group == "console_scripts" and entry.name == "drydock-local"]
-    require(len(entrypoints) == 1 and entrypoints[0].value == "drydock_local.local_cli:main",
+    require(len(entrypoints) == 1 and entrypoints[0].value == "drydock_local.pipeline.local_cli:main",
             "Missing or incorrect installed console entry point")
     for name in ("yaml", "tree_sitter", "tree_sitter_typescript", "pglast"):
         importlib.import_module(name)
@@ -146,8 +145,8 @@ def exercise(namespace, temporary):
     root = temporary / "project"
     root.mkdir()
     fixture(root)
-    cli = importlib.import_module(f"{namespace}.local_cli")
-    store = importlib.import_module(f"{namespace}.local_store")
+    cli = importlib.import_module(f"{namespace}.pipeline.local_cli")
+    store = importlib.import_module(f"{namespace}.pipeline.local_store")
     state = temporary / "state"
     attempts = []
 

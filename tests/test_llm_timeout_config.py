@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from app import scan_pipeline as pipeline_mod
 from app.foundation.llm import client as client_mod
 from app.foundation.llm.client import LLMClient, Provider
+from app.pipeline import scan_pipeline as pipeline_mod
 
 
 def _import_client(timeout: str | None) -> subprocess.CompletedProcess[str]:

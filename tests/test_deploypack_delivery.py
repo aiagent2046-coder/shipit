@@ -5,7 +5,7 @@ import json
 
 import httpx
 
-from app.deploypack.delivery import (
+from app.services.deploypack.delivery import (
     DeliveryError,
     PullRequestResult,
     open_pull_request,

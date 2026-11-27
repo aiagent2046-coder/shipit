@@ -21,9 +21,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.billing import bank_transfer
 from app.main import app
 from app.routes.dependencies import get_billing_transport, get_payment_repo
+from app.services.billing import bank_transfer
 from tests.conftest import (
     FakeAccountRepo,
     FakeCompletionCasMixin,

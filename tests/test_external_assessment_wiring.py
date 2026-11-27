@@ -3,10 +3,10 @@ import json
 
 import pytest
 
-from app.report.html import _finding_row
+from app.pipeline.report.html import _finding_row
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.claim_evidence import partial_contradicted, unsupported_transport
 from app.scan.claim_narrative import narrative_projection
-from app.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 from tests.test_external_call_assessment import CALLER, COUNT, HELPER, WRAPPER, finding
 

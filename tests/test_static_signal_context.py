@@ -4,9 +4,9 @@ import json
 import zipfile
 from dataclasses import asdict
 
-from app.report.evidence import claim_evidence_rows, finding_counts, source_severity_counts
-from app.report.html import render_report
-from app.report.plain_language import plain_fields
+from app.pipeline.report.evidence import claim_evidence_rows, finding_counts, source_severity_counts
+from app.pipeline.report.html import render_report
+from app.pipeline.report.plain_language import plain_fields
 from app.scan.checks import run_checks
 from app.scan.claim_evidence import static_claim_evidence
 from app.scan.scoring import ScoredFinding, compute_scores

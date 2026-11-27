@@ -27,7 +27,6 @@ from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-from app.billing import bank_transfer
 from app.main import (
     app,
     get_audit_repo,
@@ -38,6 +37,7 @@ from app.main import (
 )
 from app.routes.yookassa import receive_notification
 from app.runtime.ratelimit import RateLimiter
+from app.services.billing import bank_transfer
 from tests.test_billing_bank_transfer import (
     FakeAuditRepo,
     FakeFixpackRepo,

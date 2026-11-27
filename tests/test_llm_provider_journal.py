@@ -10,8 +10,8 @@ import pytest
 from app.foundation.llm.accounting import provider_usage_summary
 from app.foundation.llm.client import LLMClient, Provider
 from app.main import _record_llm_usage
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.llm_scan import run_llm_scan
-from app.scan_pipeline import run_scan
 
 
 def archive():

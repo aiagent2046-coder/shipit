@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from app.foundation.llm import pricing
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider, supports_sampling_params
 from app.main import app, get_audit_repo
-from app.scan_pipeline import PAID_AUDIT_PASSES
+from app.pipeline.scan_pipeline import PAID_AUDIT_PASSES
 from tests.conftest import drain_audit_queue, force_pro_account, run_audit_job
 
 # Only a paying account reaches the provider: the free tier is static-only.

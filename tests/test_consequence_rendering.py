@@ -3,10 +3,19 @@ from copy import deepcopy
 
 import pytest
 
-from app.report.evidence import claim_evidence_rows
-from app.report.html import render_report
+from app.pipeline.report.evidence import claim_evidence_rows
+from app.pipeline.report.html import render_report
 from tests.test_consequence_evidence import (
-    CLIENT, DISCARD, OAUTH, REACT, check, clicks, discarded, duplicate, oauth, route_files,
+    CLIENT,
+    DISCARD,
+    OAUTH,
+    REACT,
+    check,
+    clicks,
+    discarded,
+    duplicate,
+    oauth,
+    route_files,
 )
 
 

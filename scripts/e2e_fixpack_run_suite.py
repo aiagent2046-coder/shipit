@@ -39,8 +39,8 @@ sys.path.insert(0, str(REPO_ROOT))
 
 # Imported AFTER sys.path fix; sandbox_client reads SANDBOX_RUNNER_* at import,
 # and the workflow sets them in the environment before invoking python.
-from app.fixpack.semantic_check import TestRunner  # noqa: E402
-from app.sandbox_client import run_suite  # noqa: E402
+from app.pipeline.fixpack.semantic_check import TestRunner  # noqa: E402
+from app.pipeline.sandbox_client import run_suite  # noqa: E402
 
 # A real, tiny, pure-Python package pinned for determinism. It must be fetched
 # from PyPI during the (network-on) install step, then imported offline in the

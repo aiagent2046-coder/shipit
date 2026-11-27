@@ -19,7 +19,7 @@ happened or nearly did.
 
 from __future__ import annotations
 
-from app.fixpack.merit import DELIVERED, OWED, UNDETERMINED, assess
+from app.pipeline.fixpack.merit import DELIVERED, OWED, UNDETERMINED, assess
 
 
 def job(**overrides) -> dict:
@@ -223,7 +223,7 @@ def test_it_is_pure() -> None:
     import ast
     import pathlib
 
-    import app.fixpack.merit as merit
+    import app.pipeline.fixpack.merit as merit
 
     source = pathlib.Path(merit.__file__).read_text()
     imported = {

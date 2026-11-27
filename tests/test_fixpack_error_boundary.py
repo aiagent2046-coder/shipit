@@ -13,7 +13,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.fixpack.generate import build_fixpack_plan
+from app.pipeline.fixpack.generate import build_fixpack_plan
 from app.scan.error_boundary import RULE_ID, scan_error_boundary
 
 
@@ -108,7 +108,7 @@ def test_error_boundary_only_pack_names_what_it_adds():
     """When the boundary is the only change, the title says so -- not the old
     bland 'secure repository configuration', which mislabels a reliability fix
     as security and tells the customer nothing about what the PR does."""
-    from app.fixpack.generate import render_pr_title
+    from app.pipeline.fixpack.generate import render_pr_title
     plan = build_fixpack_plan(make_zip(NEXT_APP), [_finding("app/layout.tsx")])
     assert render_pr_title(plan) == (
         "Drydock Fix Pack: add the error boundary your app is missing")
@@ -122,8 +122,7 @@ def test_a_secret_pack_still_leads_with_rotation_when_a_boundary_is_added():
     Built at the plan level: the title's priority is what changed here, and it
     is tested directly rather than through the secret fixer's file-location
     machinery, which is exercised in test_fixpack_generate."""
-    from app.fixpack.generate import (ConfigFix, FixpackPlan, SecretFix,
-                                      render_pr_title)
+    from app.pipeline.fixpack.generate import ConfigFix, FixpackPlan, SecretFix, render_pr_title
     plan = FixpackPlan(
         secret_fixes=[SecretFix(rule_id="stripe-live-key",
                                 title="Hardcoded Stripe key", file="lib/db.ts",
@@ -143,7 +142,7 @@ def test_the_generated_boundary_reaches_the_patched_zip_the_gate_builds():
     the boundary file were not in that zip at the path Next.js expects, the
     gate would build the unpatched tree and pass vacuously. It is placed under
     the repo's wrapper folder so `next build` finds it beside the layout."""
-    from app.fixpack.semantic_check import build_patched_zip
+    from app.pipeline.fixpack.semantic_check import build_patched_zip
 
     plan = build_fixpack_plan(make_zip(NEXT_APP), [_finding("app/layout.tsx")])
     patched = build_patched_zip(make_zip(NEXT_APP), plan)
@@ -161,8 +160,7 @@ def test_the_generated_boundary_is_a_valid_next_component_shape():
     <html>/<body> because it replaces the root layout. Cheap shape checks stand
     in for the build so CI need not install Next; the build itself was run once
     by hand and must stay reproducible."""
-    from app.fixpack.generate import (_ERROR_TSX, _ERROR_JSX,
-                                      _GLOBAL_ERROR_TSX, _GLOBAL_ERROR_JSX)
+    from app.pipeline.fixpack.generate import _ERROR_JSX, _ERROR_TSX, _GLOBAL_ERROR_JSX, _GLOBAL_ERROR_TSX
 
     for src in (_ERROR_TSX, _ERROR_JSX):
         assert src.startswith("'use client'")

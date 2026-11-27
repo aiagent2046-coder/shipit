@@ -4,13 +4,13 @@ import zipfile
 
 import pytest
 
-from app.fixpack.generate import FixpackPlan
-from app.fixpack.gate import run_semantic_check
-from app.fixpack.semantic_check import (
+from app.pipeline.fixpack.gate import run_semantic_check
+from app.pipeline.fixpack.generate import FixpackPlan
+from app.pipeline.fixpack.semantic_check import (
     RunResult,
     verified_build_gate_enabled,
 )
-from app.fixpack.verification import (
+from app.pipeline.fixpack.verification import (
     VerificationProfile,
     VerificationStage,
 )

@@ -1,4 +1,4 @@
-from app.fixpack.verification import (
+from app.pipeline.fixpack.verification import (
     VerificationProfile,
     VerificationStage,
     VerificationStep,

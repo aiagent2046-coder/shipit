@@ -7,11 +7,11 @@ import jsonschema
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.evidence import non_model_status_notices
-from app.report.html import render_report
-from app.report.sarif import build_sarif
+from app.pipeline.report.evidence import non_model_status_notices
+from app.pipeline.report.html import render_report
+from app.pipeline.report.sarif import build_sarif
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
 from app.scan import static
-from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
 from tests.test_check_isolation import LEAKING_MESSAGE, explode, make_zip
 
 

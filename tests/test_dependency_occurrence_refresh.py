@@ -13,14 +13,14 @@ from app.foundation.lockfiles import (
     dependency_occurrences,
     occurrence_evidence,
 )
-from app.sca.osv import OsvClient
-from app.sca.refresh import (
+from app.pipeline.sca.osv import OsvClient
+from app.pipeline.sca.refresh import (
     dependencies_from_payload,
     inventory_payload,
     refresh_stale_dependency_audits,
 )
-from app.sca.stage import RULE_ID, DependencyFinding, run_sca_stage
-from app.scan_pipeline import BASIS_STATIC_ONLY
+from app.pipeline.sca.stage import RULE_ID, DependencyFinding, run_sca_stage
+from app.pipeline.scan_pipeline import BASIS_STATIC_ONLY
 from tests.test_sca_stage import LODASH_ADVISORY, FakeTransport, make_zip
 
 NOW = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)

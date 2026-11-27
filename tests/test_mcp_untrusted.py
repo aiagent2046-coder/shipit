@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.mcp.untrusted import (
+from app.orchestration.mcp.untrusted import (
     FENCE_CLOSE,
     FENCE_OPEN,
     MAX_TEXT_CHARS,

@@ -2,16 +2,15 @@
 
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from app.scan.model_identity import configured_model_engine_version
 from app.scan.version import AUDIT_ENGINE_VERSION
-
 
 PROVIDER_ENV = (
     "AITUNNEL_API_KEY", "AITUNNEL_BASE_URL", "AITUNNEL_LLM_MODEL",
@@ -78,7 +77,7 @@ import json
 import os
 from app import main
 from app.scan import version
-from app import scan_pipeline as pipeline
+from app.pipeline import scan_pipeline as pipeline
 from app.worker import main as worker
 initial = [main.AUDIT_ENGINE_VERSION, worker.AUDIT_ENGINE_VERSION,
            pipeline.AUDIT_ENGINE_VERSION, version.AUDIT_ENGINE_VERSION]

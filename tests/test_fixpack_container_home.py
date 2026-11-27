@@ -1,4 +1,4 @@
-import app.fixpack.semantic_check as semantic_check
+import app.pipeline.fixpack.semantic_check as semantic_check
 
 
 def environment_from_argv(

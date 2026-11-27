@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 
 from app.foundation.accounts import KEY_PREFIX_LEN
-from app.mcp.keys import (
+from app.orchestration.mcp.keys import (
     MCP_KEY_PREFIX,
     generate_mcp_key,
     hash_mcp_key,

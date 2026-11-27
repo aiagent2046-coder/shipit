@@ -10,14 +10,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app import local_cli, local_store
-from app.audit_history import refresh_cached_preview_history
 from app.foundation.llm.client import LLMClient
-from app.sca import snapshot
-from app.sca.refresh import refresh_score_threat_context
+from app.pipeline import local_cli, local_store
+from app.pipeline.sca import snapshot
+from app.pipeline.sca.refresh import refresh_score_threat_context
+from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan import kev_catalog
 from app.scan.threat_context import build_threat_context
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
+from app.services.audit_history import refresh_cached_preview_history
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM
 from tests.test_audit_preview_history import Repo, row
@@ -153,7 +153,7 @@ def test_new_assessment_day_refreshes_context_without_changing_proof(kev_files):
 async def test_paid_cache_refresh_copies_top_and_baseline_without_model_or_osv(
     kev_files, monkeypatch,
 ):
-    from app import audit_history
+    from app.services import audit_history
 
     result = scan()
     paid = row('static+llm', result['findings'], dependency_inventory={'version': 1, 'dependencies': []})

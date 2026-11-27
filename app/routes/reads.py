@@ -19,9 +19,9 @@ from app.db import (
     AuditRepository,
     FixpackJobRepository,
 )
-from app.fixpack.generate import has_auto_fixable_findings
-from app.report.grouping import group_for_display
-from app.report.html import render_report
+from app.pipeline.fixpack.generate import has_auto_fixable_findings
+from app.pipeline.report.grouping import group_for_display
+from app.pipeline.report.html import render_report
 from app.routes.dependencies import (
     get_audit_job_repo,
     get_audit_repo,
@@ -222,7 +222,7 @@ async def get_fixpack_status(
         "failure_kind": failure_kind,
     }
     if status == "awaiting_authorization":
-        from app.deploypack.paid_delivery_auth import get_paid_delivery_store
+        from app.services.deploypack.paid_delivery_auth import get_paid_delivery_store
         funding = await get_paid_delivery_store().get_for_job(str(job["id"]))
         result["delivery_reference"] = funding["external_ref"] if funding else None
         result["job_id"] = job["id"]

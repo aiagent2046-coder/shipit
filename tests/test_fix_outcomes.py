@@ -21,9 +21,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app.deploypack import github_app
-from app.fixpack.semantic_check import minimal_check as local_minimal_check
-from app.deploypack.delivery import PullRequestResult
 from app.main import (
     app,
     get_audit_repo,
@@ -33,6 +30,9 @@ from app.main import (
     get_pr_opener,
     get_repo_fetcher,
 )
+from app.pipeline.fixpack.semantic_check import minimal_check as local_minimal_check
+from app.services.deploypack import github_app
+from app.services.deploypack.delivery import PullRequestResult
 
 client = TestClient(app)
 
@@ -185,7 +185,7 @@ def test_records_delivered_outcome(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
-    from app.fixpack.semantic_check import SemanticCheckResult
+    from app.pipeline.fixpack.semantic_check import SemanticCheckResult
 
     def fake_check(zip_bytes, plan, **kwargs):
         return SemanticCheckResult(
@@ -229,7 +229,7 @@ def test_records_blocked_outcome_with_regression_flag(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
-    from app.fixpack.semantic_check import RunResult, SemanticCheckResult
+    from app.pipeline.fixpack.semantic_check import RunResult, SemanticCheckResult
 
     def fake_check(zip_bytes, plan, **kwargs):
         return SemanticCheckResult(
@@ -321,7 +321,7 @@ def test_recording_failure_does_not_break_delivery(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
-    from app.fixpack.semantic_check import SemanticCheckResult
+    from app.pipeline.fixpack.semantic_check import SemanticCheckResult
 
     monkeypatch.setattr(main_mod, "run_semantic_check", lambda z, p, **kwargs: SemanticCheckResult(
         ran=False, ecosystem=None, original=None, patched=None,

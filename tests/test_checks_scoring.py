@@ -911,7 +911,7 @@ def test_origin_category_survives_the_trip_through_the_pipeline():
     sets it, the report still reads it off the dict, and only the SCORE
     computes as though it were never set. Every test above would still pass.
     """
-    from app.scan_pipeline import _SCORED_FIELDS
+    from app.pipeline.scan_pipeline import _SCORED_FIELDS
 
     assert "origin_category" in _SCORED_FIELDS
     finding = {k: v for k, v in vars(_f_from("Auth", "Security")).items()}
@@ -982,8 +982,8 @@ def test_the_preview_category_set_is_derived_from_the_rubrics_that_ran():
     rubric is added or its category changes, and the drift is silent: the
     score simply credits a category nothing examined.
     """
+    from app.pipeline.scan_pipeline import FREE_TIER_RUBRICS
     from app.scan.llm_scan import RUBRICS
-    from app.scan_pipeline import FREE_TIER_RUBRICS
 
     for rubric in FREE_TIER_RUBRICS:
         assert rubric in RUBRICS, (

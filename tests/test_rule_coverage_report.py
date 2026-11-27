@@ -1,19 +1,18 @@
 """Partial static work stays visible even when no findings were produced."""
-from copy import deepcopy
-from html import escape
 import io
 import json
-from pathlib import Path
 import zipfile
+from copy import deepcopy
+from html import escape
+from pathlib import Path
 
 import pytest
 
-from app.report.evidence import manifest_rows, non_model_status_notices
-from app.report.html import render_report
+from app.pipeline.report.evidence import manifest_rows, non_model_status_notices
+from app.pipeline.report.html import render_report
+from app.scan.archive_extraction import scan_archive_extraction
 from app.scan.manifest import scan_manifest
 from app.scan.xxe import scan_unsafe_xml_parse
-from app.scan.archive_extraction import scan_archive_extraction
-
 
 CASES = json.loads((Path(__file__).parents[1] / "web/src/lib/fixtures/rule_coverage_cases.json").read_text())
 
@@ -128,6 +127,6 @@ def test_legacy_counts_are_not_inferred_from_secrets_or_archive_size():
 
 
 def test_every_counted_rule_is_visible_in_report_coverage():
-    from app.report.evidence import RULE_COVERAGE_LABELS
+    from app.pipeline.report.evidence import RULE_COVERAGE_LABELS
     from app.scan.rule_coverage import RULE_COVERAGE_KEYS
     assert set(RULE_COVERAGE_LABELS) == set(RULE_COVERAGE_KEYS)

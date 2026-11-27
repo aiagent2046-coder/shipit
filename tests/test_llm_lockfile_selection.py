@@ -8,7 +8,7 @@ import pytest
 
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage
 from app.foundation.lockfiles import collect_dependencies
-from app.report.evidence import manifest_rows
+from app.pipeline.report.evidence import manifest_rows
 from app.scan import llm_scan
 from app.scan.manifest import scan_manifest
 

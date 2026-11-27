@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.html import render_report
-from app.scan_pipeline import run_scan
+from app.pipeline.report.html import render_report
+from app.pipeline.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import AUTH_ZIP, FakeLLM, make_zip
 
 CASES = json.loads((Path(__file__).parent / "data/audit_truthfulness_cases.json").read_text())
@@ -71,7 +71,7 @@ def test_static_matches_are_retained_with_provenance_including_test_secrets():
 
 
 def test_reported_money_examples_do_not_reproduce_the_claim(monkeypatch):
-    from app.billing.bank_transfer import _price_from_env
+    from app.services.billing.bank_transfer import _price_from_env
 
     for amount in ("990.00", "990.07"):
         monkeypatch.setenv("TEST_AUDIT_PRICE", amount)
@@ -79,7 +79,7 @@ def test_reported_money_examples_do_not_reproduce_the_claim(monkeypatch):
 
 
 def test_reported_dot_segment_zip_path_does_not_escape_extraction(tmp_path):
-    from app.fixpack.semantic_check import _extract_repo_relative
+    from app.pipeline.fixpack.semantic_check import _extract_repo_relative
 
     dest = tmp_path / "extracted"
     dest.mkdir()

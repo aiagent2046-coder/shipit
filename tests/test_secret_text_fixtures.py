@@ -1,18 +1,17 @@
 """Generated document text is retained as context, without hiding credentials."""
 
 import builtins
-from dataclasses import asdict
 import io
 import json
 import zipfile
+from dataclasses import asdict
 
 import pytest
 
-from app.report.owner_roadmap import build_owner_roadmap
-from app.report.plain_language import plain_fields
+from app.pipeline.report.owner_roadmap import build_owner_roadmap
+from app.pipeline.report.plain_language import plain_fields
 from app.scan.collapse import collapse_repeats
 from app.scan.secrets import scan_secrets
-
 
 TEXT = "VeryLongUnbrokenText"
 SOURCE = """test('wraps all document text', async () => {

@@ -38,8 +38,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
-import logging
 import json
+import logging
 import os
 import sys
 import uuid
@@ -47,12 +47,11 @@ import weakref
 from contextlib import asynccontextmanager
 from typing import Any
 
-from app.scan_pipeline import BASIS_STATIC_ONLY
-from app.scan.scoring import CATEGORIES
-
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from app.pipeline.scan_pipeline import BASIS_STATIC_ONLY
+from app.scan.scoring import CATEGORIES
 
 logger = logging.getLogger("app.db")
 

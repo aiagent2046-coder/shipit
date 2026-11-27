@@ -7,15 +7,15 @@ can fix, so it is tested rather than assumed.
 """
 from __future__ import annotations
 
-import os
-import stat
 import io
 import json
+import os
+import stat
 import zipfile
 
 import pytest
 
-from app.audit_cli import _write_artifact
+from app.pipeline.audit_cli import _write_artifact
 
 
 def mode_of(path) -> int:
@@ -58,7 +58,7 @@ def test_cli_sarif_paths_use_archive_context(tmp_path, monkeypatch, capsys,
     Only the scanner is substituted: its findings must pass through unchanged
     in JSON while SARIF locations map onto checkout paths.
     """
-    from app import audit_cli
+    from app.pipeline import audit_cli
 
     archive = tmp_path / "source.zip"
     buffer = io.BytesIO()
@@ -93,7 +93,7 @@ def test_cli_sarif_paths_use_archive_context(tmp_path, monkeypatch, capsys,
     ["source.zip", "--sarif-root", "--sarif", "out.sarif"],
 ])
 def test_cli_rejects_incomplete_sarif_root_options(monkeypatch, arguments):
-    from app import audit_cli
+    from app.pipeline import audit_cli
 
     monkeypatch.setattr(audit_cli.sys, "argv", ["audit_cli", *arguments])
     assert audit_cli.main() == 2

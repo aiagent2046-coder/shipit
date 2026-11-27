@@ -15,7 +15,7 @@ still saw their own 3. The generator has to arrive at that same policy.
 
 from __future__ import annotations
 
-from app.fixpack.rls_policy import (
+from app.pipeline.fixpack.rls_policy import (
     PolicyProposal,
     PolicyRefusal,
     propose_read_policy,
@@ -209,7 +209,7 @@ def test_only_qualified_references_are_rewritten() -> None:
     """`messages.` moves to `agent_projects.`; a bare word could be an alias, a
     column, or part of a string, and rewriting those corrupts SQL that then
     reaches a customer's database."""
-    from app.fixpack.rls_policy import _retarget
+    from app.pipeline.fixpack.rls_policy import _retarget
 
     out = _retarget("m.id = messages.match_id and note like '%messages%'",
                     "messages", "agent_projects")
@@ -220,7 +220,7 @@ def test_only_qualified_references_are_rewritten() -> None:
 def test_a_predicate_that_never_names_the_source_table_is_not_shipped() -> None:
     """If the substitution cannot be seen to have done anything, the result has
     not been verified and must not be proposed."""
-    from app.fixpack.rls_policy import _retarget
+    from app.pipeline.fixpack.rls_policy import _retarget
 
     assert _retarget("auth.uid() = owner", "messages", "agent_projects") == ""
 
@@ -263,7 +263,7 @@ def test_an_unconditional_sibling_is_rejected_as_a_precedent_itself() -> None:
     So the rule is asserted where it lives. A sibling that is wide open is not
     a precedent, whatever any downstream check happens to do about it.
     """
-    from app.fixpack.rls_policy import _precedent_for
+    from app.pipeline.fixpack.rls_policy import _precedent_for
 
     schema = parse_schema("""
         create table public.matches (id uuid primary key);
@@ -284,7 +284,7 @@ def test_an_unconditional_sibling_is_rejected_as_a_precedent_itself() -> None:
 def test_a_predicated_sibling_IS_accepted_as_a_precedent() -> None:
     """The control for the test above: without it, `_precedent_for` returning
     None unconditionally would also pass."""
-    from app.fixpack.rls_policy import _precedent_for
+    from app.pipeline.fixpack.rls_policy import _precedent_for
 
     schema = parse_schema(REAL)
     target = schema["agent_projects"]

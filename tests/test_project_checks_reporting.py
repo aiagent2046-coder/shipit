@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from app.report.html import render_report
-from app.report.sarif import build_sarif
+from app.pipeline.report.html import render_report
+from app.pipeline.report.sarif import build_sarif
 from app.runtime.project_checks import project_checks_record, project_checks_rows
 
 FIXTURES = Path(__file__).parents[1] / 'web/src/lib/fixtures/project_checks_cases.json'

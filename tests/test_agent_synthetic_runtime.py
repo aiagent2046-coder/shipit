@@ -8,6 +8,7 @@ from copy import deepcopy
 import pytest
 
 from app.foundation.llm.client import LLMClient
+from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.security_agent import agent_record
 from app.scan.static import run_static_scan
 from app.scan.synthetic_record import (
@@ -19,7 +20,6 @@ from app.scan.synthetic_record import (
     normalize_synthetic_summary,
     unavailable_summary,
 )
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_evidence_acquisition import HTTP_SQL, RUNTIME_GAPS
 from tests.test_security_agent import archive, sql_findings
 

@@ -21,13 +21,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DEPENDENCIES = {"pyyaml", "tree-sitter", "tree-sitter-typescript", "pglast"}
 EXTERNAL = {"yaml", "tree_sitter", "tree_sitter_typescript", "pglast"}
 ALLOWED = {
-    "app", "app.runtime", "app.local_cli", "app.local_store", "app.runtime.logging_config",
-    "app.runtime.log_context", "app.runtime.capabilities", "app.runtime.archive_names",
-    "app.dependency_snapshot", "app.runtime.finding_text", "app.runtime.path_policy",
-    "app.runtime.project_checks", "app.runtime.snapshot_record", "app.runtime.threat_context",
-    "app.foundation", "app.foundation.ingest", "app.foundation.ingest.validators", "app.report",
-    "app.report.sarif", "app.report.plain_language", "app.report.dependency_snapshot",
-    "app.report.project_checks", "app.report.threat_context", "app.sca",
+    "app", "app.runtime", "app.pipeline", "app.pipeline.local_cli", "app.pipeline.local_store",
+    "app.runtime.logging_config", "app.runtime.log_context", "app.runtime.capabilities",
+    "app.runtime.archive_names", "app.pipeline.dependency_snapshot", "app.runtime.finding_text",
+    "app.runtime.path_policy", "app.runtime.project_checks", "app.runtime.snapshot_record",
+    "app.runtime.threat_context", "app.foundation", "app.foundation.ingest",
+    "app.foundation.ingest.validators", "app.pipeline.report", "app.pipeline.report.sarif",
+    "app.pipeline.report.plain_language", "app.pipeline.report.dependency_snapshot",
+    "app.pipeline.report.project_checks", "app.pipeline.report.threat_context", "app.pipeline.sca",
     "app.foundation.lockfiles", "app.foundation.lockfiles.lockfile_primitives",
     "app.foundation.lockfiles.lockfiles", "app.foundation.lockfiles.resolved_locks",
     "app.foundation.lockfiles.bun_lock",
@@ -83,13 +84,13 @@ def imports(tree: ast.AST, root: Path, module: str = "") -> set[str]:
 
 
 def source_files(root: Path) -> list[Path]:
-    pending = ["app.local_cli"]
+    pending = ["app.pipeline.local_cli"]
     seen = set()
     while pending:
         name = pending.pop()
         if name in seen:
             continue
-        if name in {"app.scan_pipeline", "app.scan.llm_scan"}:
+        if name in {"app.pipeline.scan_pipeline", "app.scan.llm_scan"}:
             raise ValueError(f"Server orchestration cannot enter the local package: {name}")
         if name not in ALLOWED and not (name.startswith("app.scan.") or name == "app.scan"):
             raise ValueError(f"Module outside the offline boundary: {name}")

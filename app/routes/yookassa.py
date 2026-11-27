@@ -34,7 +34,6 @@ from fastapi import (
 )
 from pydantic import Field, field_validator
 
-from app.billing import bank_transfer, grant_fixpack, yookassa
 from app.db import (
     AuditRepository,
     FixpackJobRepository,
@@ -43,8 +42,6 @@ from app.db import (
     ServiceFlagsRepository,
     payment_confirmation_lock,
 )
-from app.deploypack.delivery_auth import DeliveryAuthorizationError
-from app.deploypack.paid_delivery_auth import authorize_paid_checkout, repository_name, seal_paid_grant
 from app.routes.bank_transfer import (
     PayerContact,
     _check_invoice_rate_limit,
@@ -61,6 +58,9 @@ from app.routes.dependencies import (
     get_service_flags_repo,
 )
 from app.runtime.ratelimit import RateLimiter
+from app.services.billing import bank_transfer, grant_fixpack, yookassa
+from app.services.deploypack.delivery_auth import DeliveryAuthorizationError
+from app.services.deploypack.paid_delivery_auth import authorize_paid_checkout, repository_name, seal_paid_grant
 
 logger = logging.getLogger(__name__)
 
@@ -357,7 +357,7 @@ async def _tell_the_payer_after_answering(
     contract here too -- an exception escaping a background task is logged by
     starlette and changes nothing about a payment that is already granted.
     """
-    from app.billing.bank_transfer import _tell_the_payer
+    from app.services.billing.bank_transfer import _tell_the_payer
 
     row = await payment_repo.get(payment_id)
     if row is None:

@@ -27,10 +27,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.foundation.ingest.validators import MAX_ARCHIVE_BYTES, validate_zip  # noqa: E402
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider  # noqa: E402
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION as PIPELINE_ENGINE_VERSION  # noqa: E402
+from app.pipeline.scan_pipeline import content_digest, run_scan  # noqa: E402
 from app.scan.llm_scan import parse_response  # noqa: E402
 from app.scan.version import AUDIT_ENGINE_VERSION  # noqa: E402
-from app.scan_pipeline import AUDIT_ENGINE_VERSION as PIPELINE_ENGINE_VERSION  # noqa: E402
-from app.scan_pipeline import content_digest, run_scan  # noqa: E402
 from scripts.env_file import read_values  # noqa: E402
 
 MODEL = "gpt-6-luna"

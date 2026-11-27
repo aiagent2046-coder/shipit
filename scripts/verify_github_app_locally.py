@@ -35,7 +35,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import httpx  # noqa: E402
 
-from app.deploypack.github_app import GitHubAppError, installation_token_for_repo  # noqa: E402
+from app.services.deploypack.github_app import GitHubAppError, installation_token_for_repo  # noqa: E402
 
 
 def main() -> int:

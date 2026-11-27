@@ -1,16 +1,16 @@
 """Ordinary scans refine JS SQL without removing findings or granting runtime proof."""
-from copy import deepcopy
 import hashlib
 import io
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
+from app.pipeline.report.js_sql_review import js_sql_review_rows
 from app.scan.js_sql_review import normalize_review, review_js_sql
 from app.scan.security_agent import agent_record
 from app.scan.static import run_static_scan
-from app.report.js_sql_review import js_sql_review_rows
 from tests.test_security_agent import archive
 
 FIXED = b"""export {};
@@ -118,7 +118,7 @@ def test_presentation_shows_refinement_and_limits():
     assert "fixed fragments" in text
     assert "presence alone" in text
     assert "original finding is retained" in text
-    from app.report.evidence import security_agent_rows
+    from app.pipeline.report.evidence import security_agent_rows
     assert "JavaScript SQL source review" in json.dumps(security_agent_rows(agent))
 
 

@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION
 from app.runtime.capabilities import (
     CAPABILITIES,
     CHECKS_RUN,
@@ -28,7 +29,6 @@ from app.runtime.capabilities import (
 )
 from app.scan import static
 from app.scan.static import run_static_scan
-from app.scan_pipeline import AUDIT_ENGINE_VERSION
 from tests.detectors.test_golden_corpus import emitted_rule_ids
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

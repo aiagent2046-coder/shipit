@@ -1,13 +1,13 @@
 """Real report narratives, bounded source mutations and mocked model admission."""
+import json
 from copy import deepcopy
 from dataclasses import asdict, replace
 from hashlib import sha256
-import json
 from pathlib import Path
 
 import pytest
 
-from app.report.html import _finding_row
+from app.pipeline.report.html import _finding_row
 from app.scan import review_counterevidence as review
 from app.scan.claim_evidence import model_claim_evidence, narrative_review_checks
 from app.scan.claim_narrative import narrative_projection, project_claim_narrative
@@ -200,7 +200,12 @@ def test_model_cannot_supply_the_new_proof(kind):
 
 
 def test_sql_summary_separates_source_review_without_changing_saved_severity():
-    from app.report.evidence import source_review_count, source_severity_counts, observation_summary, finding_counts
+    from app.pipeline.report.evidence import (
+        finding_counts,
+        observation_summary,
+        source_review_count,
+        source_severity_counts,
+    )
     finding, hashes = observation('sql')
     projected = asdict(project_claim_narrative(replace(finding, severity='high'), current_source_hashes=hashes))
     assert projected['severity'] == 'high'
@@ -215,7 +220,7 @@ def test_sql_summary_separates_source_review_without_changing_saved_severity():
     ordinary = asdict(replace(finding, severity='high'))
     assert source_severity_counts([ordinary])['high'] == 1
     assert source_review_count([{**projected, 'context': 'test_file'}]) == 0
-    from app.report.html import render_report
+    from app.pipeline.report.html import render_report
     html = render_report({'score': compute_scores([finding]), 'findings': [projected]})
     assert '1 source interpretations need review' in html
     assert '1 high' not in html

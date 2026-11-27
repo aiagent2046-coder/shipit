@@ -1,16 +1,16 @@
 """Public outputs keep the corrected premise active and the model original historical."""
+import json
 from copy import deepcopy
 from dataclasses import asdict
 from html.parser import HTMLParser
-import json
 from pathlib import Path
 
 import jsonschema
 import pytest
 
-from app.report.evidence import claim_evidence_rows
-from app.report.html import _finding_row
-from app.report.sarif import build_sarif
+from app.pipeline.report.evidence import claim_evidence_rows
+from app.pipeline.report.html import _finding_row
+from app.pipeline.report.sarif import build_sarif
 from app.scan.claim_narrative import narrative_projection, project_claim_narrative
 from tests.test_claim_narrative import FACT_CALLER, fixture
 
@@ -48,7 +48,7 @@ def generated(kind):
 
 def query_group():
     from app.scan.cross_rubric_dedup import dedup_cross_rubric
-    from tests.test_query_read_identity import _finding, _raw, TITLES
+    from tests.test_query_read_identity import TITLES, _finding, _raw
 
     findings = [_finding(), _finding(_raw(TITLES[1]), response=7)]
     # The grouping unit fixture omits display-only prose; real scanner records

@@ -13,16 +13,16 @@ autouse fixture removes it; without it these tests are explicitly skipped.
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from decimal import Decimal
-import os
 
-from hypothesis import given, settings, strategies as st
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from app import db
-from app.billing import grant_pro_tier
-
+from app.services.billing import grant_pro_tier
 
 _DB_URL = os.environ.get("DATABASE_URL")
 _PROVIDER = "bank_transfer"

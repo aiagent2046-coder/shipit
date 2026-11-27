@@ -23,7 +23,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.routes.bank_transfer as bank_transfer_routes
-from app.billing import bank_transfer, telegram_stars
 from app.main import (
     app,
     get_account_repo,
@@ -34,6 +33,7 @@ from app.main import (
     get_rate_limiter,
 )
 from app.runtime.ratelimit import RateLimiter
+from app.services.billing import bank_transfer, telegram_stars
 from tests.conftest import (
     FakeAccountRepo,
     FakeCompletionCasMixin,

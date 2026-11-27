@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 
 from app.foundation.llm.client import LLMClient
+from app.pipeline.scan_pipeline import run_scan
 from app.scan import source_facts
 from app.scan.llm_scan import build_prompt, fit_to_window
-from app.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 HELPER = b"import hmac as hm\ndef _secret_equals(a, b):\n    return hm.compare_digest(a, b)\n"

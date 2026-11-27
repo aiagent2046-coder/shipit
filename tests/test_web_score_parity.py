@@ -19,7 +19,7 @@ def test_result_and_demo_use_evidence_coverage_and_no_readiness_widget():
 
 
 def test_wire_type_includes_every_scan_basis():
-    from app.scan_pipeline import BASIS_FULL, BASIS_PARTIAL, BASIS_PREVIEW, BASIS_STATIC_ONLY
+    from app.pipeline.scan_pipeline import BASIS_FULL, BASIS_PARTIAL, BASIS_PREVIEW, BASIS_STATIC_ONLY
 
     text = (ROOT / "web/src/lib/types.ts").read_text()
     for basis in (BASIS_FULL, BASIS_PARTIAL, BASIS_PREVIEW, BASIS_STATIC_ONLY):

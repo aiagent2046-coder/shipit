@@ -1,18 +1,17 @@
 """A unique dependency assessment retains every recorded manifest in exports."""
 
+import json
 from copy import deepcopy
 from html import escape
-import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import jsonschema
 import pytest
 
-from app.report.html import render_report
-from app.report.plain_language import plain_fields
-from app.report.sarif import build_sarif
-
+from app.pipeline.report.html import render_report
+from app.pipeline.report.plain_language import plain_fields
+from app.pipeline.report.sarif import build_sarif
 
 DEPENDENCY_RULES = ("dependency-cve-match", "dependency-known-vulnerability")
 

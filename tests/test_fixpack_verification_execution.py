@@ -2,8 +2,8 @@ import io
 import subprocess
 import zipfile
 
-import app.fixpack.semantic_check as semantic_check
-from app.fixpack.verification import (
+import app.pipeline.fixpack.semantic_check as semantic_check
+from app.pipeline.fixpack.verification import (
     VerificationProfile,
     VerificationStep,
 )

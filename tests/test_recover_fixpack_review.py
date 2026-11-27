@@ -1,20 +1,20 @@
-from contextlib import contextmanager
-from copy import deepcopy
-from dataclasses import replace
 import io
 import json
 import logging
 import os
-from pathlib import Path
 import stat
 import sys
-from types import SimpleNamespace
 import zipfile
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from app.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
 from scripts import recover_fixpack_review as recovery
 
 REQUEST = recovery.ReviewRequest("a" * 40, "11111111-1111-4111-8111-111111111111",
@@ -250,7 +250,7 @@ async def test_real_pipeline_reuses_matching_full_audit_without_a_second_llm_cal
 @pytest.mark.asyncio
 async def test_full_analysis_is_kept_while_failed_included_preview_is_retried(data, tmp_path, monkeypatch):
     from app import main
-    from app.scan_pipeline import BASIS_PREVIEW
+    from app.pipeline.scan_pipeline import BASIS_PREVIEW
 
     store = Store(data)
     store.saved[REVIEW_ID] = saved_review(data, baseline="unavailable")

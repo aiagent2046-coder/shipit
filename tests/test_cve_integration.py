@@ -7,16 +7,16 @@ import httpx
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.cve import cve_notices, cve_rows
-from app.report.evidence import manifest_rows, non_model_status_notices
-from app.report.html import render_report
-from app.report.sarif import build_sarif
-from app.sca.cache import complete_cached_dependencies, needs_dependency_scan
-from app.sca.cve import CveClient
-from app.sca.osv import OsvClient
-from app.sca.refresh import refresh_stale_dependency_audits
-from app.sca.stage import run_sca_stage, sca_client_for
-from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
+from app.pipeline.report.cve import cve_notices, cve_rows
+from app.pipeline.report.evidence import manifest_rows, non_model_status_notices
+from app.pipeline.report.html import render_report
+from app.pipeline.report.sarif import build_sarif
+from app.pipeline.sca.cache import complete_cached_dependencies, needs_dependency_scan
+from app.pipeline.sca.cve import CveClient
+from app.pipeline.sca.osv import OsvClient
+from app.pipeline.sca.refresh import refresh_stale_dependency_audits
+from app.pipeline.sca.stage import run_sca_stage, sca_client_for
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
 from tests.test_cve_client import FIRST, published
 from tests.test_sca_refresh import NOW, StoredRepo, stored_row
 from tests.test_sca_stage import LODASH_ADVISORY, FakeTransport, one_advisory, repo_with

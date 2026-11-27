@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-import app.audit_spool as spool
+import app.services.audit_spool as spool
 
 
 @pytest.fixture

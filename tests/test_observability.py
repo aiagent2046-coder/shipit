@@ -22,11 +22,11 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app.deploypack import github_app
-from app.deploypack.delivery import PullRequestResult
-from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.main import app, get_fixpack_repo
 from app.notify import alerts
+from app.pipeline.fixpack.semantic_check import minimal_check as local_minimal_check
+from app.services.deploypack import github_app
+from app.services.deploypack.delivery import PullRequestResult
 
 
 @pytest.fixture(autouse=True)

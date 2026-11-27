@@ -1,10 +1,13 @@
 """Caller GitHub authority cannot be replaced by the service's App/PAT."""
 import json
+
 import httpx
 import pytest
 
-from app.deploypack.delivery_auth import (
-    DeliveryAuthorizationError, authorize_repository_delivery, validate_delivery_token,
+from app.services.deploypack.delivery_auth import (
+    DeliveryAuthorizationError,
+    authorize_repository_delivery,
+    validate_delivery_token,
 )
 
 TOKEN = "fixture-request-only-token"
@@ -79,7 +82,7 @@ def test_missing_or_invalid_tokens_are_rejected_without_network(token):
     ({}, {"message": "You have exceeded a secondary rate limit."}),
 ])
 def test_github_rate_limit_403_is_unavailable_not_revoked(headers, body):
-    from app.deploypack.delivery import _check, DeliveryError
+    from app.services.deploypack.delivery import DeliveryError, _check
     response = httpx.Response(403, headers=headers, json=body)
     with pytest.raises(DeliveryAuthorizationError) as error:
         authorize_repository_delivery("acme", "app", TOKEN, transport=httpx.MockTransport(

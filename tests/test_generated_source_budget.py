@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.report.sarif import build_sarif
+from app.pipeline.report.sarif import build_sarif
 from app.scan.cookie_flags import scan_cookie_flags
 from app.scan.manifest import scan_manifest
 from app.scan.secrets import scan_secrets

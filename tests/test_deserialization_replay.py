@@ -1,13 +1,12 @@
 """Shared saved-report mutations must revoke the same proof in all renderers."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
-from app.report.evidence import security_agent_rows
+from app.pipeline.report.evidence import security_agent_rows
 from app.scan.security_agent import agent_record
-
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BASE = json.loads((FIXTURES / "deserialization-agent.json").read_text())[0]["report"]["security_agent"]

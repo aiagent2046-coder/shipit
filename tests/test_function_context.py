@@ -1,13 +1,13 @@
 """Source-driven observations and conservative cross-file navigation."""
 import io
 import json
-from pathlib import Path
 import stat
 import zipfile
+from pathlib import Path
 
+from app.pipeline.report.evidence import manifest_rows
 from app.scan import function_context as context
 from app.scan.source_facts import collect_source_facts, facts_prompt
-from app.report.evidence import manifest_rows
 from tests.test_operation_context import archive
 
 
@@ -93,8 +93,8 @@ def test_budgets_and_prompt_do_not_mutate_inventory(monkeypatch):
 
 def test_actual_payment_helpers_survive_function_prompt_budget():
     db_paths = sorted(p.as_posix() for p in Path('app/db').glob('*.py'))
-    paths = [*db_paths, 'app/billing/__init__.py', 'app/billing/bank_transfer.py',
-             'app/main.py', 'app/worker/main.py', 'app/llm_budget.py']
+    paths = [*db_paths, 'app/services/billing/__init__.py', 'app/services/billing/bank_transfer.py',
+             'app/main.py', 'app/worker/main.py', 'app/services/llm_budget.py']
     r = collect_source_facts(archive({p: Path(p).read_text() for p in paths}))
     prompt = facts_prompt(r)
     assert len(prompt) <= 16000

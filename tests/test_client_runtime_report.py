@@ -3,8 +3,8 @@ from copy import deepcopy
 
 import pytest
 
-from app.report.evidence import security_agent_rows
-from app.report.html import render_report
+from app.pipeline.report.evidence import security_agent_rows
+from app.pipeline.report.html import render_report
 from app.scan.client_runtime_chain import attach_client_runtime
 from app.scan.client_runtime_record import ARCHIVE_SHA256
 from tests.test_client_runtime_record import runtime_evidence

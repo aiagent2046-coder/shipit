@@ -14,7 +14,6 @@ created at import time, handed out by reference.
 
 from __future__ import annotations
 
-from app import sandbox_client
 from app.db import (
     AccountRepository,
     AuditJobRepository,
@@ -30,11 +29,12 @@ from app.db import (
     ServiceFlagsRepository,
     SubscriptionRepository,
 )
-from app.deploypack.delivery import open_pull_request
-from app.deploypack.preview import PreviewRegistry
 from app.foundation.ingest.github_fetch import fetch_repo_zip
 from app.foundation.llm.client import LLMClient
+from app.pipeline import sandbox_client
 from app.runtime.ratelimit import RateLimiter, limiter_from_env
+from app.services.deploypack.delivery import open_pull_request
+from app.services.deploypack.preview import PreviewRegistry
 
 _limiter = limiter_from_env()
 

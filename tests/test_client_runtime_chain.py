@@ -5,10 +5,10 @@ import hashlib
 import pytest
 
 from app.foundation.llm.client import LLMClient
+from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.client_runtime_chain import attach_client_runtime
 from app.scan.client_runtime_record import ARCHIVE_SHA256, SCENARIO_SHA256
 from app.scan.security_agent import agent_record
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_client_runtime_record import runtime_evidence
 from tests.test_security_agent import archive
 

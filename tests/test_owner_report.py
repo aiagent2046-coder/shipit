@@ -1,14 +1,14 @@
 """Owner wording must retain the exact limits of replayed source evidence."""
+import json
 from copy import deepcopy
 from html import escape
-import json
 from pathlib import Path
 
 import pytest
 
-from app.report.html import render_report
-from app.report.owner_report import build_owner_report, owner_report_context
-from app.report.sarif import build_sarif
+from app.pipeline.report.html import render_report
+from app.pipeline.report.owner_report import build_owner_report, owner_report_context
+from app.pipeline.report.sarif import build_sarif
 
 FIXTURES = Path(__file__).parent / "fixtures"
 REPORTS = {case["name"]: case["report"] for case in json.loads(
@@ -129,7 +129,7 @@ def test_legacy_report_without_trace_keeps_original_rendering():
       'sca_skipped_reason': ['no_resolvable_lockfile'], 'dependency_cve': {'status': []}}, None),
 ])
 def test_summary_and_roadmap_share_current_dependency_scope(facts, message):
-    from app.report.owner_roadmap import build_owner_roadmap
+    from app.pipeline.report.owner_roadmap import build_owner_roadmap
 
     report = {'findings': deepcopy(REPORTS['completed']['findings']),
               'score': {'scan_manifest': facts, 'free_baseline': {

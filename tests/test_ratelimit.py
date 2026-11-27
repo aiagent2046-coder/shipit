@@ -278,8 +278,8 @@ def test_preflight_failures_keep_cors_and_never_read_body(monkeypatch):
     from fastapi import FastAPI
     from starlette.requests import Request
 
-    import app.audit_workflow as audit_mod
     import app.main as main
+    import app.orchestration.audit_workflow as audit_mod
     from app.runtime.ratelimit import RateLimitStoreError
 
     limiter = RateLimiter(limit=1)

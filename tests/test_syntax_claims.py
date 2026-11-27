@@ -1,20 +1,19 @@
 """Source counterexamples, unknown cases and storage/reporting boundaries."""
 import io
 import json
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 import pytest
 
-from app.report.evidence import finding_counts, source_severity_counts
-from app.report.html import render_report
+from app.pipeline.report.evidence import finding_counts, source_severity_counts
+from app.pipeline.report.html import render_report
 from app.scan.claim_evidence import syntax_contradicted
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.syntax_claims import MAX_CHECKS, MAX_FILE_BYTES, SyntaxVerifier
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
-
 
 HOOK_TITLE = "useState calls follow an early return — hook order changes"
 SQL_TITLE = "UPDATE without a WHERE clause"

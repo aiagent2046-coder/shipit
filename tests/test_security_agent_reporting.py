@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.evidence import claim_evidence_rows, manifest_rows, security_agent_rows
-from app.report.html import render_report
+from app.pipeline.report.evidence import claim_evidence_rows, manifest_rows, security_agent_rows
+from app.pipeline.report.html import render_report
+from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan import security_agent
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_security_agent import SQL, archive, sql_findings
 
 CASES = json.loads((Path(__file__).parent / "fixtures/security-agent-reports.json").read_text())
@@ -256,7 +256,7 @@ def synthetic_report():
 
 
 def test_saved_synthetic_evidence_keeps_project_gaps_in_html_and_sarif(synthetic_report):
-    from app.report.sarif import build_sarif
+    from app.pipeline.report.sarif import build_sarif
 
     before = deepcopy(synthetic_report)
     agent = synthetic_report["score"]["scan_manifest"]["security_agent"]
@@ -291,7 +291,7 @@ def test_saved_synthetic_evidence_keeps_project_gaps_in_html_and_sarif(synthetic
     ("source.engine_version", "another-engine"), ("reason", "private error text"),
 ])
 def test_inconsistent_synthetic_evidence_cannot_promote_saved_html_or_sarif(synthetic_report, field, value):
-    from app.report.sarif import build_sarif
+    from app.pipeline.report.sarif import build_sarif
 
     result = deepcopy(synthetic_report)
     agent = result["score"]["scan_manifest"]["security_agent"]

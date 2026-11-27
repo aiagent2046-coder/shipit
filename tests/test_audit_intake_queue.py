@@ -23,10 +23,10 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-import app.audit_spool as spool_mod
-import app.ops_endpoints as ops_mod
-from app.audit_spool import SpoolFull
+import app.services.audit_spool as spool_mod
+import app.services.ops_endpoints as ops_mod
 from app.main import app, get_audit_job_repo, get_audit_repo, get_repo_fetcher
+from app.services.audit_spool import SpoolFull
 
 client = TestClient(app)
 
@@ -90,7 +90,7 @@ def test_spool_full_dead_letters_the_created_row_and_503s(audit_queue,
     def boom(job_id, raw):
         raise SpoolFull("spool is at capacity")
 
-    monkeypatch.setattr("app.audit_workflow.stage_archive", boom)
+    monkeypatch.setattr("app.orchestration.audit_workflow.stage_archive", boom)
 
     resp = _post_zip()
     assert resp.status_code == 503
@@ -108,7 +108,7 @@ def test_staging_oserror_dead_letters_the_created_row_and_503s(audit_queue,
     def boom(job_id, raw):
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr("app.audit_workflow.stage_archive", boom)
+    monkeypatch.setattr("app.orchestration.audit_workflow.stage_archive", boom)
 
     resp = _post_zip()
     assert resp.status_code == 503
@@ -128,7 +128,7 @@ def test_retry_after_a_staging_failure_is_accepted(audit_queue, monkeypatch):
             raise OSError(28, "No space left on device")
         return real_stage(job_id, raw)
 
-    monkeypatch.setattr("app.audit_workflow.stage_archive", flaky)
+    monkeypatch.setattr("app.orchestration.audit_workflow.stage_archive", flaky)
 
     assert _post_zip().status_code == 503
     assert _post_zip().status_code == 202
@@ -177,7 +177,7 @@ def test_explicit_key_preserves_identical_retry_without_restaging(audit_queue, m
     def must_not_restage(*args):
         raise AssertionError("retry rewrote a live worker payload")
 
-    monkeypatch.setattr("app.audit_workflow.stage_archive", must_not_restage)
+    monkeypatch.setattr("app.orchestration.audit_workflow.stage_archive", must_not_restage)
     second = _post_zip(headers={"Idempotency-Key": "shared-client-label"})
     assert first.status_code == second.status_code == 202
     assert second.json() == first.json()
@@ -256,7 +256,7 @@ def test_database_collision_is_a_conflict_without_disclosing_identity(audit_queu
 
 
 def test_derived_idempotency_key_is_scoped_to_content_and_engine(audit_queue):
-    from app.audit_workflow import _audit_idempotency_key
+    from app.orchestration.audit_workflow import _audit_idempotency_key
 
     a = _audit_idempotency_key("digest-a", None)
     assert a != _audit_idempotency_key("digest-b", None)

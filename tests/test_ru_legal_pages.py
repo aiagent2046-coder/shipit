@@ -32,7 +32,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from app.billing.bank_transfer import CURRENCY, _DEFAULT_FIXPACK_PRICE_RUB
+from app.services.billing.bank_transfer import _DEFAULT_FIXPACK_PRICE_RUB, CURRENCY
 
 RU = Path(__file__).resolve().parent.parent / "web" / "src" / "app" / "ru"
 PRICE_TS = RU / "price.ts"

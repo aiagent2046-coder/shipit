@@ -1,19 +1,18 @@
 """A later catalog failure must preserve the latest embedded dependency answer."""
 
-from copy import deepcopy
 import hashlib
 import json
 import socket
+from copy import deepcopy
 from unittest.mock import AsyncMock
 
 import pytest
 
-from app.sca import snapshot
+from app.pipeline.sca import snapshot
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM
 from tests.test_audit_preview_history import Repo
 from tests.test_browser_cve import CATALOG, project
-
 
 ADVISORY = "GHSA-f3q4-ggfp-jv34"
 
@@ -103,7 +102,7 @@ async def test_catalog_failure_keeps_latest_embedded_baseline_and_original_histo
 
 @pytest.mark.asyncio
 async def test_first_standalone_failure_preserves_prior_included_dependency_evidence(tmp_path, monkeypatch):
-    from app.audit_history import refresh_cached_preview_history
+    from app.services.audit_history import refresh_cached_preview_history
     from app.worker import main as worker
 
     catalog_path, receipt_path = tmp_path / "catalog.json", tmp_path / "catalog.sha256"

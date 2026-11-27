@@ -7,9 +7,10 @@ without network or Docker.
 
 from __future__ import annotations
 
-from app.deploypack import github_app
-from app.deploypack.delivery import PullRequestResult
-
+import app.main as main_mod
+from app.pipeline.fixpack.semantic_check import minimal_check as local_minimal_check
+from app.services.deploypack import github_app
+from app.services.deploypack.delivery import PullRequestResult
 from tests.test_fixpack_process_endpoint import (
     ExplodingLLM,
     FakeAuditRepo,
@@ -21,9 +22,6 @@ from tests.test_fixpack_process_endpoint import (
     make_zip,
     override,
 )
-
-import app.main as main_mod
-from app.fixpack.semantic_check import minimal_check as local_minimal_check
 
 
 class FakeFixpackRepoWithProof(FakeFixpackRepo):

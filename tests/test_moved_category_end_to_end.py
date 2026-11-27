@@ -28,8 +28,8 @@ import json
 import zipfile
 
 from app.foundation.llm.client import LLMClient, LLMUsage, Provider
-from app.report.html import render_report
-from app.scan_pipeline import run_scan
+from app.pipeline.report.html import render_report
+from app.pipeline.scan_pipeline import run_scan
 
 # Matches the auth rubric's keywords, so that rubric runs and its findings are
 # the ones the model gets to move.

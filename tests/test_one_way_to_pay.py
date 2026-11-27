@@ -57,9 +57,9 @@ RETIRED_ENDPOINTS = [
 ]
 
 RETIRED_MODULES = [
-    "app.billing.paypal",
+    "app.services.billing.paypal",
     "app.routes.paypal",
-    "app.billing.usdt_trc20",
+    "app.services.billing.usdt_trc20",
 ]
 
 

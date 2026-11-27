@@ -7,9 +7,9 @@ import pytest
 
 from app.foundation.llm.client import LLMClient
 from app.main import app, get_audit_repo, run_repo_audit
-from app.sca.cache import complete_cached_dependencies, needs_dependency_scan
-from app.sca.stage import RULE_ID
-from app.scan_pipeline import content_digest, run_scan
+from app.pipeline.sca.cache import complete_cached_dependencies, needs_dependency_scan
+from app.pipeline.sca.stage import RULE_ID
+from app.pipeline.scan_pipeline import content_digest, run_scan
 from app.worker import main as worker
 from tests.conftest import run_audit_job
 from tests.test_audit_determinism import _post, force_pro_account
@@ -97,7 +97,7 @@ def test_paid_intake_queues_missing_sca_without_leaking_inventory(monkeypatch, a
 
 
 def test_dependency_outage_preserves_known_cached_evidence(monkeypatch):
-    import app.sca.cache as cache
+    import app.pipeline.sca.cache as cache
 
     paid = row("static+llm", [{"rule_id": RULE_ID, "title": "Known vulnerability"}],
                dependency_inventory=INVENTORY)

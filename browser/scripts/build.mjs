@@ -55,9 +55,9 @@ const paths = (await readdir(join(root, 'app/scan')))
   .map(name => `app/scan/${name}`);
 paths.push('app/__init__.py', 'app/runtime/__init__.py',
   'app/runtime/capabilities.py', 'app/foundation/__init__.py', 'app/foundation/ingest/__init__.py',
-  'app/foundation/ingest/validators.py', 'app/report/__init__.py', 'app/report/plain_language.py',
-  'app/report/sarif.py', 'app/runtime/project_checks.py', 'app/runtime/threat_context.py',
-  'app/dependency_snapshot.py', 'app/runtime/archive_names.py', 'app/runtime/finding_text.py',
+  'app/foundation/ingest/validators.py', 'app/pipeline/__init__.py', 'app/pipeline/report/__init__.py', 'app/pipeline/report/plain_language.py',
+  'app/pipeline/report/sarif.py', 'app/runtime/project_checks.py', 'app/runtime/threat_context.py',
+  'app/pipeline/dependency_snapshot.py', 'app/runtime/archive_names.py', 'app/runtime/finding_text.py',
   'app/runtime/path_policy.py', 'app/runtime/snapshot_record.py',
   'app/foundation/lockfiles/__init__.py', 'app/foundation/lockfiles/lockfiles.py',
   'app/foundation/lockfiles/lockfile_primitives.py', 'app/foundation/lockfiles/resolved_locks.py',

@@ -1,6 +1,6 @@
 """Presentation must not turn static observations or missing telemetry into model work."""
-from app.report.evidence import manifest_rows, observation_summary, review_contribution_rows
-from app.report.html import render_report
+from app.pipeline.report.evidence import manifest_rows, observation_summary, review_contribution_rows
+from app.pipeline.report.html import render_report
 
 
 def finding(**changes):

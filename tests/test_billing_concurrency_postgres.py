@@ -21,8 +21,7 @@ import psycopg
 import pytest
 
 from app import db
-from app.billing import grant_pro_tier
-
+from app.services.billing import grant_pro_tier
 
 _DB_URL = os.environ.get("DATABASE_URL")
 
@@ -597,12 +596,17 @@ async def test_the_newest_pro_payment_still_wins(live_db):
 
 async def test_yookassa_concurrent_callbacks_schedule_one_notification(live_db, monkeypatch):
     from fastapi import BackgroundTasks
-    from app.billing import bank_transfer
+
     from app.routes.yookassa import receive_notification
-    from tests.test_routes_yookassa import (
-        _request, _seed, _succeeded, _record_told, PAYMENT_ID,
-    )
+    from app.services.billing import bank_transfer
     from tests.test_db_postgres_smoke import _fixpack_audit
+    from tests.test_routes_yookassa import (
+        PAYMENT_ID,
+        _record_told,
+        _request,
+        _seed,
+        _succeeded,
+    )
 
     monkeypatch.setenv("YOOKASSA_SHOP_ID", "test-shop")
     monkeypatch.setenv("YOOKASSA_SECRET_KEY", "test-shop-secret")

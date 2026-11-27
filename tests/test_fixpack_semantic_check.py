@@ -12,9 +12,10 @@ import os
 import subprocess
 import zipfile
 
-import app.fixpack.semantic_check as sc
-from app.fixpack.generate import FixpackPlan
-from app.fixpack.semantic_check import (
+import app.pipeline.fixpack.semantic_check as sc
+from app.pipeline.fixpack.gate import run_semantic_check
+from app.pipeline.fixpack.generate import FixpackPlan
+from app.pipeline.fixpack.semantic_check import (
     RunResult,
     _docker_install_argv,
     _docker_test_argv,
@@ -27,7 +28,6 @@ from app.fixpack.semantic_check import (
     parse_pytest_counts,
     run_suite,
 )
-from app.fixpack.gate import run_semantic_check
 
 
 def make_zip(entries: dict[str, str]) -> bytes:

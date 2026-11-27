@@ -42,8 +42,6 @@ import httpx
 import pytest
 
 import app.db as db_mod
-from app.audit_history import refresh_cached_preview_history
-from app.billing import bank_transfer
 from app.db import (
     AccountRepository,
     AuditRepository,
@@ -57,6 +55,8 @@ from app.db import (
 )
 from app.foundation.accounts import api_key_prefix, generate_api_key
 from app.foundation.monitor import MONITORING_INTERVAL_HOURS
+from app.services.audit_history import refresh_cached_preview_history
+from app.services.billing import bank_transfer
 
 # Captured at import time, before conftest's autouse _no_ambient_database_url
 # deletes it. skipif is evaluated at collection time too, so both see the
@@ -254,7 +254,7 @@ async def test_all_repository_write_paths(real_db):
 
     # The verdict an operator would see, computed from the real rows rather
     # than from a dict a test wrote.
-    from app.fixpack.merit import DELIVERED, assess
+    from app.pipeline.fixpack.merit import DELIVERED, assess
     verdict = assess(job=await fixpack_repo.get(job_id), outcome=by_job)
     assert verdict.conclusion == DELIVERED
     assert any("SEC001" in r.detail for r in verdict.reasons)
@@ -790,7 +790,7 @@ async def test_grant_fixpack_self_heals_when_a_write_crashes(real_db, finish_bef
     raise. On the old code that trips in mark_completed_fixpack, on the new one
     in create_paid, and `crashed_in` records which -- so the test measures the
     order rather than assuming it."""
-    from app.billing import grant_fixpack
+    from app.services.billing import grant_fixpack
 
     audit_repo = AuditRepository()
     payment_repo = PaymentRepository()
@@ -882,7 +882,7 @@ async def test_two_orders_on_one_audit_each_find_their_own_buyer(real_db):
     Only real Postgres shows this: the pairing is a foreign key and a WHERE
     clause, and an in-memory fake keyed by job id agrees with itself no matter
     what the SQL does."""
-    from app.billing import grant_fixpack
+    from app.services.billing import grant_fixpack
 
     audit_repo = AuditRepository()
     payment_repo = PaymentRepository()
@@ -1442,7 +1442,7 @@ async def test_a_second_mcp_key_cannot_read_the_first_keys_audit(real_db):
     not enough, and a key that read any audit by id would step around it --
     what it returns is a list of somebody's unfixed vulnerabilities.
     """
-    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+    from app.orchestration.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
 
     audit_repo = AuditRepository()
     keys = db_mod.McpKeyRepository()
@@ -1478,7 +1478,7 @@ async def test_two_mcp_keys_share_one_audit_without_taking_it(real_db):
     audits identical content next, so two keys land on one audit legitimately.
     A single-owner column would deny the second the audit it just asked for,
     or take it from the first -- which is why this is a join table."""
-    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+    from app.orchestration.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
 
     audit_repo = AuditRepository()
     keys = db_mod.McpKeyRepository()
@@ -1505,7 +1505,7 @@ async def test_a_revoked_mcp_key_stops_resolving(real_db):
     """Revocation is decided inside the lookup rather than returned as a field
     each caller must remember to test -- one forgetful call site is a revoked
     credential that still works."""
-    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+    from app.orchestration.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
 
     keys = db_mod.McpKeyRepository()
     key = generate_mcp_key()
@@ -1523,7 +1523,7 @@ async def test_the_plaintext_mcp_key_is_never_stored(real_db):
     """The posture accounts reached in migration 0019: a database leak alone
     must not hand over working credentials. Asserted by searching the row for
     the key rather than by trusting the INSERT's column list."""
-    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+    from app.orchestration.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
 
     keys = db_mod.McpKeyRepository()
     key = generate_mcp_key()
@@ -1547,7 +1547,7 @@ async def test_list_audits_returns_only_this_keys_audits(real_db):
     """What drydock_list_recent shows. The same membership rule as
     may_read_audit, and it has to be, or the list becomes the leak the
     per-audit check prevents."""
-    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+    from app.orchestration.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
 
     audit_repo = AuditRepository()
     keys = db_mod.McpKeyRepository()
@@ -1601,7 +1601,7 @@ async def test_the_mcp_endpoint_refuses_a_stranger_audit_over_real_sql(
     from fastapi.testclient import TestClient
 
     import app.main as main_mod
-    from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+    from app.orchestration.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
 
     monkeypatch.setenv("MCP_ENABLED", "1")
 
@@ -1819,8 +1819,8 @@ async def test_a_failed_check_is_not_a_baseline_in_real_sql(real_db):
 
 
 async def test_distinct_confirmed_payments_share_work_but_keep_the_funding_buyer(real_db):
-    from app.billing import grant_fixpack
-    from app.billing.bank_transfer import invoice_status
+    from app.services.billing import grant_fixpack
+    from app.services.billing.bank_transfer import invoice_status
 
     audits, payments, jobs = AuditRepository(), PaymentRepository(), FixpackJobRepository()
     run = uuid.uuid4().hex[:12]

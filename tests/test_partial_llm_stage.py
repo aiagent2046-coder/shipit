@@ -19,9 +19,7 @@ import zipfile
 import pytest
 
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
-from app.scan.llm_scan import ALL_RUBRICS, RUBRICS, run_llm_scan
-from app.scan.scoring import LLM_ONLY_CATEGORIES, ScoredFinding, compute_scores
-from app.scan_pipeline import (
+from app.pipeline.scan_pipeline import (
     _SCORED_FIELDS,
     BASIS_FULL,
     BASIS_PARTIAL,
@@ -31,6 +29,8 @@ from app.scan_pipeline import (
     llm_failure_kind,
     run_scan,
 )
+from app.scan.llm_scan import ALL_RUBRICS, RUBRICS, run_llm_scan
+from app.scan.scoring import LLM_ONLY_CATEGORIES, ScoredFinding, compute_scores
 
 # Matches every rubric's keywords, so the order calls arrive in is the rubric
 # declaration order and a test can say "fail on the third" and mean it.

@@ -18,15 +18,15 @@ from dataclasses import asdict
 
 import pytest
 
-from app.fixpack import generate
-from app.scan.secrets import scan_secrets
-from app.fixpack.generate import (
+from app.pipeline.fixpack import generate
+from app.pipeline.fixpack.generate import (
     _is_test_path,
     _validate_syntax,
     build_fixpack_plan,
     render_pr_body,
     render_pr_title,
 )
+from app.scan.secrets import scan_secrets
 
 # Distinctive, obviously-fake secrets so absence assertions are unambiguous.
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"          # matches aws-access-key-id

@@ -1,7 +1,7 @@
 """Bounded control-flow counterexamples; submitted Python is never executed."""
 import io
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -38,7 +38,7 @@ def test_completed_branch_returns_before_direct_notification():
 def test_real_bank_transfer_completed_guard():
     import ast
 
-    source = Path("app/billing/bank_transfer.py").read_text()
+    source = Path("app/services/billing/bank_transfer.py").read_text()
     fn = next(n for n in ast.parse(source).body
               if isinstance(n, ast.AsyncFunctionDef) and n.name == "mark_awaiting_confirmation")
     assert check(source, start=fn.lineno, end=fn.end_lineno)["result"] == "contradicted"

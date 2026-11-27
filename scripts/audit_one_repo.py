@@ -31,8 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.foundation.ingest.stack_detect import detect_stack  # noqa: E402
 from app.foundation.ingest.validators import validate_zip  # noqa: E402
 from app.foundation.llm.client import LLMClient  # noqa: E402
+from app.pipeline.scan_pipeline import run_scan  # noqa: E402
 from app.scan.llm_scan import RUBRICS  # noqa: E402
-from app.scan_pipeline import run_scan  # noqa: E402
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 

@@ -53,7 +53,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import sandbox_client  # noqa: E402
+from app.pipeline import sandbox_client  # noqa: E402
 from app.proof.cors.cors_oracle import PROBE_ORIGIN  # noqa: E402
 
 _DOCKERFILE = """\

@@ -23,7 +23,7 @@ on:
   pull_request:
     paths:
       - "app/runner/**"
-      - "app/sandbox_client.py"
+      - "app/pipeline/sandbox_client.py"
       - "deploy/sandbox-runner/**"
       - "scripts/e2e_fixpack_run_suite.py"
       - "scripts/smoke_verify_*.py"

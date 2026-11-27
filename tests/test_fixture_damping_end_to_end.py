@@ -48,8 +48,8 @@ import zipfile
 import pytest
 
 from app.foundation.llm.client import LLMClient, LLMUsage, Provider
-from app.report.html import NON_PRODUCTION_HEADING, render_report
-from app.scan_pipeline import run_scan
+from app.pipeline.report.html import NON_PRODUCTION_HEADING, render_report
+from app.pipeline.scan_pipeline import run_scan
 
 PRODUCTION = "src/components/CardCheckout.tsx"
 FIXTURE = "src/components/CardCheckout.test.tsx"

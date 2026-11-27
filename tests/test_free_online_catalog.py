@@ -19,15 +19,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app import scan_pipeline as pipeline
 from app.foundation.llm.client import LLMClient, LLMError
-from app.local_cli import inspect_project
 from app.main import app, get_audit_repo
-from app.report.sarif import build_sarif
-from app.sca.cache import needs_dependency_scan
+from app.pipeline import scan_pipeline as pipeline
+from app.pipeline.local_cli import inspect_project
+from app.pipeline.report.sarif import build_sarif
+from app.pipeline.sca.cache import needs_dependency_scan
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, BASIS_FULL, BASIS_PREVIEW, run_scan
 from app.scan.browser import scan_archive
 from app.scan.cve_match import match_archive
-from app.scan_pipeline import AUDIT_ENGINE_VERSION, BASIS_FULL, BASIS_PREVIEW, run_scan
 from tests.bun_fixtures import (
     FAST_URI_ADVISORIES,
     GSTACK_ADVISORIES,
@@ -120,7 +120,7 @@ def test_bun_workspace_and_path_limit_match_across_scan_surfaces(case):
 
 @pytest.fixture
 def catalog_files(tmp_path, monkeypatch):
-    from app.sca import snapshot
+    from app.pipeline.sca import snapshot
 
     catalog = tmp_path / "cve-catalog.json"
     checksum = tmp_path / "cve-catalog.json.sha256"
@@ -255,7 +255,7 @@ def test_snapshot_does_not_satisfy_the_paid_live_lookup_cache_contract(monkeypat
 
 @pytest.mark.parametrize("limit", ["MAX_EVALUATIONS", "MAX_FINDINGS"])
 def test_incomplete_refresh_retains_previous_matches_with_their_original_provenance(monkeypatch, limit):
-    from app.sca.snapshot import refresh_snapshot
+    from app.pipeline.sca.snapshot import refresh_snapshot
     from app.scan import cve_match
 
     raw = project("PyPI", "adyen", "2.2.0")
@@ -335,7 +335,7 @@ def test_catalog_failure_keeps_static_findings_with_explicit_unavailability(cata
 async def test_catalog_change_refreshes_cached_evidence_without_repeating_the_model(
     catalog_files, monkeypatch,
 ):
-    from app.sca.snapshot import snapshot_is_current
+    from app.pipeline.sca.snapshot import snapshot_is_current
 
     raw = project("PyPI", "adyen", "2.2.0")
     repo = Repo()
@@ -368,7 +368,7 @@ async def test_catalog_change_refreshes_cached_evidence_without_repeating_the_mo
 
 @pytest.mark.asyncio
 async def test_identical_catalog_failure_is_cacheable_and_repair_invalidates_it(catalog_files, monkeypatch):
-    from app.sca.snapshot import snapshot_is_current
+    from app.pipeline.sca.snapshot import snapshot_is_current
     from app.worker import main as worker
 
     catalog, checksum = catalog_files
@@ -403,8 +403,8 @@ async def test_identical_catalog_failure_is_cacheable_and_repair_invalidates_it(
 @pytest.mark.parametrize("reason", ["no_providers_configured", "paid_job_cost_cap"])
 @pytest.mark.asyncio
 async def test_paid_baseline_keeps_deterministic_catalog_when_the_model_cannot_run(monkeypatch, reason):
-    from app.audit_history import ensure_paid_baseline
     from app.scan import llm_scan
+    from app.services.audit_history import ensure_paid_baseline
 
     raw = project("PyPI", "adyen", "2.2.0")
     paid_scan = run_scan(raw, LLMClient(providers=[]), depth=BASIS_FULL)
@@ -437,7 +437,7 @@ async def test_paid_baseline_keeps_deterministic_catalog_when_the_model_cannot_r
 async def test_paid_cache_refreshes_its_nested_baseline_without_repeating_paid_analysis(
     catalog_files, monkeypatch,
 ):
-    from app.sca.snapshot import baseline_is_current
+    from app.pipeline.sca.snapshot import baseline_is_current
     from app.worker import main as worker
 
     monkeypatch.setenv("SCA_ENABLED", "0")
@@ -470,8 +470,8 @@ async def test_paid_cache_refreshes_its_nested_baseline_without_repeating_paid_a
 @pytest.mark.parametrize("catalog_change", ["withdrawn", "introduced"])
 @pytest.mark.asyncio
 async def test_stale_preview_is_refreshed_before_paid_fallback_reuses_it(catalog_files, catalog_change):
-    from app.audit_history import ensure_paid_baseline, score_with_preview_history
-    from app.sca.snapshot import baseline_is_current
+    from app.pipeline.sca.snapshot import baseline_is_current
+    from app.services.audit_history import ensure_paid_baseline, score_with_preview_history
 
     catalog, checksum = catalog_files
     full_catalog, full_checksum = catalog.read_bytes(), checksum.read_bytes()

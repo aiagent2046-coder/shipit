@@ -17,14 +17,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-import app.deploypack.pipeline as pipeline_mod
-from app.deploypack import github_app
-from app.deploypack.delivery import DeliveryError, PullRequestResult
-from app.deploypack.delivery_auth import DeliveryAuthorizationError
-from app.deploypack.preview import PreviewResult
-from app.deploypack.sandbox import SandboxResult
+import app.services.deploypack.pipeline as pipeline_mod
 from app.main import app, get_pr_opener, get_preview_registry
-from app.sandbox_client import SandboxRunnerUnavailable
+from app.pipeline.sandbox_client import SandboxRunnerUnavailable
+from app.services.deploypack import github_app
+from app.services.deploypack.delivery import DeliveryError, PullRequestResult
+from app.services.deploypack.delivery_auth import DeliveryAuthorizationError
+from app.services.deploypack.preview import PreviewResult
+from app.services.deploypack.sandbox import SandboxResult
 
 client = TestClient(app)
 CALLER_TOKEN = "fixture-caller-token"

@@ -1,8 +1,8 @@
 """The short terminal view must surface late findings without changing evidence."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 
-from app import local_cli as cli
+from app.pipeline import local_cli as cli
 
 
 def report_with(findings):

@@ -8,7 +8,7 @@ import json
 import zipfile
 from dataclasses import asdict
 
-from app.fixpack.generate import build_fixpack_plan
+from app.pipeline.fixpack.generate import build_fixpack_plan
 from app.proof.compare import run_proof_pair
 from app.proof.core.workspace import apply_plan_to_zip
 from app.proof.gate import decide_proof_gate

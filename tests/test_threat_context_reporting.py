@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from app.report.html import render_report
-from app.report.sarif import build_sarif
+from app.pipeline.report.html import render_report
+from app.pipeline.report.sarif import build_sarif
 from app.runtime.project_checks import project_checks_record, project_checks_rows
 from app.runtime.threat_context import threat_context_record, threat_context_rows
 

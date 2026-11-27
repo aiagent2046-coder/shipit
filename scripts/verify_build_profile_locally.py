@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.fixpack.verification import detect_verification_profile  # noqa: E402
+from app.pipeline.fixpack.verification import detect_verification_profile  # noqa: E402
 
 
 def load(target: str) -> bytes:
@@ -81,7 +81,7 @@ def debug_install(raw: bytes, profile) -> int:
     import subprocess
     import tempfile
 
-    from app.fixpack.semantic_check import (
+    from app.pipeline.fixpack.semantic_check import (
         INSTALL_TIMEOUT_SECONDS,
         _chown_workdir,
         _docker_install_argv,
@@ -164,7 +164,7 @@ def main() -> int:
 
     # Imported here, not at module scope: the plan-only path must work on a
     # host with no Docker, and this module reaches for the sandbox at import.
-    from app.fixpack.semantic_check import run_verification_profile
+    from app.pipeline.fixpack.semantic_check import run_verification_profile
 
     print("\nRunning the profile (this really builds; minutes, not seconds)…")
     stages = run_verification_profile(raw, profile)

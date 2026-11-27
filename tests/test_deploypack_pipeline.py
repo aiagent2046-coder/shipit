@@ -13,15 +13,15 @@ import zipfile
 
 import pytest
 
-import app.deploypack.pipeline as pipeline_mod
-from app.deploypack.pipeline import (
+import app.services.deploypack.pipeline as pipeline_mod
+from app.foundation.ingest.stack_detect import Stack
+from app.services.deploypack.pipeline import (
     MAX_WORKSPACE_BYTES,
     WorkspaceTooLarge,
     _free_port,
     run_deploy_pack,
 )
-from app.deploypack.sandbox import SandboxResult
-from app.foundation.ingest.stack_detect import Stack
+from app.services.deploypack.sandbox import SandboxResult
 
 FASTAPI_ZIP = {
     "requirements.txt": b"fastapi\nuvicorn\n",

@@ -9,8 +9,8 @@ from dataclasses import asdict
 import pytest
 
 from app.foundation.llm.client import LLMClient, LLMUsage
-from app.report.evidence import model_acceptance_notice
-from app.report.html import render_report
+from app.pipeline.report.evidence import model_acceptance_notice
+from app.pipeline.report.html import render_report
 from app.scan.llm_scan import SYSTEM_PROMPT, build_prompt, run_llm_scan, verify_finding
 from app.scan.manifest import scan_manifest
 from app.scan.rejection_diagnostics import (

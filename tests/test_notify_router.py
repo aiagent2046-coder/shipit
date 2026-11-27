@@ -18,7 +18,7 @@ import httpx
 import pytest
 
 from app.notify import router
-from app.notify.router import EMAIL, TELEGRAM, X, Contact, notify_customer
+from app.notify.router import EMAIL, TELEGRAM, Contact, X, notify_customer
 
 
 class Alerts:
@@ -391,4 +391,4 @@ def test_the_router_still_does_not_import_billing() -> None:
         node.module for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.ImportFrom) and node.module
     }
-    assert not any(name.startswith("app.billing") for name in reached)
+    assert not any(name.startswith("app.services.billing") for name in reached)

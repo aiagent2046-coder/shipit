@@ -2,9 +2,9 @@ import io
 import json
 import zipfile
 
-import app.fixpack.verified_build as verified_build
-from app.fixpack.generate import FixpackPlan
-from app.fixpack.verification import (
+import app.pipeline.fixpack.verified_build as verified_build
+from app.pipeline.fixpack.generate import FixpackPlan
+from app.pipeline.fixpack.verification import (
     VerificationProfile,
     VerificationStage,
 )
@@ -418,7 +418,7 @@ def test_the_container_memory_limit_comes_from_the_environment(monkeypatch):
     that weaker test passes just as happily against a hardcoded literal, which
     is exactly the thing being fixed.
     """
-    from app.fixpack import semantic_check
+    from app.pipeline.fixpack import semantic_check
 
     monkeypatch.setenv("FIXPACK_MEMORY_LIMIT", "2g")
     argv = semantic_check._docker_install_argv("node:20-slim", "/w", "true")

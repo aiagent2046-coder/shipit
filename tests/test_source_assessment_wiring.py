@@ -1,16 +1,16 @@
 """Source dispositions must agree across scoring, grouping and report retention."""
 
+import json
 from copy import deepcopy
 from dataclasses import asdict, replace
-import json
 
 import pytest
 
-from app.report.evidence import claim_evidence_rows, finding_counts, source_severity_counts
-from app.report.html import _finding_row, render_report
+from app.pipeline.report.evidence import claim_evidence_rows, finding_counts, source_severity_counts
+from app.pipeline.report.html import _finding_row, render_report
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.claim_evidence import partial_contradicted, unsupported_transport
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan_pipeline import run_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 

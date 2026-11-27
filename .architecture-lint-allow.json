@@ -1,7 +1,6 @@
 {
   "long_file": {},
   "wide_directory": {
-    "app": 30,
     "app/scan": 130,
     "scripts": 88,
     "tests": 444

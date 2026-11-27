@@ -30,15 +30,18 @@ url = "https://raw.githubusercontent.com/aiagent2046-coder/shipit/main/app/data/
 
 def test_offline_closure_cannot_silently_add_a_server_dependency(tmp_path):
     app = tmp_path / 'app'
-    app.mkdir()
+    pipeline = app / 'pipeline'
+    pipeline.mkdir(parents=True)
     (app / '__init__.py').write_text('')
-    (app / 'local_cli.py').write_text('from app.main import app\n')
+    (pipeline / '__init__.py').write_text('')
+    cli_py = pipeline / 'local_cli.py'
+    cli_py.write_text('from app.main import app\n')
     with pytest.raises(ValueError, match='offline boundary'):
         builder.source_files(tmp_path)
-    (app / 'local_cli.py').write_text('import httpx\n')
+    cli_py.write_text('import httpx\n')
     with pytest.raises(ValueError, match='external dependency'):
         builder.source_files(tmp_path)
-    (app / 'local_cli.py').write_text('from app.scan_pipeline import run_scan\n')
+    cli_py.write_text('from app.pipeline.scan_pipeline import run_scan\n')
     with pytest.raises(ValueError, match='Server orchestration'):
         builder.source_files(tmp_path)
 
@@ -54,12 +57,12 @@ def test_new_dynamic_imports_cannot_escape_relocation():
 def test_real_closure_and_runtime_lock_are_complete():
     files = builder.source_files(ROOT)
     names = {p.relative_to(ROOT).as_posix() for p in files}
-    assert {'app/local_cli.py', 'app/local_store.py', 'app/scan/cookie_flags.py',
+    assert {'app/pipeline/local_cli.py', 'app/pipeline/local_store.py', 'app/scan/cookie_flags.py',
             'app/scan/recommendations.py',
             'app/foundation/lockfiles/resolved_locks.py',
             'app/foundation/lockfiles/bun_lock.py',
             'app/runtime/snapshot_record.py'} <= names
-    assert not names & {'app/main.py', 'app/db.py', 'app/scan_pipeline.py', 'app/scan/llm_scan.py'}
+    assert not names & {'app/main.py', 'app/db.py', 'app/pipeline/scan_pipeline.py', 'app/scan/llm_scan.py'}
     assert not any(n.startswith('app/db/') for n in names)
     lock, pins = builder.locked_requirements(ROOT, builder.DEPENDENCIES)
     assert len(pins) == 4

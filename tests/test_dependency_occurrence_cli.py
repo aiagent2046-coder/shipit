@@ -1,8 +1,8 @@
 """CLI location changes remain visible without multiplying advisory matches."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 
-from app import local_cli as cli
+from app.pipeline import local_cli as cli
 from app.scan.cve_match import match_archive
 from tests.test_cve_match import archive, catalog
 from tests.test_local_report_display import report_with, terminal_rows
