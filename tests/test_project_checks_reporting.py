@@ -1,13 +1,13 @@
 """Project evidence remains bounded, escaped and separate from findings."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
 from app.report.html import render_report
-from app.project_checks import project_checks_record, project_checks_rows
 from app.report.sarif import build_sarif
+from app.runtime.project_checks import project_checks_record, project_checks_rows
 
 FIXTURES = Path(__file__).parents[1] / 'web/src/lib/fixtures/project_checks_cases.json'
 CASES = json.loads(FIXTURES.read_text())

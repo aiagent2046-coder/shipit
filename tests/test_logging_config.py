@@ -23,14 +23,14 @@ from contextlib import contextmanager
 
 import pytest
 
-from app import log_context
-from app.logging_config import (
+from app.runtime import log_context
+from app.runtime.logging_config import (
     ALLOWED_FIELDS,
-    StripAccessQueryFilter,
     TEXT_FORMAT,
     ContextFilter,
     JsonFormatter,
     RedactionFilter,
+    StripAccessQueryFilter,
     build_handler,
     configure_logging,
     redact,
@@ -381,6 +381,7 @@ def test_version_endpoint_and_log_records_read_the_same_source(monkeypatch):
     """/version and the log line must never disagree about which build is
     running, so they read release/env through the same helpers."""
     from fastapi.testclient import TestClient
+
     from app.main import app
 
     monkeypatch.setenv("SHIPIT_RELEASE", "deadbee")

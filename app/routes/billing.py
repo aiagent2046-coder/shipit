@@ -37,7 +37,6 @@ from app.deploypack.paid_delivery_auth import (
     repository_name,
     seal_paid_grant,
 )
-from app.ratelimit import RateLimiter
 from app.routes._shared import _json_object_body, _secret_equals
 from app.routes.bank_transfer import _check_invoice_rate_limit
 from app.routes.dependencies import (
@@ -49,6 +48,7 @@ from app.routes.dependencies import (
     get_rate_limiter,
     get_subscription_repo,
 )
+from app.runtime.ratelimit import RateLimiter
 
 router = APIRouter()
 

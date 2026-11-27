@@ -9,25 +9,26 @@ import argparse
 import ast
 import hashlib
 import json
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import tomllib
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPENDENCIES = {"pyyaml", "tree-sitter", "tree-sitter-typescript", "pglast"}
 EXTERNAL = {"yaml", "tree_sitter", "tree_sitter_typescript", "pglast"}
 ALLOWED = {
-    "app", "app.local_cli", "app.local_store", "app.logging_config", "app.log_context", "app.capabilities",
-    "app.archive_names", "app.dependency_snapshot", "app.finding_text",
-    "app.path_policy", "app.project_checks", "app.snapshot_record", "app.threat_context",
-    "app.ingest", "app.ingest.validators", "app.report", "app.report.sarif", "app.report.plain_language",
-    "app.report.dependency_snapshot", "app.report.project_checks", "app.report.threat_context",
-    "app.sca", "app.lockfiles", "app.lockfiles.lockfile_primitives", "app.lockfiles.lockfiles",
-    "app.lockfiles.resolved_locks", "app.lockfiles.bun_lock",
+    "app", "app.runtime", "app.local_cli", "app.local_store", "app.runtime.logging_config",
+    "app.runtime.log_context", "app.runtime.capabilities", "app.archive_names",
+    "app.dependency_snapshot", "app.runtime.finding_text", "app.runtime.path_policy",
+    "app.runtime.project_checks", "app.snapshot_record", "app.runtime.threat_context",
+    "app.ingest", "app.ingest.validators", "app.report", "app.report.sarif",
+    "app.report.plain_language", "app.report.dependency_snapshot", "app.report.project_checks",
+    "app.report.threat_context", "app.sca", "app.lockfiles", "app.lockfiles.lockfile_primitives",
+    "app.lockfiles.lockfiles", "app.lockfiles.resolved_locks", "app.lockfiles.bun_lock",
 }
 
 

@@ -38,11 +38,13 @@ from app.billing import bank_transfer, grant_fixpack, yookassa
 from app.db import (
     AuditRepository,
     FixpackJobRepository,
-    PaymentRepository,
     PaymentConfirmationBusy,
-    payment_confirmation_lock,
+    PaymentRepository,
     ServiceFlagsRepository,
+    payment_confirmation_lock,
 )
+from app.deploypack.delivery_auth import DeliveryAuthorizationError
+from app.deploypack.paid_delivery_auth import authorize_paid_checkout, repository_name, seal_paid_grant
 from app.routes.bank_transfer import (
     PayerContact,
     _check_invoice_rate_limit,
@@ -58,9 +60,7 @@ from app.routes.dependencies import (
     get_rate_limiter,
     get_service_flags_repo,
 )
-from app.deploypack.delivery_auth import DeliveryAuthorizationError
-from app.deploypack.paid_delivery_auth import authorize_paid_checkout, repository_name, seal_paid_grant
-from app.ratelimit import RateLimiter
+from app.runtime.ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
 

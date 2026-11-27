@@ -83,15 +83,15 @@ from app.llm_budget import (  # noqa: F401  (re-exported for the test suite)
     DEFAULT_DAILY_SPEND_CAP_USD,
     _anon_daily_cap_exceeded,
 )
-from app.log_context import log_context, set_log_context
-from app.logging_config import configure_logging, environment_from_env
+from app.runtime.log_context import log_context, set_log_context
+from app.runtime.logging_config import configure_logging, environment_from_env
 from app.ops_endpoints import router as ops_router
 from app.proof import (
     decide_proof_gate,
     render_proof_markdown,
     run_proof_stage,
 )
-from app.ratelimit import RateLimiter, RateLimitExceeded, RateLimitStoreError
+from app.runtime.ratelimit import RateLimiter, RateLimitExceeded, RateLimitStoreError
 from app.routes.accounts import router as accounts_router
 from app.routes.bank_transfer import router as bank_transfer_router
 from app.routes.billing import router as billing_router, telegram_router
@@ -301,7 +301,7 @@ async def bind_request_context(request: Request, call_next):
 # below tells ruff they are intentional re-exports rather than dead imports.
 # Removing one is a breaking change for the test suite -- delete only together
 # with the imports in tests/.
-from app.github_repo import (  # noqa: E402
+from app.runtime.github_repo import (  # noqa: E402
     _VALID_OWNER_REPO_SEGMENT,
     _parse_github_repo_url,
 )

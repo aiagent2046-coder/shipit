@@ -31,7 +31,7 @@ METADATA_FILE = ".shipit-release.json"
 
 # app/release_info.py -> app/ -> release root, which is where the builder
 # writes the metadata file.
-_RELEASE_ROOT = Path(__file__).resolve().parent.parent
+_RELEASE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _read_metadata(path: Path) -> dict[str, Any]:

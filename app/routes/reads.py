@@ -21,13 +21,13 @@ from app.db import (
 )
 from app.fixpack.generate import has_auto_fixable_findings
 from app.report.grouping import group_for_display
-from app.log_context import set_log_context
 from app.report.html import render_report
 from app.routes.dependencies import (
     get_audit_job_repo,
     get_audit_repo,
     get_fixpack_repo,
 )
+from app.runtime.log_context import set_log_context
 
 router = APIRouter()
 

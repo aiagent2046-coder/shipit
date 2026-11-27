@@ -44,6 +44,7 @@ import psycopg
 
 from app import db as db_mod
 from app.alerts import notify_operator
+from app.audit_history import ensure_paid_baseline, refresh_cached_preview_history
 from app.audit_spool import (
     cleanup_staged_archive,
     read_staged_archive,
@@ -59,20 +60,8 @@ from app.db import (
 )
 from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
 from app.ingest.stack_detect import detect_stack
-from app.audit_history import refresh_cached_preview_history, ensure_paid_baseline
-from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
 from app.ingest.validators import ArchiveValidationError, validate_zip
 from app.llm.client import LLMClient, LLMError
-from app.log_context import log_context, set_log_context
-from app.logging_config import configure_logging
-from app.scan_pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
-                              BASIS_PREVIEW, FREE_TIER_MODEL,
-                              FREE_TIER_MODEL_BY_KIND,
-                              FREE_TIER_RUBRICS, PAID_AUDIT_PASSES,
-                              basis_for_account, content_digest)
-from app.sca.stage import sca_client_for
-from app.sca.refresh import inventory_payload, refresh_stale_dependency_audits
-from app.sca.cache import complete_cached_dependencies, needs_dependency_scan
 
 # Reused rather than reimplemented, which is the whole point: the worker must
 # run the same scan, under the same concurrency bound, with the same spend
@@ -81,12 +70,29 @@ from app.sca.cache import complete_cached_dependencies, needs_dependency_scan
 # -- it builds the FastAPI app object and reads env, nothing else -- and the
 # dependency only points this way (app.main never imports app.worker).
 from app.main import (  # noqa: E402  -- see comment above
+    _alert_llm_stage_failed,
     _anon_daily_cap_exceeded,
     _emergency_stop_active,
     _parse_github_repo_url,
     _record_llm_usage,
-    _alert_llm_stage_failed,
     _run_scan_offthread,
+)
+from app.runtime.log_context import log_context, set_log_context
+from app.runtime.logging_config import configure_logging
+from app.sca.cache import complete_cached_dependencies, needs_dependency_scan
+from app.sca.refresh import inventory_payload, refresh_stale_dependency_audits
+from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
+from app.sca.stage import sca_client_for
+from app.scan_pipeline import (
+    AUDIT_ENGINE_VERSION,
+    BASIS_FULL,
+    BASIS_PREVIEW,
+    FREE_TIER_MODEL,
+    FREE_TIER_MODEL_BY_KIND,
+    FREE_TIER_RUBRICS,
+    PAID_AUDIT_PASSES,
+    basis_for_account,
+    content_digest,
 )
 
 logger = logging.getLogger("app.worker")

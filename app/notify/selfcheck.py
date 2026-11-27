@@ -40,9 +40,9 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.logging_config import configure_logging
 from app.notify import email as mail
 from app.notify import telegram
+from app.runtime.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 

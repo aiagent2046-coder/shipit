@@ -22,8 +22,8 @@ explicitly, per test, where it wants the configured-path behavior.
 
 from __future__ import annotations
 
-import os
 import copy
+import os
 import urllib.parse
 import uuid
 
@@ -33,9 +33,7 @@ import app.audit_spool as spool_mod
 import app.db as db_mod
 from app.accounts import TIER_PRO, api_key_prefix, generate_api_key
 from app.main import app, get_audit_job_repo, get_rate_limiter
-from app.ratelimit import RateLimiter
-
-
+from app.runtime.ratelimit import RateLimiter
 
 # Hosts a test suite is allowed to write to. An empty hostname is a Unix
 # socket (postgresql://user@/db?host=/tmp/pg), which cannot reach a hosted

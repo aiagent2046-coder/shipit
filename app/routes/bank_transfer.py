@@ -29,7 +29,6 @@ from app.db import (
 )
 from app.deploypack.delivery_auth import DeliveryAuthorizationError
 from app.deploypack.paid_delivery_auth import authorize_paid_checkout, repository_name
-from app.ratelimit import RateLimitExceeded, RateLimiter
 from app.routes._shared import (
     _client_key,
     _reject_if_fixpack_already_live,
@@ -43,6 +42,7 @@ from app.routes.dependencies import (
     get_rate_limiter,
     get_service_flags_repo,
 )
+from app.runtime.ratelimit import RateLimiter, RateLimitExceeded
 from app.service_flags import _emergency_stop_active
 
 router = APIRouter()

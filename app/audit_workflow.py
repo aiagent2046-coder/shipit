@@ -39,7 +39,6 @@ from app.db import (
     AuditRepository,
     ServiceFlagsRepository,
 )
-from app.github_repo import _parse_github_repo_url
 from app.ingest.github_fetch import RepoFetchError
 from app.ingest.stack_detect import detect_stack
 from app.ingest.validators import (
@@ -47,8 +46,6 @@ from app.ingest.validators import (
     ArchiveValidationError,
     validate_zip,
 )
-from app.log_context import set_log_context
-from app.ratelimit import RateLimitExceeded, RateLimiter
 from app.routes._shared import _bind_account, _client_key
 from app.routes.dependencies import (
     get_account_repo,
@@ -58,6 +55,9 @@ from app.routes.dependencies import (
     get_repo_fetcher,
     get_service_flags_repo,
 )
+from app.runtime.github_repo import _parse_github_repo_url
+from app.runtime.log_context import set_log_context
+from app.runtime.ratelimit import RateLimiter, RateLimitExceeded
 from app.sca.cache import needs_dependency_scan
 from app.sca.snapshot import baseline_is_current, snapshot_is_current
 from app.scan_pipeline import AUDIT_ENGINE_VERSION, basis_for_account, content_digest

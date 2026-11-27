@@ -36,7 +36,7 @@ sys.path.insert(0, str(SCRIPT_DIR.parent))
 
 import env_file  # noqa: E402
 
-from app.logging_config import redact  # noqa: E402
+from app.runtime.logging_config import redact  # noqa: E402
 
 API = "https://api.telegram.org"
 

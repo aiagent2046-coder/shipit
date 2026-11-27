@@ -16,7 +16,7 @@ import re
 import time
 import zipfile
 
-from app.proof_types import ExploitAttempt
+from app.runtime.proof_types import ExploitAttempt
 
 _SOURCE_SUFFIXES = (
     ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java",

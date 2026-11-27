@@ -7,7 +7,6 @@ it is the bottom util everyone may import, and it imports nothing.
 """
 from __future__ import annotations
 
-
 # throwaway (a service container's local connection string), which is a fact
 # about the value and not about the path.
 

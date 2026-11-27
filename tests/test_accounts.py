@@ -10,9 +10,8 @@ import io
 import json
 import zipfile
 
-from fastapi.testclient import TestClient
-
 import pytest
+from fastapi.testclient import TestClient
 
 from app.accounts import (
     API_KEY_COOKIE,
@@ -30,7 +29,7 @@ from app.accounts import (
     validate_api_key_pepper_configured,
 )
 from app.main import app, get_account_repo, get_rate_limiter
-from app.ratelimit import RateLimiter
+from app.runtime.ratelimit import RateLimiter
 
 client = TestClient(app)
 

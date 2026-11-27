@@ -53,15 +53,15 @@ from pathlib import Path
 
 import httpx
 
-from app.sandbox_types import SandboxResult
 from app.fixpack.semantic_check import RunResult, TestRunner
-from app.proof_types import ExploitAttempt
 from app.fixpack.verification import (
     VerificationProfile,
     VerificationStage,
     verification_profile_to_wire,
     verification_stage_from_wire,
 )
+from app.runtime.proof_types import ExploitAttempt
+from app.runtime.sandbox_types import SandboxResult
 
 # Unix socket the runner listens on. A TCP fallback (SANDBOX_RUNNER_URL) is
 # supported for environments without a UDS, but UDS is the default and the

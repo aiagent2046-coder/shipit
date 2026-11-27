@@ -1,16 +1,16 @@
 """Browser startup and reporting with genuinely unavailable native packages."""
 import io
 import json
-from pathlib import Path
 import subprocess
 import sys
 import textwrap
 import zipfile
+from pathlib import Path
 
 import pytest
 
-from app.capabilities import CHECKS_RUN
 from app.ingest.validators import ArchiveValidationError
+from app.runtime.capabilities import CHECKS_RUN
 from app.scan.browser import scan_archive
 from app.scan.static import run_static_scan
 

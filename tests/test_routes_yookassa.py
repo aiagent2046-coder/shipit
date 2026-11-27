@@ -17,8 +17,8 @@ httpx.MockTransport, and the repositories are the in-memory fakes.
 
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 import uuid
 
 import httpx
@@ -36,8 +36,8 @@ from app.main import (
     get_payment_repo,
     get_rate_limiter,
 )
-from app.ratelimit import RateLimiter
 from app.routes.yookassa import receive_notification
+from app.runtime.ratelimit import RateLimiter
 from tests.test_billing_bank_transfer import (
     FakeAuditRepo,
     FakeFixpackRepo,
@@ -61,6 +61,7 @@ PAYER = {
 @pytest.fixture(autouse=True)
 def _shop(monkeypatch):
     from cryptography.fernet import Fernet
+
     import app.routes.yookassa as checkout
 
     monkeypatch.setenv("FIXPACK_DELIVERY_ENCRYPTION_KEY", Fernet.generate_key().decode())
@@ -636,6 +637,7 @@ async def test_the_payer_is_told_after_the_notification_is_answered(
 async def test_concurrent_notifications_should_tell_payer_once(anyio_backend, monkeypatch):
     """Exercise the handler guard; PostgreSQL lock semantics have a live DB test."""
     from contextlib import asynccontextmanager
+
     from app.routes import yookassa as route
 
     mutex = asyncio.Lock()
@@ -675,6 +677,7 @@ async def test_concurrent_notifications_should_tell_payer_once(anyio_backend, mo
 @pytest.mark.anyio
 async def test_busy_confirmation_retries_without_grant_or_notification(anyio_backend, monkeypatch):
     from contextlib import asynccontextmanager
+
     from app.routes import yookassa as route
 
     @asynccontextmanager

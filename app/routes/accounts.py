@@ -15,10 +15,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app import accounts, alerts
-from app.service_flags import _reset_service_flag_cache
 from app.accounts import TIER_FREE, entitlements_dict, entitlements_for_tier
 from app.db import AccountRepository, ServiceFlagsRepository
-from app.ratelimit import RateLimiter
 from app.routes._shared import (
     _bind_account,
     _json_object_body,
@@ -30,6 +28,8 @@ from app.routes.dependencies import (
     get_rate_limiter,
     get_service_flags_repo,
 )
+from app.runtime.ratelimit import RateLimiter
+from app.service_flags import _reset_service_flag_cache
 
 router = APIRouter()
 

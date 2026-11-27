@@ -23,9 +23,10 @@ import shutil
 import subprocess
 import time
 import uuid
-from app.sandbox_types import SandboxResult
 from pathlib import Path
 from typing import Callable
+
+from app.runtime.sandbox_types import SandboxResult
 
 Runner = Callable[..., subprocess.CompletedProcess]
 

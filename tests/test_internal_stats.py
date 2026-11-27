@@ -36,13 +36,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.db as db_mod
-from app.logging_config import ContextFilter, JsonFormatter
 from app.main import (
     app,
     get_audit_job_repo,
     get_fixpack_repo,
     get_llm_usage_repo,
 )
+from app.runtime.logging_config import ContextFilter, JsonFormatter
 from app.worker import main as worker
 
 client = TestClient(app)

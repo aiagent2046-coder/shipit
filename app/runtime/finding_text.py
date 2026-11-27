@@ -6,7 +6,8 @@ lives below both. Extracted during the import-cycles fix phase.
 """
 from __future__ import annotations
 
-from app.path_policy import NON_PRODUCTION_CONTEXTS, is_non_production_path
+from app.runtime.path_policy import NON_PRODUCTION_CONTEXTS, is_non_production_path
+
 CREDENTIAL_RULES = frozenset({
     'anthropic-api-key',
     'aws-access-key-id',

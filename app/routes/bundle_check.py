@@ -41,7 +41,6 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
 from app.db import AuditRepository, ServedBundleCheckRepository
-from app.log_context import set_log_context
 from app.proof.rotation import RotationCheck, compare_findings
 from app.proof.served_bundle import (
     ServedBundleResult,
@@ -49,7 +48,6 @@ from app.proof.served_bundle import (
     fetch_served_bundle,
     validate_deployment_url,
 )
-from app.ratelimit import RateLimitExceeded, RateLimiter
 from app.routes._shared import _client_key
 from app.routes.dependencies import (
     get_audit_repo,
@@ -57,8 +55,11 @@ from app.routes.dependencies import (
     get_rate_limiter,
     get_served_bundle_check_repo,
 )
+
 # One definition, imported. See the module docstring.
 from app.routes.rls_check import CONSENT_PHRASE
+from app.runtime.log_context import set_log_context
+from app.runtime.ratelimit import RateLimiter, RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 

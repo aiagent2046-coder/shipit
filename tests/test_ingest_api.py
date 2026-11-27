@@ -406,7 +406,7 @@ def test_repo_url_audit_consumes_quota_like_a_file_audit():
     # URL-based audit consumes quota exactly like a file-based one — the
     # third request over a limit of 2 is rejected, no second check needed.
     from app.main import get_rate_limiter
-    from app.ratelimit import RateLimiter
+    from app.runtime.ratelimit import RateLimiter
 
     tiny = RateLimiter(limit=2, window_seconds=100, clock=lambda: 0.0)
     app.dependency_overrides[get_rate_limiter] = lambda: tiny

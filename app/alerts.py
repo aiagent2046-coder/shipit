@@ -20,11 +20,14 @@ import asyncio
 import logging
 import sys
 
-from app.logging_config import configure_logging
 from app.notify.operator import (
-    ADMIN_CHAT_ID_ENV, DEFAULT_THROTTLE_SECONDS, _last_sent,
-    admin_chat_id_from_env, notify_operator,
+    ADMIN_CHAT_ID_ENV,
+    DEFAULT_THROTTLE_SECONDS,
+    _last_sent,
+    admin_chat_id_from_env,
+    notify_operator,
 )
+from app.runtime.logging_config import configure_logging
 
 __all__ = [
     "ADMIN_CHAT_ID_ENV", "DEFAULT_THROTTLE_SECONDS", "_last_sent",

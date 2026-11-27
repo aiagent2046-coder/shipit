@@ -2,33 +2,33 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from contextlib import closing
-from datetime import datetime, timezone
 import hashlib
 import io
 import json
 import math
 import os
-from pathlib import Path
 import sqlite3
 import stat
 import sys
 import time
 import zipfile
+from collections import Counter
+from contextlib import closing
+from datetime import datetime, timezone
+from pathlib import Path
 
 from app.ingest.validators import ArchiveValidationError
 from app.local_store import connect, default_state_dir, load_catalog, update_catalog
-from app.logging_config import configure_logging
 from app.report.plain_language import plain_fields
-from app.threat_context import threat_context_record, threat_context_rows
+from app.runtime.logging_config import configure_logging
+from app.runtime.threat_context import threat_context_record, threat_context_rows
+from app.scan.binary_evidence import attach_binary_reports
 from app.scan.browser import ScanSession
+from app.scan.kev_catalog import fingerprint as kev_fingerprint
+from app.scan.remediation_catalog import remediation_hint, remediation_record
 from app.scan.secrets import NON_PRODUCTION_CONTEXTS
 from app.scan.security_agent import agent_record
 from app.scan.version import AUDIT_ENGINE_VERSION
-from app.scan.binary_evidence import attach_binary_reports
-from app.scan.kev_catalog import fingerprint as kev_fingerprint
-from app.scan.remediation_catalog import remediation_hint, remediation_record
 
 # Keep local archives within both the static and offline dependency matcher budgets.
 MAX_FILES = 20_000

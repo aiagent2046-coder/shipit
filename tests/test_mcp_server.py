@@ -22,12 +22,11 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as main_mod
 import app.audit_workflow as audit_mod
+import app.main as main_mod
 from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
 from app.mcp.server import MAX_FINDINGS_RETURNED, TOOLS
 from app.mcp.untrusted import FENCE_CLOSE, FENCE_OPEN
-from app.ratelimit import RateLimiter
 from app.routes.dependencies import (
     get_account_repo,
     get_audit_job_repo,
@@ -39,6 +38,7 @@ from app.routes.dependencies import (
     get_repo_fetcher,
     get_service_flags_repo,
 )
+from app.runtime.ratelimit import RateLimiter
 
 PEPPER = "mcp-server-test-pepper-not-a-real-secret"
 

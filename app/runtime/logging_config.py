@@ -26,7 +26,7 @@ import os
 import re
 from typing import Any
 
-from app.log_context import LOG_CONTEXT_FIELDS, current_log_context
+from app.runtime.log_context import LOG_CONTEXT_FIELDS, current_log_context
 
 _VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
 

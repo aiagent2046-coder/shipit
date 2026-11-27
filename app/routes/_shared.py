@@ -12,15 +12,14 @@ callers.
 
 from __future__ import annotations
 
+import hmac
 import json
+import os
 
 from fastapi import HTTPException, Request
 
-import hmac
-import os
-
 from app.fixpack.generate import has_auto_fixable_findings
-from app.log_context import set_log_context
+from app.runtime.log_context import set_log_context
 
 
 async def _json_object_body(request: Request) -> dict:

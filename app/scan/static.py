@@ -2,42 +2,41 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-from contextlib import contextmanager
 import hashlib
+from contextlib import contextmanager
+from dataclasses import replace
 from typing import BinaryIO
 
-from app.capabilities import CHECKS_RUN, EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE
 from app.ingest.validators import validate_zip
-from app.finding_text import plain_fields
+from app.runtime.capabilities import CHECKS_RUN, EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE
+from app.runtime.finding_text import plain_fields
+from app.scan.archive_extraction import scan_archive_extraction
 from app.scan.auth_read import scan_auth_read
 from app.scan.auth_write import scan_auth_write
-from app.scan.claim_evidence import static_claim_evidence
-from app.scan.command_injection import scan_command_injection
+from app.scan.check_failure_scoring import failed_check_categories
+from app.scan.check_loading import is_native_import_error, optional_native_function
 from app.scan.checks import run_checks
 from app.scan.ci_deploy_source import scan_ci_deploy_source
-from app.scan.check_loading import is_native_import_error, optional_native_function
+from app.scan.claim_evidence import static_claim_evidence
+from app.scan.command_injection import scan_command_injection
 from app.scan.error_boundary import MOUNT_UNKNOWN, scan_error_boundary
 from app.scan.http_success import http_success_findings as scan_http_success
 from app.scan.insecure_randomness import scan_insecure_randomness
-from app.scan.outbound_url import scan_outbound_url
 from app.scan.open_redirect import scan_open_redirect
+from app.scan.outbound_url import scan_outbound_url
+from app.scan.path_traversal import scan_path_traversal
 from app.scan.rls import scan_rls
 from app.scan.rule_coverage import RULE_COVERAGE_KEYS
 from app.scan.schema_drift import scan_schema_drift
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.secrets import scan_secrets
+from app.scan.security_agent import attach_security_agent
 from app.scan.service_role import scan_service_role
 from app.scan.sql_injection import scan_sql_injection
-from app.scan.security_agent import attach_security_agent
-from app.scan.version import AUDIT_ENGINE_VERSION
 from app.scan.unsafe_deserialization import scan_unsafe_deserialization
-from app.scan.path_traversal import scan_path_traversal
-from app.scan.archive_extraction import scan_archive_extraction
-from app.scan.xxe import scan_unsafe_xml_parse
+from app.scan.version import AUDIT_ENGINE_VERSION
 from app.scan.xss import scan_xss
-from app.scan.check_failure_scoring import failed_check_categories
-
+from app.scan.xxe import scan_unsafe_xml_parse
 
 # Real functions remain bound when their dependencies are installed. This
 # preserves server monkeypatching and source inspection (the golden corpus).

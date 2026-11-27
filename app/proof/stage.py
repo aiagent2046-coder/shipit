@@ -21,7 +21,7 @@ from app.proof.core.artifacts import artifacts_to_json, build_artifacts
 from app.proof.core.routing import select_templates
 from app.proof.core.workspace import apply_plan_to_zip
 from app.proof.cors.runtime_cors import PROBE_PORT_RANGE, runtime_cors_applicable
-from app.proof_types import ProofReport, proof_report_to_json
+from app.runtime.proof_types import ProofReport, proof_report_to_json
 
 logger = logging.getLogger(__name__)
 

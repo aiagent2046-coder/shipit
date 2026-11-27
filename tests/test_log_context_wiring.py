@@ -34,9 +34,9 @@ from fastapi.testclient import TestClient
 from starlette.concurrency import run_in_threadpool
 
 import app.main as main_mod
-from app import log_context as ctx
-from app.logging_config import ContextFilter
 from app.main import app, get_audit_repo
+from app.runtime import log_context as ctx
+from app.runtime.logging_config import ContextFilter
 from app.worker import main as worker
 
 

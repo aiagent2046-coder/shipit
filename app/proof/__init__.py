@@ -31,7 +31,7 @@ from app.proof.render import (
     render_proof_with_artifacts,
 )
 from app.proof.stage import ProofStageResult, run_proof_stage
-from app.proof_types import ExploitAttempt, ProofReport, proof_report_to_json
+from app.runtime.proof_types import ExploitAttempt, ProofReport, proof_report_to_json
 
 __all__ = [
     "TEMPLATE_IDS",

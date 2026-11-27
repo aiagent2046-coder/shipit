@@ -34,7 +34,7 @@ from typing import Any
 
 from app.deploypack.sandbox import verify_deploy_pack
 from app.proof.cors.cors_oracle import PROBE_ORIGIN, evaluate_cors_response
-from app.proof_types import ExploitAttempt
+from app.runtime.proof_types import ExploitAttempt
 
 logger = logging.getLogger(__name__)
 

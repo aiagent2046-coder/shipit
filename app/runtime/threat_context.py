@@ -1,8 +1,8 @@
 """Bounded threat-intelligence presentation; no vulnerability or scoring decisions."""
 from __future__ import annotations
 
-from datetime import date, datetime
 import re
+from datetime import date, datetime
 
 REPOSITORY = "https://github.com/cisagov/kev-data"
 LABEL = "CISA KEV threat context"

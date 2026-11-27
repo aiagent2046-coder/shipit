@@ -14,7 +14,7 @@ import redis
 from fastapi.testclient import TestClient
 
 from app.main import app, get_rate_limiter
-from app.ratelimit import (
+from app.runtime.ratelimit import (
     DEFAULT_LIMIT,
     RateLimiter,
     RateLimitExceeded,

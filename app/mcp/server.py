@@ -60,10 +60,8 @@ from app.db import (
     McpKeyRepository,
     ServiceFlagsRepository,
 )
-from app.logging_config import environment_from_env, release_from_env
 from app.mcp.keys import hash_mcp_key, looks_like_mcp_key
 from app.mcp.untrusted import fence, fence_optional
-from app.ratelimit import RateLimitExceeded, RateLimiter
 from app.routes.dependencies import (
     get_account_repo,
     get_audit_job_repo,
@@ -75,6 +73,8 @@ from app.routes.dependencies import (
     get_repo_fetcher,
     get_service_flags_repo,
 )
+from app.runtime.logging_config import environment_from_env, release_from_env
+from app.runtime.ratelimit import RateLimiter, RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -341,10 +341,13 @@ async def _tool_get_version(args: dict, ctx: dict) -> dict:
 
 async def _tool_start_audit(args: dict, ctx: dict) -> dict:
     from app.audit_workflow import (
-        _AuditForm, _AuditIntake, create_audit, gate_submission,
+        _AuditForm,
+        _AuditIntake,
+        create_audit,
+        gate_submission,
     )
-    from app.github_repo import _parse_github_repo_url
     from app.llm_budget import _anon_daily_cap_exceeded
+    from app.runtime.github_repo import _parse_github_repo_url
     from app.scan_pipeline import BASIS_PREVIEW, BASIS_STATIC_ONLY
 
     repo_url = args.get("repo_url")
@@ -586,7 +589,7 @@ def _public_forensics(score: object) -> dict | None:
     project_checks = manifest.get("project_checks")
     if not isinstance(project_checks, dict):
         return None
-    from app.project_checks import project_checks_record
+    from app.runtime.project_checks import project_checks_record
 
     normalized = project_checks_record(project_checks)
     if not isinstance(normalized, dict) or "forensics" not in normalized:

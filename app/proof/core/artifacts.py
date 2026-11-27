@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.proof_types import ProofReport
+from app.runtime.proof_types import ProofReport
 
 ArtifactKind = Literal["log", "storyboard"]
 

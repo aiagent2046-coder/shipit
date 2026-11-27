@@ -7,7 +7,7 @@ from app.proof.core.artifacts import (
     build_artifacts,
     render_artifacts_markdown,
 )
-from app.proof_types import ExploitAttempt, ProofReport
+from app.runtime.proof_types import ExploitAttempt, ProofReport
 
 
 def _report(*, verified: bool = True) -> ProofReport:

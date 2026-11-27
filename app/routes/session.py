@@ -28,13 +28,13 @@ from app.accounts import (
 )
 from app.db import AccountRepository, FixpackJobRepository
 from app.deploypack.github_app import app_auth_ok
-from app.ratelimit import RateLimiter
 from app.routes._shared import _bind_account, _json_object_body
 from app.routes.dependencies import (
     get_account_repo,
     get_fixpack_repo,
     get_rate_limiter,
 )
+from app.runtime.ratelimit import RateLimiter
 
 router = APIRouter()
 

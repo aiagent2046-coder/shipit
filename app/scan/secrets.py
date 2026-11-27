@@ -18,21 +18,25 @@ import hmac
 import json
 import re
 import stat
-
-from app.path_policy import (  # noqa: F401  (re-exported)
-    NON_PRODUCTION_CONTEXTS, _is_doc_context, _is_migration_context,
-    _is_test_fixture_path, is_env_template_name, is_non_production_path,
-)
 import zipfile
-import yaml
 from bisect import bisect_right
 from dataclasses import dataclass, replace
 from typing import BinaryIO, Iterator
 
+import yaml
+
+from app.runtime.path_policy import (  # noqa: F401  (re-exported)
+    NON_PRODUCTION_CONTEXTS,
+    _is_doc_context,
+    _is_migration_context,
+    _is_test_fixture_path,
+    is_env_template_name,
+    is_non_production_path,
+)
 from app.scan.check_loading import is_native_import_error
-from app.scan.credential_context import (MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context)
-from app.scan.file_scope import GENERATED_DIRECTORIES, is_dependency_path as is_dependency_path
-from app.scan.file_scope import is_binary_evidence_path
+from app.scan.credential_context import MAX_PYTHON_BYTES, MAX_TOTAL_PYTHON_BYTES, python_regions, uri_context
+from app.scan.file_scope import GENERATED_DIRECTORIES, is_binary_evidence_path
+from app.scan.file_scope import is_dependency_path as is_dependency_path
 from app.scan.secret_text_context import repeated_test_text_spans
 
 MAX_SCANNED_FILE_BYTES = 1 * 1024 * 1024  # skip huge files: minified bundles etc.

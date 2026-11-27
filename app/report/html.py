@@ -9,23 +9,36 @@ from __future__ import annotations
 
 from html import escape
 
-from app.project_checks import project_checks_rows, SCOPE as PROJECT_CHECKS_SCOPE
-from app.scan.claim_evidence import (
-    narrative_review_checks, partial_contradicted, syntax_contradicted, unsupported_transport,
-)
-from app.scan.claim_narrative import narrative_projection
-
+from app.dependency_snapshot import RECONCILIATION_DETAIL, unrepeated_dependency_matches
 from app.report.evidence import (
-    is_informational, coverage_rows, evidence_label, finding_counts, is_non_production, manifest_rows,
-    model_status_notice, non_model_status_notices, source_severity_counts, source_review_count, claim_evidence_rows,
-    observation_summary, review_contribution_rows,
+    claim_evidence_rows,
+    coverage_rows,
+    evidence_label,
+    finding_counts,
+    is_informational,
+    is_non_production,
+    manifest_rows,
     model_acceptance_notice,
+    model_status_notice,
+    non_model_status_notices,
+    observation_summary,
+    review_contribution_rows,
+    source_review_count,
+    source_severity_counts,
 )
 from app.report.grouping import GROUPABLE, group_for_display, related_finding_groups
-from app.dependency_snapshot import RECONCILIATION_DETAIL, unrepeated_dependency_matches
-from app.report.owner_roadmap import build_owner_roadmap
 from app.report.owner_report import build_owner_report, owner_report_context
+from app.report.owner_roadmap import build_owner_roadmap
 from app.report.plain_language import plain_fields, tier
+from app.runtime.project_checks import SCOPE as PROJECT_CHECKS_SCOPE
+from app.runtime.project_checks import project_checks_rows
+from app.scan.claim_evidence import (
+    narrative_review_checks,
+    partial_contradicted,
+    syntax_contradicted,
+    unsupported_transport,
+)
+from app.scan.claim_narrative import narrative_projection
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 _SEVERITY_COLOR = {

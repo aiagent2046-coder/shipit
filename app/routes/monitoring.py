@@ -19,7 +19,6 @@ from app.db import (
 )
 from app.ingest.github_fetch import RepoFetchError
 from app.llm.client import LLMClient
-from app.log_context import set_log_context
 from app.monitor import repo_url_from_full_name
 from app.monitor.diff import new_high_severity_findings
 from app.routes._shared import _require_bearer_token
@@ -33,6 +32,7 @@ from app.routes.dependencies import (
     get_service_flags_repo,
     get_subscription_repo,
 )
+from app.runtime.log_context import set_log_context
 from app.scan_pipeline import BASIS_FULL
 
 logger = logging.getLogger("app.main")

@@ -18,7 +18,7 @@ import zipfile
 
 import pytest
 
-from app.capabilities import CHECKS_RUN
+from app.runtime.capabilities import CHECKS_RUN
 from app.scan import static
 from app.scan.error_boundary import MOUNT_UNKNOWN
 from app.scan.manifest import scan_manifest

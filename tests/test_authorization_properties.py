@@ -8,18 +8,18 @@ has readable resources and a successful authorized operation as controls.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from copy import deepcopy
 import io
 import string
-from unittest.mock import patch
 import zipfile
+from contextlib import contextmanager
+from copy import deepcopy
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from app.main import app
-from app.ratelimit import RateLimiter
 from app.routes.dependencies import (
     get_audit_job_repo,
     get_audit_repo,
@@ -29,6 +29,7 @@ from app.routes.dependencies import (
     get_rls_live_check_repo,
 )
 from app.routes.rls_check import CONSENT_PHRASE
+from app.runtime.ratelimit import RateLimiter
 
 
 class _Audits:

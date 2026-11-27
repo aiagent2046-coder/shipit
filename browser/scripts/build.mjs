@@ -53,11 +53,12 @@ const excluded = new Set(['pipeline.py', 'llm_scan.py']);
 const paths = (await readdir(join(root, 'app/scan')))
   .filter(name => name.endsWith('.py') && !excluded.has(name))
   .map(name => `app/scan/${name}`);
-paths.push('app/__init__.py', 'app/capabilities.py', 'app/ingest/__init__.py',
+paths.push('app/__init__.py', 'app/runtime/__init__.py',
+  'app/runtime/capabilities.py', 'app/ingest/__init__.py',
   'app/ingest/validators.py', 'app/report/__init__.py', 'app/report/plain_language.py',
-  'app/report/sarif.py', 'app/project_checks.py', 'app/threat_context.py',
-  'app/dependency_snapshot.py', 'app/archive_names.py', 'app/finding_text.py',
-  'app/path_policy.py', 'app/snapshot_record.py',
+  'app/report/sarif.py', 'app/runtime/project_checks.py', 'app/runtime/threat_context.py',
+  'app/dependency_snapshot.py', 'app/archive_names.py', 'app/runtime/finding_text.py',
+  'app/runtime/path_policy.py', 'app/snapshot_record.py',
   'app/lockfiles/__init__.py', 'app/lockfiles/lockfiles.py',
   'app/lockfiles/lockfile_primitives.py', 'app/lockfiles/resolved_locks.py',
   'app/lockfiles/bun_lock.py');

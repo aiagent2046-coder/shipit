@@ -1,14 +1,14 @@
 """Threat context explains priority without creating findings or trust claims."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
 from app.report.html import render_report
-from app.project_checks import project_checks_record, project_checks_rows
 from app.report.sarif import build_sarif
-from app.threat_context import threat_context_record, threat_context_rows
+from app.runtime.project_checks import project_checks_record, project_checks_rows
+from app.runtime.threat_context import threat_context_record, threat_context_rows
 
 FIXTURES = Path(__file__).parents[1] / 'web/src/lib/fixtures'
 CASES = json.loads((FIXTURES / 'threat_context_cases.json').read_text())
