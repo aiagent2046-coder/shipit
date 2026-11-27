@@ -206,7 +206,7 @@ def test_missing_required_controls_cannot_verify_a_recipe(monkeypatch, omitted):
 def postgres_connection():
     if not _TEST_DSN:
         pytest.skip("SQL_CONTRACT_DATABASE_URL is not configured")
-    from scripts.verify_sql_runtime_contract import connect_target
+    from scripts.contracts.verify_sql_runtime_contract import connect_target
 
     with connect_target(_TEST_DSN) as connection:
         yield connection

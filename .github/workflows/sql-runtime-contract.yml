@@ -47,7 +47,7 @@ jobs:
           tests/test_sql_runtime_executor.py tests/test_agent_synthetic_runtime.py tests/test_security_agent_chain.py tests/test_client_runtime_record.py
           tests/test_client_runtime_chain.py tests/test_client_runtime_report.py
       - name: Compare before, after and restored mutation
-        run: python scripts/verify_sql_runtime_contract.py --output "$RUNNER_TEMP/sql-runtime-contract.json"
+        run: python scripts/contracts/verify_sql_runtime_contract.py --output "$RUNNER_TEMP/sql-runtime-contract.json"
       - name: Let the agent select, execute and consume the contract
         run: |
           python - <<'PY'
@@ -58,7 +58,7 @@ jobs:
           Path(os.environ['RUNNER_TEMP'], 'agent-sql-input.zip').write_bytes(
               archive({'src/a.py': HTTP_SQL, 'src/b.py': HTTP_SQL}))
           PY
-          python scripts/investigate_sql_runtime.py "$RUNNER_TEMP/agent-sql-input.zip" \
+          python scripts/contracts/investigate_sql_runtime.py "$RUNNER_TEMP/agent-sql-input.zip" \
             --output "$RUNNER_TEMP/agent-sql-runtime.json"
       - name: Preserve synthetic evidence
         if: always()

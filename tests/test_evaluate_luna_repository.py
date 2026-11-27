@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.foundation.llm.client import LLMError
-from scripts import evaluate_luna_repository as trial
+from scripts.eval import evaluate_luna_repository as trial
 
 
 def response(*, cost="0.5", text="[]", finish="stop"):

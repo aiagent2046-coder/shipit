@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO_ROOT / "scripts" / "env_file.py"
 
@@ -198,7 +197,7 @@ def test_the_smtp_check_never_prints_the_incantation_that_breaks_it() -> None:
     """
     import ast
 
-    path = REPO_ROOT / "scripts" / "verify_smtp_locally.py"
+    path = REPO_ROOT / "scripts" / "ops" / "verify_smtp_locally.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
 
     printable = [
@@ -233,7 +232,7 @@ def test_the_model_comparison_never_prints_the_incantation_either() -> None:
     """
     import ast
 
-    path = REPO_ROOT / "scripts" / "compare_models.py"
+    path = REPO_ROOT / "scripts" / "eval" / "compare_models.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
 
     printable = [
@@ -289,7 +288,7 @@ def test_the_model_comparison_reads_the_env_file_itself(monkeypatch, tmp_path):
     for name in ("AITUNNEL_API_KEY", "AITUNNEL_BASE_URL", "SMTP_PASSWORD"):
         monkeypatch.delenv(name, raising=False)
 
-    compare = importlib.import_module("scripts.compare_models")
+    compare = importlib.import_module("scripts.eval.compare_models")
     compare.load_provider_credentials()
 
     assert os.environ["AITUNNEL_API_KEY"] == "sk-not-a-real-key"
@@ -307,7 +306,7 @@ def test_an_exported_key_beats_the_file(monkeypatch, tmp_path):
     monkeypatch.setenv("SHIPIT_ENV_FILE", str(path))
     monkeypatch.setenv("AITUNNEL_API_KEY", "from-my-shell")
 
-    compare = importlib.import_module("scripts.compare_models")
+    compare = importlib.import_module("scripts.eval.compare_models")
     compare.load_provider_credentials()
 
     assert os.environ["AITUNNEL_API_KEY"] == "from-my-shell"

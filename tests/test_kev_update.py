@@ -4,14 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 import yaml
 
 from app.scan.kev_catalog import decode_catalog
-from scripts import build_kev_catalog as builder
+from scripts.catalog import build_kev_catalog as builder
 
 
 def upstream(ids=("CVE-2026-12345", "CVE-2026-12346")):

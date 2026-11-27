@@ -8,7 +8,7 @@ from uuid import UUID
 import pytest
 
 from app.scan.client_runtime_record import ARCHIVE_SHA256, SCENARIO_ID, SCENARIO_SHA256
-from scripts.cumora_experiment import compare
+from scripts.contracts.cumora_experiment import compare
 from tests.test_client_runtime_record import runtime_evidence
 
 

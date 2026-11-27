@@ -14,7 +14,7 @@ import urllib.error
 
 import pytest
 
-from scripts.measure_error_boundary import (
+from scripts.measure.measure_error_boundary import (
     _api_headers,
     _rate_limit_reset,
     _slug_from_repo_url,
@@ -103,7 +103,7 @@ def test_the_resolver_stops_sending_once_the_quota_is_spent(tmp_path,
                                 "x-ratelimit-reset": "1756800000"})
 
     monkeypatch.setattr(
-        "scripts.measure_error_boundary._resolve_head", _limited)
+        "scripts.measure.measure_error_boundary._resolve_head", _limited)
     out = _targets_from_file(listing)
 
     assert len(calls) == 3, (
@@ -125,7 +125,7 @@ def test_a_gone_repository_does_not_stop_the_resolver(tmp_path, monkeypatch):
         return "b" * 40
 
     monkeypatch.setattr(
-        "scripts.measure_error_boundary._resolve_head", _one_gone)
+        "scripts.measure.measure_error_boundary._resolve_head", _one_gone)
 
     assert len(_targets_from_file(listing)) == 4
 
@@ -139,7 +139,7 @@ def test_the_same_repository_twice_is_resolved_once(tmp_path, monkeypatch):
         "https://github.com/acme/app|h1\nacme/app|h2\ngithub.com/acme/app|h3\n")
 
     calls: list[str] = []
-    monkeypatch.setattr("scripts.measure_error_boundary._resolve_head",
+    monkeypatch.setattr("scripts.measure.measure_error_boundary._resolve_head",
                         lambda slug: calls.append(slug) or ("c" * 40))
 
     assert _targets_from_file(listing) == [("acme/app", "c" * 40)]
@@ -214,7 +214,7 @@ def test_the_strata_loader_matches_the_sibling_scripts(tmp_path, monkeypatch):
     exact rules measure_rls_blind_spot.load_candidates applies. If they
     diverge, the error-boundary incidence and the RLS blind-spot rate are
     measured over two different corpora that share a filename."""
-    from scripts import measure_error_boundary as m
+    from scripts.measure import measure_error_boundary as m
     data = tmp_path / "data"
     data.mkdir()
     (data / "x_candidates.txt").write_text(
@@ -233,7 +233,7 @@ def test_a_strata_run_over_the_anonymous_ceiling_refuses_up_front(
     stop -- a corpus that is 60/211 Lovable and none of the other two strata,
     which reads as a result and is nothing of the kind. Refuse before the
     first request, with the arithmetic."""
-    from scripts import measure_error_boundary as m
+    from scripts.measure import measure_error_boundary as m
     data = tmp_path / "data"
     data.mkdir()
     for _, fn in m.STRATA:
@@ -275,7 +275,7 @@ def test_a_silenced_repository_is_asked_whether_it_was_an_app_after_all():
     and an UNPROTECTED repository never stops early, so the exclusion only ever
     removed protected apps and inflated the rate. This is the question that
     decides whether each exclusion was right, so it has to be right itself."""
-    from scripts.measure_error_boundary import _render_call_anywhere
+    from scripts.measure.measure_error_boundary import _render_call_anywhere
 
     # A GitHub zip wraps everything in <repo>-<sha>/; the mount is still found.
     assert _render_call_anywhere(_zip({
@@ -302,7 +302,7 @@ def test_a_render_call_in_node_modules_does_not_make_it_an_app():
     library into the denominator and pull the incidence DOWN with a repository
     that has no screen to blank -- the mirror of the defect this exists to
     measure, and just as wrong."""
-    from scripts.measure_error_boundary import _render_call_anywhere
+    from scripts.measure.measure_error_boundary import _render_call_anywhere
 
     assert _render_call_anywhere(_zip({
         "repo-abc123/package.json": "{}",

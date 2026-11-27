@@ -3,14 +3,14 @@ import hashlib
 import importlib.util
 import io
 import json
-from pathlib import Path
 import tarfile
 import zipfile
+from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location('local_archiver', ROOT / 'scripts/archive_local_package.py')
+_spec = importlib.util.spec_from_file_location('local_archiver', ROOT / 'scripts/catalog/archive_local_package.py')
 archiver = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(archiver)
 REVISION = 'a' * 40

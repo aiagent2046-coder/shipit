@@ -41,7 +41,7 @@ jobs:
         env:
           CONTRACT_CASE: ${{ matrix.case }}
         run: >-
-          python scripts/verify_dependency_remediation.py --case "$CONTRACT_CASE"
+          python scripts/contracts/verify_dependency_remediation.py --case "$CONTRACT_CASE"
           --catalog-scope historical-fixture
           --output-dir "$RUNNER_TEMP/dependency-contract-$CONTRACT_CASE"
       - name: Preserve evidence including unsuccessful runs

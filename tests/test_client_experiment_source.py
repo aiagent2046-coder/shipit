@@ -1,14 +1,14 @@
 """Check source drift independently of Docker and runtime scenario fixtures."""
 
 import json
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from scripts.cumora_experiment import execute
-from scripts.cumora_experiment.prepare import digest, encoded, tree_entries
+from scripts.contracts.cumora_experiment import execute
+from scripts.contracts.cumora_experiment.prepare import digest, encoded, tree_entries
 
 
 @pytest.fixture

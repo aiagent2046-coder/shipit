@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.foundation.learning.external_cve import external_cve_status
-from scripts import build_cve_catalog as pipeline
+from scripts.catalog import build_cve_catalog as pipeline
 
 
 def git(source: Path, *args: str) -> str:

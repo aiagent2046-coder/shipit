@@ -71,14 +71,14 @@ jobs:
           PYTHON
       - name: Prepare the four runtime dependencies and locked build backend
         run: |
-          python scripts/build_local_package.py --out "$RUNNER_TEMP/drydock-bootstrap" --stage-only
+          python scripts/catalog/build_local_package.py --out "$RUNNER_TEMP/drydock-bootstrap" --stage-only
           python -m pip install --require-hashes \
             -r "$RUNNER_TEMP/drydock-bootstrap/build-requirements.txt" \
             -r "$RUNNER_TEMP/drydock-bootstrap/source/requirements.txt"
       - name: Build wheel, independent source archive and offline installation bundle
         run: |
-          python scripts/build_local_package.py --out "$RUNNER_TEMP/drydock-bundle" --wheelhouse
-          PYTHONPATH=. python scripts/verify_local_package.py \
+          python scripts/catalog/build_local_package.py --out "$RUNNER_TEMP/drydock-bundle" --wheelhouse
+          PYTHONPATH=. python scripts/catalog/verify_local_package.py \
             --module app --write-reference "$RUNNER_TEMP/source-reference.json"
       # Release tooling comes from this reviewed workflow revision, allowing an
       # existing production tag to be packaged without changing its engine.
@@ -95,9 +95,9 @@ jobs:
           PYTHON_MINOR: ${{ matrix.python }}
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
-          script=scripts/archive_local_package.py
+          script=scripts/catalog/archive_local_package.py
           if [[ -n "$SOURCE_SHA" ]]; then
-            script=../release-tools/scripts/archive_local_package.py
+            script=../release-tools/scripts/catalog/archive_local_package.py
           fi
           bundle_name="drydock-local-${RELEASE_TAG:-ci}-$PLATFORM-py$PYTHON_MINOR"
           python "$script" --bundle "$RUNNER_TEMP/drydock-bundle" \
@@ -113,7 +113,7 @@ jobs:
           PYTHON="$(command -v python)" bash "$RUNNER_TEMP/unpacked/$BUNDLE_NAME/install.sh" "$RUNNER_TEMP/drydock-installed"
       - name: Verify installed entry point, offline checks and exact source parity
         run: |
-          "$RUNNER_TEMP/drydock-installed/bin/python" -I scripts/verify_local_package.py \
+          "$RUNNER_TEMP/drydock-installed/bin/python" -I scripts/catalog/verify_local_package.py \
             --reference "$RUNNER_TEMP/source-reference.json"
       - name: Rebuild the source archive without the Shipit checkout
         run: |

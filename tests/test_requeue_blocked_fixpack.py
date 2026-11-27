@@ -1,12 +1,12 @@
-from copy import deepcopy
 import json
-from pathlib import Path
 import stat
+from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from scripts import requeue_blocked_fixpack as recovery
+from scripts.ops import requeue_blocked_fixpack as recovery
 
 REQUEST = recovery.RecoveryRequest(
     expected_release="a" * 40,
@@ -269,6 +269,7 @@ def test_non_root_archive_directory_is_refused(snapshot, monkeypatch, tmp_path):
 def main_runtime(monkeypatch, tmp_path):
     """Exercise the CLI transaction with a simulated production host."""
     import psycopg
+
     from scripts import env_file
 
     current = tmp_path / REQUEST.expected_release

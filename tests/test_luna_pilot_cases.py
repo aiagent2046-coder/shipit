@@ -7,7 +7,7 @@ import pytest
 
 from app.scan.issue_identity import SourceIssueResolver
 from app.scan.source_claim_assessment import FACT_KIND, SourceClaimVerifier
-from scripts.luna_pilot_cases import supplemental_cases
+from scripts.eval.luna_pilot_cases import supplemental_cases
 
 
 def _case(case_id):

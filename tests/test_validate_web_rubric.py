@@ -32,7 +32,7 @@ from pathlib import Path
 from app.scan.llm_scan import PRESENTATION, RUBRICS
 
 MODULE_PATH = (
-    Path(__file__).resolve().parents[1] / "scripts" / "validate_web_rubric.py"
+    Path(__file__).resolve().parents[1] / "scripts" / "eval" / "validate_web_rubric.py"
 )
 SPEC = importlib.util.spec_from_file_location(
     "shipit_validate_web_rubric", MODULE_PATH
@@ -308,11 +308,11 @@ def test_both_validation_scripts_put_the_repo_root_on_sys_path():
     Eleven sibling scripts under scripts/ carry the same line for the same
     reason; these two were the exceptions.
     """
-    line = "sys.path.insert(0, str(Path(__file__).resolve().parent.parent))"
+    line = "sys.path.insert(0, str(Path(__file__).resolve().parents[2]))"
     root = Path(__file__).resolve().parents[1]
 
     for name in ("validate_web_rubric.py", "validate_money_rubric.py"):
-        source = (root / "scripts" / name).read_text()
+        source = (root / "scripts" / "eval" / name).read_text()
         first_app_import = source.index("\nfrom app.")
 
         assert line in source, (
@@ -339,7 +339,7 @@ def test_both_validation_scripts_start_without_PYTHONPATH():
 
     for name in ("validate_web_rubric.py", "validate_money_rubric.py"):
         result = subprocess.run(
-            [sys.executable, str(root / "scripts" / name)],
+            [sys.executable, str(root / "scripts" / "eval" / name)],
             cwd=root, env=environment, capture_output=True, text=True,
         )
         output = result.stdout + result.stderr

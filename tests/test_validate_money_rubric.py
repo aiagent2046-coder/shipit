@@ -16,7 +16,7 @@ from pathlib import Path
 
 from app.scan.llm_scan import RUBRICS, build_prompt
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "validate_money_rubric.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "eval" / "validate_money_rubric.py"
 SPEC = importlib.util.spec_from_file_location("shipit_validate_money_rubric", MODULE_PATH)
 validator = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = validator

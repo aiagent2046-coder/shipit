@@ -228,7 +228,7 @@ def test_watch_cli_reloads_supplied_report_each_iteration(local_project, capsys,
 
 
 def test_packaging_command_creates_uploadable_archive_without_overwriting(local_project, tmp_path, catalog):
-    from scripts.attach_binary_evidence import main
+    from scripts.binary.attach_binary_evidence import main
     root, supplied, _ = local_project
     original = archive(files())
     source = tmp_path / 'input.zip'
@@ -249,7 +249,7 @@ def test_packaging_command_creates_uploadable_archive_without_overwriting(local_
 
 @pytest.mark.parametrize('failure', ['size', 'symlink', 'missing_artifact'])
 def test_packaging_rejects_bad_inputs_without_creating_output(local_project, tmp_path, failure):
-    from scripts.attach_binary_evidence import MAX_REPORT_BYTES, main
+    from scripts.binary.attach_binary_evidence import MAX_REPORT_BYTES, main
     _, supplied, _ = local_project
     source = tmp_path / 'input.zip'
     output = tmp_path / 'output.zip'

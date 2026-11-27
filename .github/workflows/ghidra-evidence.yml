@@ -3,12 +3,12 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'scripts/inspect_binary_ghidra.py'
-      - 'scripts/ghidra/**'
+      - 'scripts/binary/inspect_binary_ghidra.py'
+      - 'scripts/binary/ghidra/**'
       - 'tests/test_ghidra_evidence.py'
       - 'app/scan/binary_evidence.py'
       - 'app/scan/project_checks.py'
-      - 'scripts/attach_binary_evidence.py'
+      - 'scripts/binary/attach_binary_evidence.py'
       - 'tests/test_binary_evidence.py'
       - 'tests/test_project_checks.py'
       - 'tests/fixtures/ghidra/**'
@@ -16,12 +16,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'scripts/inspect_binary_ghidra.py'
-      - 'scripts/ghidra/**'
+      - 'scripts/binary/inspect_binary_ghidra.py'
+      - 'scripts/binary/ghidra/**'
       - 'tests/test_ghidra_evidence.py'
       - 'app/scan/binary_evidence.py'
       - 'app/scan/project_checks.py'
-      - 'scripts/attach_binary_evidence.py'
+      - 'scripts/binary/attach_binary_evidence.py'
       - 'tests/test_binary_evidence.py'
       - 'tests/test_project_checks.py'
       - 'tests/fixtures/ghidra/**'
@@ -65,8 +65,8 @@ jobs:
         env:
           ARCHIVE: ${{ runner.temp }}/ghidra-12.2.zip
         run: |
-          python scripts/inspect_binary_ghidra.py artifacts/static_sample.elf --ghidra-archive "$ARCHIVE" --java-home "$JAVA_HOME" --output artifacts/first.json --diagnostic-log artifacts/first.log
-          python scripts/inspect_binary_ghidra.py artifacts/static_sample.elf --ghidra-archive "$ARCHIVE" --java-home "$JAVA_HOME" --output artifacts/second.json --diagnostic-log artifacts/second.log
+          python scripts/binary/inspect_binary_ghidra.py artifacts/static_sample.elf --ghidra-archive "$ARCHIVE" --java-home "$JAVA_HOME" --output artifacts/first.json --diagnostic-log artifacts/first.log
+          python scripts/binary/inspect_binary_ghidra.py artifacts/static_sample.elf --ghidra-archive "$ARCHIVE" --java-home "$JAVA_HOME" --output artifacts/second.json --diagnostic-log artifacts/second.log
           cmp artifacts/first.json artifacts/second.json
           python - <<'PY'
           import json
@@ -110,7 +110,7 @@ jobs:
           # Valid ELF64 x86-64 header followed by garbage: Ghidra 12.2 exits 0 with no functions.
           python -c "import sys; d=open(sys.argv[1],'rb').read(64); open(sys.argv[2],'wb').write(d+b'\xff'*4096)" artifacts/static_sample.elf artifacts/malformed.elf
           status=0
-          python scripts/inspect_binary_ghidra.py artifacts/malformed.elf --ghidra-archive "$ARCHIVE" --java-home "$JAVA_HOME" --output artifacts/malformed.json --diagnostic-log artifacts/malformed.log || status=$?
+          python scripts/binary/inspect_binary_ghidra.py artifacts/malformed.elf --ghidra-archive "$ARCHIVE" --java-home "$JAVA_HOME" --output artifacts/malformed.json --diagnostic-log artifacts/malformed.log || status=$?
           test "$status" -eq 2
           python -c "import json; r=json.load(open('artifacts/malformed.json')); assert r['status'] != 'completed', r['reason']; print('Malformed ELF:', r['status'], r['reason'])"
       - uses: actions/upload-artifact@v4
