@@ -88,9 +88,9 @@ _CATALOG = {
                     "tests/detectors/sql-injection-string-built-query/negative/parameterised-query",
                 ],
                 "unknown_refs": [
-                    "tests/test_psycopg_provenance.py::test_ambiguous_chains_keep_the_driver_prerequisite",
-                    "tests/test_sql_injection_coverage.py::test_decode_parse_and_byte_size_gaps_keep_independent_findings",
-                    "tests/test_sql_coverage_contracts.py::test_sql_parse_gap_cannot_report_success_with_retained_positive",
+                    "tests/supply/agent_evidence_1/test_psycopg_provenance.py::test_ambiguous_chains_keep_the_driver_prerequisite",
+                    "tests/scan/sql_rls_auth/test_sql_injection_coverage.py::test_decode_parse_and_byte_size_gaps_keep_independent_findings",
+                    "tests/scan/sql_rls_auth/test_sql_coverage_contracts.py::test_sql_parse_gap_cannot_report_success_with_retained_positive",
                 ],
                 "mutation": {
                     "status": "static_regressions_registered",
@@ -153,13 +153,13 @@ _CATALOG = {
                     "tests/detectors/unsafe-deserialization/negative/json-and-literal-eval",
                 ],
                 "unknown_refs": [
-                    "tests/test_unsafe_deserialization.py::test_unknown_or_shadowed_objects_are_not_claimed_to_be_library_loaders",
-                    "tests/test_unsafe_deserialization.py::test_deep_or_large_ast_is_outside_the_bounded_trace",
+                    "tests/scan/web_app_detectors_2/test_unsafe_deserialization.py::test_unknown_or_shadowed_objects_are_not_claimed_to_be_library_loaders",
+                    "tests/scan/web_app_detectors_2/test_unsafe_deserialization.py::test_deep_or_large_ast_is_outside_the_bounded_trace",
                 ],
                 "mutation": {
                     "status": "static_regressions_registered",
                     "refs": [
-                        "tests/test_unsafe_deserialization.py::test_each_corpus_negative_goes_silent_for_its_stated_reason",
+                        "tests/scan/web_app_detectors_2/test_unsafe_deserialization.py::test_each_corpus_negative_goes_silent_for_its_stated_reason",
                     ],
                 },
                 "runtime_status": "not_run",
@@ -211,11 +211,14 @@ _CATALOG = {
                 ],
                 "unknown_refs": [
                     "tests/detectors/python-outbound-request-unvalidated-url/negative/helper-builds-the-url",
-                    "tests/test_outbound_url.py::test_deep_ast_is_skipped_without_recursing_into_the_rule",
+                    "tests/scan/web_app_detectors_1/test_outbound_url.py::test_deep_ast_is_skipped_without_recursing_into_the_rule",
                 ],
                 "mutation": {
                     "status": "static_regressions_registered",
-                    "refs": ["tests/test_outbound_url.py::test_each_corpus_negative_goes_silent_for_its_stated_reason"],
+                    "refs": [
+                        "tests/scan/web_app_detectors_1/test_outbound_url.py::"
+                        "test_each_corpus_negative_goes_silent_for_its_stated_reason",
+                    ],
                 },
                 "runtime_status": "not_run",
             },

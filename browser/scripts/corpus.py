@@ -38,7 +38,7 @@ from tests.bun_fixtures import (  # noqa: E402
     gstack_project,
 )
 from tests.detectors.conftest import build_archive, discover_cases, load_expected  # noqa: E402
-from tests.test_browser_cve import LOCK_GAPS, REAL_CASES, lock_gap_project, project  # noqa: E402
+from tests.scan.corpus_browser_1.test_browser_cve import LOCK_GAPS, REAL_CASES, lock_gap_project, project  # noqa: E402
 
 AS_OF = os.environ.get('DRYDOCK_PARITY_AS_OF', datetime.now(timezone.utc).date().isoformat())
 CATALOG = json.loads((ROOT / "app/data/cve-catalog.json").read_text())
@@ -281,7 +281,7 @@ def remediation_cases():
 def project_check_cases():
     """Bound imported binary evidence identically in CPython and shipped WASM."""
     from app.scan.supply.binary_evidence import ENVELOPE_PATH, attach_binary_reports
-    from tests.test_binary_evidence import elf, encoded, report
+    from tests.supply.binary_forensics.test_binary_evidence import elf, encoded, report
 
     for name, state in (("bound", "completed"), ("mismatched", "unavailable"),
                         ("incomplete", "partial"), ("not-supplied", "not_run"), ("wrapped-root", "completed")):

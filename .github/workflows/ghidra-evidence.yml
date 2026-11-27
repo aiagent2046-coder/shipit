@@ -5,12 +5,12 @@ on:
     paths:
       - 'scripts/binary/inspect_binary_ghidra.py'
       - 'scripts/binary/ghidra/**'
-      - 'tests/test_ghidra_evidence.py'
+      - 'tests/supply/binary_forensics/test_ghidra_evidence.py'
       - 'app/scan/supply/binary_evidence.py'
       - 'app/scan/reporting/project_checks.py'
       - 'scripts/binary/attach_binary_evidence.py'
-      - 'tests/test_binary_evidence.py'
-      - 'tests/test_project_checks.py'
+      - 'tests/supply/binary_forensics/test_binary_evidence.py'
+      - 'tests/scan/scoring_reporting_1/test_project_checks.py'
       - 'tests/fixtures/ghidra/**'
       - '.github/workflows/ghidra-evidence.yml'
   push:
@@ -18,12 +18,12 @@ on:
     paths:
       - 'scripts/binary/inspect_binary_ghidra.py'
       - 'scripts/binary/ghidra/**'
-      - 'tests/test_ghidra_evidence.py'
+      - 'tests/supply/binary_forensics/test_ghidra_evidence.py'
       - 'app/scan/supply/binary_evidence.py'
       - 'app/scan/reporting/project_checks.py'
       - 'scripts/binary/attach_binary_evidence.py'
-      - 'tests/test_binary_evidence.py'
-      - 'tests/test_project_checks.py'
+      - 'tests/supply/binary_forensics/test_binary_evidence.py'
+      - 'tests/scan/scoring_reporting_1/test_project_checks.py'
       - 'tests/fixtures/ghidra/**'
       - '.github/workflows/ghidra-evidence.yml'
 permissions:
@@ -44,7 +44,7 @@ jobs:
       - name: Failure-contract tests
         run: |
           python -m pip install pytest==8.4.2
-          python -m pytest --noconftest -q tests/test_ghidra_evidence.py tests/test_binary_evidence.py
+          python -m pytest --noconftest -q tests/supply/binary_forensics/test_ghidra_evidence.py tests/supply/binary_forensics/test_binary_evidence.py
       - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ghidra-12.2.zip

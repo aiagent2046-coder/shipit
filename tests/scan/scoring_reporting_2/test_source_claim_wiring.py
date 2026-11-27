@@ -1,0 +1,43 @@
+"""Source counterevidence reaches current reports without dismissing mixed claims."""
+import json
+
+import pytest
+
+from app.pipeline.report.html import _finding_row
+from app.pipeline.scan_pipeline import run_scan
+from app.scan.identity.claim_evidence import partial_contradicted, unsupported_transport
+from app.scan.reporting.claim_narrative import narrative_projection
+from tests.claims.verification_1.test_source_claim_assessment import CALLER, HELPER, TIMEZONE, finding
+from tests.pipeline.audit_flow.test_audit_llm_wiring import FakeLLM, make_zip
+
+
+@pytest.mark.parametrize("source,marker,title,expected", [
+    (CALLER, "{data: facts", "All facts are injected into every model prompt",
+     {"fact_input_count_unbounded"}),
+    (TIMEZONE, "if (parsed.data.time_zone", "Intl timezone validation has no error handling; empty string passes",
+     {"local_intl_error_handling_absent", "empty_string_schema_guard_absent"}),
+])
+def test_partial_assessment_crosses_model_admission_scoring_and_rendering(source, marker, title, expected):
+    raw = finding(source, marker=marker, title=title)
+    raw.update(file="app/auth.ts", evidence=marker, severity="high", confidence=0.9,
+               explanation="Review this source claim and separate validation or cost concerns.")
+    result = run_scan(make_zip({"app/auth.ts": source.encode(), "app/helper.ts": HELPER.encode()}).getvalue(),
+                      FakeLLM(response=json.dumps([raw])), llm_rubrics=("auth",))
+    model, = [f for f in result["findings"] if f["source"] == "llm"]
+    checks = model["claim_evidence"]["source_assessments"]
+    assert {c["kind"] for c in checks if c["result"] == "contradicted"} == expected
+    assert all(c["whole_finding"] is False for c in checks)
+    assert partial_contradicted(model["claim_evidence"])
+    assert not unsupported_transport(model["claim_evidence"])
+    assert result["score"]["categories"]["Auth"] < 10
+    if expected == {"fact_input_count_unbounded"}:
+        projection = narrative_projection(model)
+        assert projection and projection["original"]["title"] == title
+        assert model["title"] != title
+        assert "Superseded model wording" in _finding_row(model)
+        assert model["title"] in _finding_row(model)
+    else:
+        assert "Source checks contradict part of this finding" in _finding_row(model)
+        assert model["title"] == title
+        assert narrative_projection(model) is None
+    assert "Source checks contradict part of this finding" not in _finding_row(model, historical=True)

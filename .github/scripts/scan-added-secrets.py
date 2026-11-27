@@ -10,7 +10,6 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
-
 PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     (
         "private-key-header",
@@ -108,7 +107,7 @@ PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
 # Excluded WHOLE, not line-filtered: the entire purpose of these files is to
 # enumerate secret formats, so there is no "real code" in them worth scanning
 # for the same signatures. Detection is still tested --
-# tests/test_scan_added_secrets.py exercises PATTERNS directly in-process (it
+# tests/platform/release_contracts_2/test_scan_added_secrets.py exercises PATTERNS directly in-process (it
 # imports this module and calls pattern.search on synthetic blobs), NOT by
 # asking this script to git-diff-scan a file, so the exclusion does not weaken
 # the tests.
@@ -116,7 +115,7 @@ PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
 #
 # EXCLUDED_PATHS below is a whole-file hammer, and only three files earn it.
 # But secret-SHAPED fixtures are by design in at least six more --
-# tests/test_secrets.py, test_fixpack_generate.py, test_fixpack_process_
+# tests/scan/secrets/test_secrets.py, test_fixpack_generate.py, test_fixpack_process_
 # endpoint.py, test_fix_outcomes.py, test_observability.py, test_db.py -- and
 # those are the tests of the product's own secret scanner, which is to say the
 # files people ADD fixtures to. Today they pass only because their fixtures
@@ -138,8 +137,8 @@ ALLOW_MARKER = re.compile(rb"scan-allow:\s*\S")
 EXCLUDED_PATHS: frozenset[str] = frozenset(
     {
         ".github/scripts/scan-added-secrets.py",
-        "tests/test_scan_added_secrets.py",
-        "tests/test_logging_config.py",
+        "tests/platform/release_contracts_2/test_scan_added_secrets.py",
+        "tests/platform/ops_observability_1/test_logging_config.py",
     }
 )
 
