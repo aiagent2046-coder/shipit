@@ -92,19 +92,19 @@ jobs:
       # empty trailing field, broke every read of the ledger and got past
       # them. Runs first: nothing below it works if the ledger cannot be read.
       - name: "Real-Postgres migration ledger parsing"
-        run: pytest -q tests/test_migration_ledger_postgres.py
+        run: pytest -q tests/platform/database/test_migration_ledger_postgres.py
 
       - name: "Real-Postgres live database metadata collector"
-        run: pytest -q tests/test_rls_metadata_postgres.py
+        run: pytest -q tests/platform/api_auth_mcp_2/test_rls_metadata_postgres.py
 
       # Races in the money paths, which fakes cannot express: every one of
       # them lives in the gap between a read and a write on one row, and a
       # fake dict has no such gap.
       - name: "Real-Postgres billing concurrency"
-        run: pytest -q tests/test_billing_concurrency_postgres.py
+        run: pytest -q tests/platform/billing/test_billing_concurrency_postgres.py
 
       - name: "Real-Postgres paid delivery authorization"
-        run: pytest -q tests/test_paid_delivery_store_postgres.py
+        run: pytest -q tests/delivery/delivery_gates/test_paid_delivery_store_postgres.py
 
       - name: "Security properties and targeted mutation controls"
         run: |
@@ -121,22 +121,22 @@ jobs:
           retention-days: 14
 
       - name: "Real-Postgres repository write-path smoke"
-        run: pytest -q tests/test_db_postgres_smoke.py
+        run: pytest -q tests/platform/database/test_db_postgres_smoke.py
 
       # The audit queue's claim/lease semantics (FOR UPDATE SKIP LOCKED, the
       # partial idempotency index, the lease gate on every post-claim write) are
       # pure Postgres behaviour, so they are only ever exercised here -- the
       # default suite skips this file with DATABASE_URL unset.
       - name: "Real-Postgres audit queue claim/lease tests"
-        run: pytest -q tests/test_audit_jobs_repo.py
+        run: pytest -q tests/pipeline/audit_flow/test_audit_jobs_repo.py
 
       # The worker on top of that queue: the join between its decisions
-      # (covered with a fake repository in tests/test_audit_worker.py) and
+      # (covered with a fake repository in tests/pipeline/audit_flow/test_audit_worker.py) and
       # the rows they actually produce -- a transient failure coming back
       # after its backoff, a shutdown release refunding its attempt, four
       # slots on one pool never running the same job twice.
       - name: "Real-Postgres audit worker end-to-end tests"
-        run: pytest -q tests/test_audit_worker_postgres.py
+        run: pytest -q tests/pipeline/audit_flow/test_audit_worker_postgres.py
 
       # GET /internal/stats is nothing but SQL aggregation -- a state
       # histogram, a percentile, two trailing windows. A fake repository could
@@ -145,7 +145,7 @@ jobs:
       # window. The heartbeat half of the file needs no database and also runs
       # in the default suite.
       - name: "Real-Postgres /internal/stats aggregate tests"
-        run: pytest -q tests/test_internal_stats.py
+        run: pytest -q tests/platform/ops_observability_1/test_internal_stats.py
 
       # Both files below were written with a real-Postgres half and then never
       # ran it. They are skipped in the default suite (DATABASE_URL unset) and
@@ -160,7 +160,7 @@ jobs:
       # one pending, where refunding the wrong one records a payout that never
       # happened and leaves the real charge looking clean.
       - name: "Real-Postgres refund recording tests"
-        run: pytest -q tests/test_payment_refunds.py
+        run: pytest -q tests/platform/billing/test_payment_refunds.py
 
       # Spend accounting: an llm_usage row used to be written only after a
       # successful audit, so every path that spent money and then failed --
@@ -170,4 +170,4 @@ jobs:
       # rows under one audit_jobs.id and sum_by_audit_job adds them up. That is
       # "what did this job actually cost", and it is unaskable with a fake.
       - name: "Real-Postgres LLM spend accounting tests"
-        run: pytest -q tests/test_llm_usage_failed_attempts.py
+        run: pytest -q tests/pipeline/llm_engine_1/test_llm_usage_failed_attempts.py

@@ -190,7 +190,7 @@ jobs:
       # and so had redis either way. The jobs that install only the dev lock --
       # db-postgres-smoke, e2e-sandbox-runner -- survived only because they run
       # named test files rather than the whole suite; a plain `pytest` on a
-      # fresh clone aborted during collection on tests/test_ratelimit_redis.py,
+      # fresh clone aborted during collection on tests/platform/api_auth_mcp_2/test_ratelimit_redis.py,
       # taking all 1153 tests with it.
       #
       # Compares the pinned sets rather than recompiling: pip-compile output

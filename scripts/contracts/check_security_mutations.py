@@ -38,46 +38,46 @@ MUTATIONS = (
         "cve-exclusive-upper-bound", "app/scan/supply/advisory_evaluation.py",
         "upper_relation > 0 or (exclusive is not None and upper_relation == 0)",
         "upper_relation > 0",
-        "tests/test_cve_properties.py::test_generated_cve_and_osv_bounds_follow_integer_interval",
+        "tests/supply/advisories/test_cve_properties.py::test_generated_cve_and_osv_bounds_follow_integer_interval",
     ),
     Mutation(
         "cve-uncertainty-reported-unaffected", "app/scan/supply/cve_match.py",
         'status = next(iter(statuses)) if len(statuses) == 1 and not truncated else "unknown"',
         'status = next(iter(statuses)) if len(statuses) == 1 and not truncated else "unaffected"',
-        "tests/test_cve_properties.py::test_source_uncertainty_and_evidence_survive_source_reordering",
+        "tests/supply/advisories/test_cve_properties.py::test_source_uncertainty_and_evidence_survive_source_reordering",
     ),
     Mutation(
         "dependency-second-origin-dropped", "app/foundation/lockfiles/lockfiles.py",
         "occurrences=occurrences,",
         "occurrences=occurrences[:1],",
-        "tests/test_dependency_occurrence_properties.py::"
+        "tests/supply/dependency_reports/test_dependency_occurrence_properties.py::"
         "test_two_manifests_retain_both_origins_without_duplicate_assessments",
     ),
     Mutation(
         "malformed-manifest-gap-hidden", "app/foundation/lockfiles/lockfiles.py",
         "incomplete[manifest] = reason",
         "pass  # deliberately lose a selected manifest's failure",
-        "tests/test_manifest_fuzz_integration.py::"
+        "tests/supply/sca_lockfiles/test_manifest_fuzz_integration.py::"
         "test_malformed_lockfile_cannot_report_success_with_retained_positive",
     ),
     Mutation(
         "sql-parse-gap-reported-complete", "app/scan/detectors_app/data/sql_injection.py",
         'accounting.skip("parse_error")',
         'accounting.analyzed()  # deliberately claim unread SQL source was checked',
-        "tests/test_sql_coverage_contracts.py::"
+        "tests/scan/sql_rls_auth/test_sql_coverage_contracts.py::"
         "test_sql_parse_gap_cannot_report_success_with_retained_positive",
     ),
     Mutation(
         "rls-ownership-bypassed", "app/routes/rls_check.py",
         "audit = await audit_repo.get_authorized(audit_id, token)",
         "audit = await audit_repo.get(audit_id)",
-        "tests/test_authorization_properties.py::test_rejected_rls_capabilities_do_not_fetch_write_or_spend_owner_budget",
+        "tests/platform/api_auth_mcp_1/test_authorization_properties.py::test_rejected_rls_capabilities_do_not_fetch_write_or_spend_owner_budget",
     ),
     Mutation(
         "payment-valid-replay-refused", "app/db/_billing.py",
         'if row is None or row["tier"] != TIER_PRO:',
         'if row is None or row["tier"] == TIER_PRO:',
-        "tests/test_billing_properties_postgres.py::test_reordered_replays_preserve_independent_grants",
+        "tests/platform/billing/test_billing_properties_postgres.py::test_reordered_replays_preserve_independent_grants",
         postgres=True,
     ),
 )
