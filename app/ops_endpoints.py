@@ -6,9 +6,8 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app.db import AuditJobRepository, FixpackJobRepository
-from app.logging_config import environment_from_env, release_from_env
-from app.release_info import release_labels
-
+from app.runtime.logging_config import environment_from_env, release_from_env
+from app.runtime.release_info import release_labels
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

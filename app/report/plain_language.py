@@ -7,8 +7,11 @@ credential is live, that a service is reachable, or that an attack succeeded.
 
 from __future__ import annotations
 
-from app.finding_text import (  # noqa: F401  (re-exported)
-    CREDENTIAL_RULES, PLAIN, _uses_bounded_static_copy, plain_fields,
+from app.runtime.finding_text import (  # noqa: F401  (re-exported)
+    CREDENTIAL_RULES,
+    PLAIN,
+    _uses_bounded_static_copy,
+    plain_fields,
 )
 
 # severity -> reader-facing tier (technical severity stays in the API

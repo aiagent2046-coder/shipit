@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.proof.gate import decide_proof_gate, proof_gate_mode
-from app.proof_types import ExploitAttempt, ProofReport
+from app.runtime.proof_types import ExploitAttempt, ProofReport
 
 
 def _attempt(

@@ -19,11 +19,11 @@ import sys
 import zipfile
 from pathlib import Path
 
-from app.logging_config import configure_logging
 from app.ingest.stack_detect import detect_stack
 from app.ingest.validators import ArchiveValidationError, validate_zip
-from app.sca.stage import sca_client_for
 from app.llm.client import LLMClient
+from app.runtime.logging_config import configure_logging
+from app.sca.stage import sca_client_for
 from app.scan_pipeline import run_scan
 
 

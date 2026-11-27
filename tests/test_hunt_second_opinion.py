@@ -46,7 +46,7 @@ MODEL_CLIENT = load_module("model_client")
 def test_the_prompt_carries_the_rules_own_definition():
     prompt = OPINION.build_prompt("insecure-randomness", "const token = Math.random();\n")
     # The rule's own capability title is the judge's definition of the defect.
-    from app.capabilities import CAPABILITIES
+    from app.runtime.capabilities import CAPABILITIES
     titles = {rule_id: cap.title for cap in CAPABILITIES for rule_id in cap.rule_ids}
     assert titles["insecure-randomness"] in prompt
     assert "insecure-randomness" in prompt

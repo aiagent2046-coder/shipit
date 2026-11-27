@@ -15,8 +15,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from app import release_info as release_info_module
 from app.main import app
+from app.runtime import release_info as release_info_module
 
 client = TestClient(app)
 

@@ -18,15 +18,23 @@ import re
 import tomllib
 import zipfile
 import zlib
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 
 from app.lockfiles.bun_lock import bun_packages
 from app.lockfiles.lockfile_primitives import (  # re-exported for existing callers
-    Dependency, DependencyOccurrence, MAX_LOCKFILE_BYTES, normalize_pypi,
-    _load_json, _NPM_NAME, _NPM_VERSION, _PYPI_NAME, _PYPI_PIN,
+    _NPM_NAME,
+    _NPM_VERSION,
+    _PYPI_NAME,
+    _PYPI_PIN,
+    MAX_LOCKFILE_BYTES,
+    Dependency,
+    DependencyOccurrence,
+    _load_json,
+    normalize_pypi,
 )
 from app.lockfiles.resolved_locks import pnpm_packages, uv_packages
-from app.path_policy import is_non_production_path
+from app.runtime.path_policy import is_non_production_path
 
 # The bound is on the LOOKUP, not on the repository: every dependency costs one
 # entry in a network request, and an audit must not become unbounded work

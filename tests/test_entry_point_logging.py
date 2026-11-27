@@ -30,14 +30,14 @@ from pathlib import Path
 
 import pytest
 
-from app.logging_config import RedactionFilter, redact
+from app.runtime.logging_config import RedactionFilter, redact
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP = REPO_ROOT / "app"
 
 # The one file allowed to call basicConfig: it is what configure_logging is
 # implemented in terms of.
-_MAY_CALL_BASIC_CONFIG = {APP / "logging_config.py"}
+_MAY_CALL_BASIC_CONFIG = {APP / "runtime" / "logging_config.py"}
 
 
 def entry_points() -> list[Path]:

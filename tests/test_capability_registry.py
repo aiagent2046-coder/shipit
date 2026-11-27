@@ -16,12 +16,19 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.capabilities import (CAPABILITIES, CHECKS_RUN, DECLARED_RULE_IDS,
-                              EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE, manifest)
 from app.main import app
+from app.runtime.capabilities import (
+    CAPABILITIES,
+    CHECKS_RUN,
+    DECLARED_RULE_IDS,
+    EXCLUSIONS_NOTE,
+    HTTP_SUCCESS_SCOPE_PREFIX,
+    SCOPE,
+    manifest,
+)
 from app.scan import static
-from app.scan_pipeline import AUDIT_ENGINE_VERSION
 from app.scan.static import run_static_scan
+from app.scan_pipeline import AUDIT_ENGINE_VERSION
 from tests.detectors.test_golden_corpus import emitted_rule_ids
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

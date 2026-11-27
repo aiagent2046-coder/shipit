@@ -75,7 +75,7 @@ _VERDICT_RE = re.compile(
 
 
 def build_prompt(rule_id: str, body: str) -> str:
-    from app.capabilities import CAPABILITIES
+    from app.runtime.capabilities import CAPABILITIES
     title = "an unspecified security defect"
     scope = "no scope documented"
     for _capability in CAPABILITIES:

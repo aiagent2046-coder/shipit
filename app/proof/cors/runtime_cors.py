@@ -24,7 +24,7 @@ import io
 import os
 import zipfile
 
-from app.proof_types import ProofReport
+from app.runtime.proof_types import ProofReport
 
 # Ports for probe containers. Distinct from app/deploypack/preview.py's
 # PORT_RANGE (20000-30000) on purpose: a preview lives for hours and is

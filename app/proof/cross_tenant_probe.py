@@ -73,7 +73,7 @@ from app.proof.rls.rls_probe import (
     _safe_table_name,
     validate_project_url,
 )
-from app.proof_types import ExploitAttempt
+from app.runtime.proof_types import ExploitAttempt
 
 TEMPLATE_ID = "rls_cross_tenant_runtime"
 

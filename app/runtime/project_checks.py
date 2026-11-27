@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from app.threat_context import threat_context_record, threat_context_rows
+from app.runtime.threat_context import threat_context_record, threat_context_rows
 
 SOURCE_REPOSITORIES = {
     "cvelist": "https://github.com/CVEProject/cvelistV5",

@@ -46,7 +46,7 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-from app.proof_types import ProofReport
+from app.runtime.proof_types import ProofReport
 
 GateMode = Literal["off", "soft", "hard"]
 GateDecision = Literal["pass", "soft_fail", "hard_fail"]

@@ -49,12 +49,12 @@ sys.path.insert(0, str(SCRIPT_DIR))
 import env_file  # noqa: E402
 
 from app.db import McpKeyRepository  # noqa: E402
-from app.logging_config import configure_logging  # noqa: E402
 from app.mcp.keys import (  # noqa: E402
     generate_mcp_key,
     hash_mcp_key,
     mcp_key_prefix,
 )
+from app.runtime.logging_config import configure_logging  # noqa: E402
 
 NEEDED = ("DATABASE_URL", "API_KEY_PEPPER")
 

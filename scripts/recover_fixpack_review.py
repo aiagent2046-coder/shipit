@@ -13,19 +13,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from contextlib import contextmanager
-from copy import deepcopy
-from dataclasses import dataclass
 import fcntl
 import io
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import stat
 import sys
 import tempfile
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 if __package__:
@@ -333,7 +333,7 @@ def load_environment() -> dict:
 
 @contextmanager
 def configure_private_log(path: Path):
-    from app.logging_config import build_handler, configure_logging, log_level_from_env
+    from app.runtime.logging_config import build_handler, configure_logging, log_level_from_env
 
     root = logging.getLogger()
     previous_handlers, previous_level = root.handlers[:], root.level
@@ -359,8 +359,8 @@ async def run_on_production(request: ReviewRequest, apply: bool, directory: Path
     from app.db import AuditRepository, LlmUsageRepository, close_pool
     from app.ingest.github_fetch import fetch_repo_zip
     from app.llm.client import LLMClient
-    from app.log_context import log_context
     from app.main import run_repo_audit
+    from app.runtime.log_context import log_context
     from app.scan_pipeline import AUDIT_ENGINE_VERSION
 
     try:

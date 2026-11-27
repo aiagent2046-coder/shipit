@@ -9,17 +9,16 @@ from __future__ import annotations
 import hashlib
 import urllib.parse
 
-from app.snapshot_record import snapshot_metadata
-from app.finding_text import plain_fields
-from app.project_checks import project_checks_record
+from app.runtime.finding_text import plain_fields
+from app.runtime.project_checks import project_checks_record
 from app.scan.check_failures import normalize_check_failures
 from app.scan.claim_narrative import narrative_projection
+from app.scan.cve_evidence import normalize_cve_summary
 from app.scan.fact_projection_grouping import validated_fact_group
 from app.scan.query_read_identity import valid_query_read_identity
 from app.scan.rule_coverage import normalize_rule_coverage
-from app.scan.cve_evidence import normalize_cve_summary
 from app.scan.security_agent import agent_record, sql_observation
-
+from app.snapshot_record import snapshot_metadata
 
 SARIF_VERSION = "2.1.0"
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"

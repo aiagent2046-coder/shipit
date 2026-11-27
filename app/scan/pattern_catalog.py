@@ -12,8 +12,7 @@ import hashlib
 import json
 import re
 
-from app.capabilities import CAPABILITIES
-
+from app.runtime.capabilities import CAPABILITIES
 
 _CATALOG = {
     "schema_version": 1,

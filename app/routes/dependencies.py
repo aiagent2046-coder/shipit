@@ -34,7 +34,7 @@ from app.deploypack.delivery import open_pull_request
 from app.deploypack.preview import PreviewRegistry
 from app.ingest.github_fetch import fetch_repo_zip
 from app.llm.client import LLMClient
-from app.ratelimit import RateLimiter, limiter_from_env
+from app.runtime.ratelimit import RateLimiter, limiter_from_env
 
 _limiter = limiter_from_env()
 

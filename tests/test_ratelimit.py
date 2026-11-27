@@ -8,8 +8,7 @@ import zipfile
 from fastapi.testclient import TestClient
 
 from app.main import app, get_rate_limiter
-from app.ratelimit import RateLimiter, RateLimitExceeded
-
+from app.runtime.ratelimit import RateLimiter, RateLimitExceeded
 
 # --- unit tests: RateLimiter in isolation, no HTTP involved ---
 
@@ -281,7 +280,7 @@ def test_preflight_failures_keep_cors_and_never_read_body(monkeypatch):
 
     import app.audit_workflow as audit_mod
     import app.main as main
-    from app.ratelimit import RateLimitStoreError
+    from app.runtime.ratelimit import RateLimitStoreError
 
     limiter = RateLimiter(limit=1)
     limiter.check("testclient")

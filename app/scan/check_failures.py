@@ -2,7 +2,7 @@
 
 import re
 
-from app.capabilities import CHECKS_RUN
+from app.runtime.capabilities import CHECKS_RUN
 
 
 def normalize_check_failures(value: object) -> list[dict[str, str]]:
