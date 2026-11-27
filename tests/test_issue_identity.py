@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from app.scan.issue_identity import SourceIssueResolver
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
 
 
 def _archive(source, path="route.ts"):
@@ -189,7 +189,7 @@ def test_malformed_duplicate_and_symlink_archive_entries_fail_closed():
 
 
 def test_parse_and_request_budgets_are_bounded_and_document_cache_reused(monkeypatch):
-    import app.scan.issue_identity as module
+    import app.scan.claims.resolvers.issue_identity as module
     source = "function f() { return db.from('matches').select('*'); }"
     resolver = SourceIssueResolver(_archive(source))
     first = _identity(resolver, "Matches query has no LIMIT", 1)
@@ -228,7 +228,7 @@ def test_one_fetch_with_multiple_id_entities_is_ambiguous():
 
 
 def test_node_depth_and_cumulative_scope_budgets_fail_closed(monkeypatch):
-    import app.scan.issue_identity as module
+    import app.scan.claims.resolvers.issue_identity as module
     source = "function f() { return db.from('matches').select('*'); }"
     resolver = SourceIssueResolver(_archive(source))
     resolver.remaining_nodes = 0

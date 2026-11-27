@@ -13,11 +13,11 @@ from pathlib import Path
 import pytest
 
 from app.foundation.llm.client import LLMClient, LLMUsage
-from app.scan import python_sql_identity as sql
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.issue_identity import SourceIssueResolver
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
+from app.scan.identity import python_sql_identity as sql
 from app.scan.llm_scan import _iter_code_files, run_llm_scan
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 SOURCES = {
     "migrate.py": '''async def migrate(db):

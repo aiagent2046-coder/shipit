@@ -1,14 +1,14 @@
 """Build test inputs and native expectations; never included in public assets."""
 import base64
-from datetime import datetime, timezone
-import os
 import hashlib
-import io
-import zipfile
-import json
 import importlib.abc
+import io
+import json
+import os
 import subprocess
 import sys
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,14 +26,19 @@ if "--portable" in sys.argv:
 
     sys.meta_path.insert(0, NoNative())
 
-from app.scan.browser import ScanSession, scan_archive as _scan_archive  # noqa: E402
-from tests.test_browser_cve import LOCK_GAPS, REAL_CASES, lock_gap_project, project  # noqa: E402
-from tests.detectors.conftest import build_archive, discover_cases, load_expected  # noqa: E402
-from tests.bun_fixtures import (  # noqa: E402
-    FAST_URI_ADVISORIES, GSTACK_ADVISORIES, archive, bun_deep_path_project,
-    bun_workspace_project, gstack_project,
-)
 from parser_probes import probe_parsers  # noqa: E402
+
+from app.scan.browser import ScanSession, scan_archive as _scan_archive  # noqa: E402
+from tests.bun_fixtures import (  # noqa: E402
+    FAST_URI_ADVISORIES,
+    GSTACK_ADVISORIES,
+    archive,
+    bun_deep_path_project,
+    bun_workspace_project,
+    gstack_project,
+)
+from tests.detectors.conftest import build_archive, discover_cases, load_expected  # noqa: E402
+from tests.test_browser_cve import LOCK_GAPS, REAL_CASES, lock_gap_project, project  # noqa: E402
 
 AS_OF = os.environ.get('DRYDOCK_PARITY_AS_OF', datetime.now(timezone.utc).date().isoformat())
 CATALOG = json.loads((ROOT / "app/data/cve-catalog.json").read_text())
@@ -275,8 +280,8 @@ def remediation_cases():
 
 def project_check_cases():
     """Bound imported binary evidence identically in CPython and shipped WASM."""
-    from tests.test_binary_evidence import elf, report, encoded
-    from app.scan.binary_evidence import ENVELOPE_PATH, attach_binary_reports
+    from app.scan.supply.binary_evidence import ENVELOPE_PATH, attach_binary_reports
+    from tests.test_binary_evidence import elf, encoded, report
 
     for name, state in (("bound", "completed"), ("mismatched", "unavailable"),
                         ("incomplete", "partial"), ("not-supplied", "not_run"), ("wrapped-root", "completed")):

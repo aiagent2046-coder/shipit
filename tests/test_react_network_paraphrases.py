@@ -4,10 +4,10 @@ from dataclasses import asdict, replace
 
 import pytest
 
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.issue_identity import SourceIssueResolver
-from app.scan.react_async_context import collect_react_async_context
-from app.scan.react_network_identity import network_cleanup_identity
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
+from app.scan.claims.resolvers.react_network_identity import network_cleanup_identity
+from app.scan.context.react_async_context import collect_react_async_context
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
 from tests.test_react_network_identity import archive, row, source
 
 

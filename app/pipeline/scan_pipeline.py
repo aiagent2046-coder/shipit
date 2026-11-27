@@ -28,12 +28,12 @@ from app.pipeline.fixpack.generate import mark_unfixable_findings
 from app.pipeline.sca.osv import OsvClient
 from app.pipeline.sca.snapshot import run_snapshot_stage
 from app.pipeline.sca.stage import run_sca_stage
-from app.scan.check_failure_scoring import failed_check_categories
-from app.scan.collapse import collapse_repeats
+from app.scan.identity.collapse import collapse_repeats
+from app.scan.identity.model_identity import configured_model_engine_version
 from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
-from app.scan.manifest import scan_manifest
-from app.scan.model_identity import configured_model_engine_version
-from app.scan.scoring import _SCORED_FIELDS, score_findings  # noqa: F401  (re-exported)
+from app.scan.reporting.check_failure_scoring import failed_check_categories
+from app.scan.reporting.manifest import scan_manifest
+from app.scan.reporting.scoring import _SCORED_FIELDS, score_findings  # noqa: F401  (re-exported)
 from app.scan.static import run_static_scan
 from app.scan.version import AUDIT_ENGINE_VERSION
 

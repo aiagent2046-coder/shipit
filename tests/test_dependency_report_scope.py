@@ -6,7 +6,7 @@ import zipfile
 import pytest
 
 from app.foundation.lockfiles import lockfiles, resolved_locks
-from app.scan.cve_match import match_archive
+from app.scan.supply.cve_match import match_archive
 
 
 def archive(files):

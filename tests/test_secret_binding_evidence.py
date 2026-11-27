@@ -2,15 +2,15 @@
 
 import io
 import json
-from pathlib import Path
 import subprocess
 import sys
 import textwrap
 import zipfile
+from pathlib import Path
 
 import pytest
 
-from app.scan.secrets import scan_secrets
+from app.scan.core.secrets import scan_secrets
 
 
 def _assignments(source, name="app/config.py"):
@@ -73,7 +73,7 @@ def test_native_free_js_keeps_literal_findings_and_marks_unresolved_aliases(miss
                 if fullname.split(".")[0] == sys.argv[1]:
                     raise ModuleNotFoundError("native dependency absent", name=fullname)
         sys.meta_path.insert(0, NoNative())
-        from app.scan.secrets import scan_secrets
+        from app.scan.core.secrets import scan_secrets
         data = io.BytesIO()
         with zipfile.ZipFile(data, "w") as archive:
             archive.writestr("app/literal.js", 'const api_key = "ordinaryliteralvalue";\\n')

@@ -5,8 +5,8 @@ import json
 from app.foundation.llm.client import LLMClient
 from app.orchestration.mcp.server import _public_forensics
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
-from app.scan import binary_evidence as binary
-from app.scan.cfg_topology import compute_cfg_dna
+from app.scan.supply import binary_evidence as binary
+from app.scan.supply.cfg_topology import compute_cfg_dna
 from tests.test_binary_evidence import archive, elf
 
 

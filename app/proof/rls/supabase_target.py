@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
-from app.scan.secrets import iter_secret_matches
+from app.scan.core.secrets import iter_secret_matches
 
 ANON_RULE_ID = "supabase-anon-key"
 

@@ -5,9 +5,9 @@ import zipfile
 
 import pytest
 
-from app.scan import source_snapshot as snapshots
-from app.scan.evidence_acquisition import EvidenceBudget, EvidenceLimit
-from app.scan.source_snapshot import SourceSnapshot, SourceUnavailable
+from app.scan.evidence import source_snapshot as snapshots
+from app.scan.evidence.evidence_acquisition import EvidenceBudget, EvidenceLimit
+from app.scan.evidence.source_snapshot import SourceSnapshot, SourceUnavailable
 
 
 def snapshot(source='cur.execute(query)\n', **files):

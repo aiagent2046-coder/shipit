@@ -23,8 +23,8 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.scan.rls import RULE_ID, WRITE_RULE_ID, read_committed_sql, scan_rls
-from app.scan.sql_schema import parse_schema
+from app.scan.detectors_app.data.rls import RULE_ID, WRITE_RULE_ID, read_committed_sql, scan_rls
+from app.scan.detectors_app.data.sql_schema import parse_schema
 
 
 def make_zip(entries: dict[str, str]) -> io.BytesIO:

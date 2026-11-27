@@ -8,13 +8,13 @@ import pytest
 
 from app.pipeline.report.evidence import claim_evidence_rows
 from app.pipeline.report.html import render_report
-from app.scan.paid_operation_recommendations import (
+from app.scan.claims.assessments.recommendations import TIMING_SAFE_EQUAL_KIND, prepare_recommendation
+from app.scan.identity.paid_operation_recommendations import (
     FOLLOWUPS_KIND,
     PAID_OPERATION_KIND,
     RETRY_BUDGET_KIND,
 )
-from app.scan.recommendations import TIMING_SAFE_EQUAL_KIND, prepare_recommendation
-from app.scan.scoring import ScoredFinding
+from app.scan.reporting.scoring import ScoredFinding
 from tests.test_recommendation_prerequisites import TOKEN_ADVICE, finding
 
 
@@ -252,7 +252,7 @@ def test_model_pipeline_does_not_trust_forged_check_or_add_another_model_call():
     ],
 )
 def test_provider_rate_limit_status_does_not_invent_a_local_limiter_goal(advice):
-    from app.scan.paid_operation_recommendations import operational_followups
+    from app.scan.identity.paid_operation_recommendations import operational_followups
 
     assert operational_followups(advice) is None
 
@@ -267,6 +267,6 @@ def test_provider_rate_limit_status_does_not_invent_a_local_limiter_goal(advice)
     ],
 )
 def test_explicit_local_limiter_action_remains_a_followup(advice):
-    from app.scan.paid_operation_recommendations import operational_followups
+    from app.scan.identity.paid_operation_recommendations import operational_followups
 
     assert "Review rate limiting separately" in operational_followups(advice)["replacement_fix_hint"]

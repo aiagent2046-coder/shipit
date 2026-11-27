@@ -1,11 +1,11 @@
 """The KEV compiler is reproducible and cannot turn incomplete input into an empty clean catalog."""
-from copy import deepcopy
 import hashlib
 import json
+from copy import deepcopy
 
 import pytest
 
-from app.scan import kev_catalog as kev
+from app.scan.supply import kev_catalog as kev
 
 COMMIT = 'a' * 40
 STAMP = '2026-11-02T12:00:00Z'

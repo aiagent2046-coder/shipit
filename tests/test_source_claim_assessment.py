@@ -8,7 +8,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.scan import source_claim_assessment as c
+from app.scan.claims.assessments import source_claim_assessment as c
 
 HELPER = """export const MAX_FACTS = 40;
 export function sanitizeFacts(facts: Array<{content: string}>, opts: {maxFacts?: number} = {}) {

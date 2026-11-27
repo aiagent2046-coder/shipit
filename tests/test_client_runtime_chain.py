@@ -6,9 +6,9 @@ import pytest
 
 from app.foundation.llm.client import LLMClient
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
-from app.scan.client_runtime_chain import attach_client_runtime
-from app.scan.client_runtime_record import ARCHIVE_SHA256, SCENARIO_SHA256
-from app.scan.security_agent import agent_record
+from app.scan.evidence.client_runtime_chain import attach_client_runtime
+from app.scan.evidence.client_runtime_record import ARCHIVE_SHA256, SCENARIO_SHA256
+from app.scan.reporting.security_agent import agent_record
 from tests.test_client_runtime_record import runtime_evidence
 from tests.test_security_agent import archive
 
@@ -61,7 +61,7 @@ def test_corrupt_receipts_drop_only_import(field, value):
 
 
 def test_pipeline_import_is_no_llm_and_does_not_change_findings(monkeypatch):
-    import app.scan.client_runtime_record as contract
+    import app.scan.evidence.client_runtime_record as contract
     from tests.test_evidence_acquisition import HTTP_SQL
 
     raw = archive({"app/query.py": HTTP_SQL})

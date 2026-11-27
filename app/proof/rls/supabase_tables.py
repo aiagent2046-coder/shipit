@@ -48,8 +48,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import BinaryIO
 
-from app.scan.rls import private_shape, read_committed_sql
-from app.scan.sql_schema import parse_schema
+from app.scan.detectors_app.data.rls import private_shape, read_committed_sql
+from app.scan.detectors_app.data.sql_schema import parse_schema
 
 # The matchers moved to app/scan/table_names.py when a second consumer
 # appeared (app/scan/schema_drift.py). They are re-exported here because
@@ -57,7 +57,7 @@ from app.scan.sql_schema import parse_schema
 # from this module, and a measurement script that reads a DIFFERENT matcher
 # than production is the failure SUPABASE_RLS_YIELD_PLAN.md already recorded
 # once. One definition, imported twice.
-from app.scan.table_names import (  # noqa: F401
+from app.scan.detectors_app.data.table_names import (  # noqa: F401
     _FROM_CALL,
     _NOT_THEIRS,
     _SOURCE_EXTS,

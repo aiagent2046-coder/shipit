@@ -1,11 +1,10 @@
 """Source-backed v4 counterexamples and paired ambiguous/unsafe operations."""
 import pytest
 
-from app.scan.atomic_claims import check_source, requests
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
+from app.scan.claims.resolvers.atomic_claims import check_source, requests
 from tests.test_atomic_claims import HTTP, check, raw
 from tests.test_audit_llm_wiring import make_zip
-
 
 POSITIVE = '''async function callback() {
   const tokenRes = await fetch('/token');

@@ -8,10 +8,10 @@ from itertools import permutations
 
 import pytest
 
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.react_network_claims import project_network_claim
-from app.scan.react_network_identity import network_cleanup_identity
-from app.scan.scoring import compute_scores
+from app.scan.claims.resolvers.react_network_identity import network_cleanup_identity
+from app.scan.identity.react_network_claims import project_network_claim
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import compute_scores
 from tests.test_react_network_identity import raw, row, setup, source
 
 
@@ -255,7 +255,7 @@ def test_throwing_trim_before_flag_cannot_supply_a_disabled_consequence():
 
 
 def test_identity_projection_metadata_cannot_change_model_prompt():
-    from app.scan.source_facts import facts_prompt
+    from app.scan.claims.assessments.source_facts import facts_prompt
     _, _, facts, rec = scene()
     assert rec["network_projection_context"]
     before = deepcopy(facts)

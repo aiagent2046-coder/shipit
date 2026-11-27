@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from app.pipeline.report.evidence import security_agent_rows
-from app.scan.evidence_record import acquisition_rows, normalize_acquisition
+from app.scan.evidence.evidence_record import acquisition_rows, normalize_acquisition
 
 
 @pytest.fixture

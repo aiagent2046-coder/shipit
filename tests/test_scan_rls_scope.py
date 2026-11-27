@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 import pytest
 
-from app.scan.rls import RULE_ID, WRITE_RULE_ID, read_committed_sql, scan_rls
-
+from app.scan.detectors_app.data.rls import RULE_ID, WRITE_RULE_ID, read_committed_sql, scan_rls
 
 PRIVATE = "CREATE TABLE public.users (id uuid PRIMARY KEY, email text);\n"
 PROTECTED = PRIVATE + "ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;\n"

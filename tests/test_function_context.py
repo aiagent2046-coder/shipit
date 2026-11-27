@@ -6,8 +6,8 @@ import zipfile
 from pathlib import Path
 
 from app.pipeline.report.evidence import manifest_rows
-from app.scan import function_context as context
-from app.scan.source_facts import collect_source_facts, facts_prompt
+from app.scan.claims.assessments import function_context as context
+from app.scan.claims.assessments.source_facts import collect_source_facts, facts_prompt
 from tests.test_operation_context import archive
 
 

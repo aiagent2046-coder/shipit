@@ -32,13 +32,13 @@ from app.pipeline.report.owner_roadmap import build_owner_roadmap
 from app.pipeline.report.plain_language import plain_fields, tier
 from app.runtime.project_checks import SCOPE as PROJECT_CHECKS_SCOPE
 from app.runtime.project_checks import project_checks_rows
-from app.scan.claim_evidence import (
+from app.scan.identity.claim_evidence import (
     narrative_review_checks,
     partial_contradicted,
     syntax_contradicted,
     unsupported_transport,
 )
-from app.scan.claim_narrative import narrative_projection
+from app.scan.reporting.claim_narrative import narrative_projection
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 _SEVERITY_COLOR = {

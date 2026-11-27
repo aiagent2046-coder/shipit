@@ -1,11 +1,11 @@
 """CISA KEV is an exploitation annotation source; it never creates or removes a package match."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 
 import pytest
 
-from app.scan import kev_feed
-from app.scan.kev_feed import KEV_REPOSITORY, merge_kev
+from app.scan.supply import kev_feed
+from app.scan.supply.kev_feed import KEV_REPOSITORY, merge_kev
 
 SHA = "c" * 64
 COMMIT = "d" * 40

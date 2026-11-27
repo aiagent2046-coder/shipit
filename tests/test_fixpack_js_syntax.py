@@ -6,7 +6,7 @@ from dataclasses import asdict
 import pytest
 
 from app.pipeline.fixpack import generate
-from app.scan.secrets import iter_secret_matches
+from app.scan.core.secrets import iter_secret_matches
 from tests.test_fixpack_generate import AWS_KEY_2, make_zip
 
 

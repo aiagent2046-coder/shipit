@@ -5,15 +5,15 @@ import zipfile
 
 import pytest
 
-from app.scan import binary_evidence as binary
+from app.scan.supply import binary_evidence as binary
 from tests.test_binary_evidence import archive, elf, encoded, report
 
 
 @pytest.mark.parametrize('location', ['root', 'wrapper', 'root-with-directory'])
 def test_attached_envelope_preserves_wrapped_project_root_and_source_verdict(location):
     from app.foundation.ingest.stack_detect import Stack, detect_stack
-    from app.scan.checks import _strip_root, archive_root
-    from app.scan.error_boundary import _norm
+    from app.scan.core.checks import _strip_root, archive_root
+    from app.scan.detectors_app.runtime.error_boundary import _norm
     from app.scan.static import run_static_scan
 
     prefix = 'project-commit/'
@@ -47,8 +47,8 @@ def test_attached_envelope_preserves_wrapped_project_root_and_source_verdict(loc
 
 
 def test_source_root_filter_keeps_neighbouring_files_and_their_parent_directory():
-    from app.scan.checks import archive_root
-    from app.scan.file_scope import source_archive_names
+    from app.scan.core.checks import archive_root
+    from app.scan.core.file_scope import source_archive_names
 
     names = ['project/app.py', '.drydock-evidence/', binary.ENVELOPE_PATH, '.drydock-evidence/config.json']
     assert source_archive_names(names) == [name for name in names if name != binary.ENVELOPE_PATH]
@@ -57,8 +57,8 @@ def test_source_root_filter_keeps_neighbouring_files_and_their_parent_directory(
 
 @pytest.mark.parametrize('prefix', ['', 'repository-commit/'])
 def test_imported_secret_shaped_symbol_is_not_source_or_scored_finding(prefix):
+    from app.scan.evidence.source_snapshot import SourceSnapshot
     from app.scan.llm_scan import _iter_code_files, has_application_source, select_files
-    from app.scan.source_snapshot import SourceSnapshot
     from app.scan.static import run_static_scan
 
     supplied = report()
@@ -93,8 +93,8 @@ def test_imported_secret_shaped_symbol_is_not_source_or_scored_finding(prefix):
     'a/b/.drydock-evidence/ghidra.json', '.drydock-evidence/ghidra.json.backup',
 ])
 def test_evidence_exclusion_does_not_hide_neighbouring_source_or_secrets(path):
+    from app.scan.core.secrets import scan_secrets
     from app.scan.llm_scan import _iter_code_files, select_files
-    from app.scan.secrets import scan_secrets
 
     content = b'{"password":"' + b'AKIA' + b'ABCDEFGHIJKLMNOP"}'
     data = archive({path: content})

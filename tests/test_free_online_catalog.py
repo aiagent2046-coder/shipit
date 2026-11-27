@@ -27,7 +27,7 @@ from app.pipeline.report.sarif import build_sarif
 from app.pipeline.sca.cache import needs_dependency_scan
 from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, BASIS_FULL, BASIS_PREVIEW, run_scan
 from app.scan.browser import scan_archive
-from app.scan.cve_match import match_archive
+from app.scan.supply.cve_match import match_archive
 from tests.bun_fixtures import (
     FAST_URI_ADVISORIES,
     GSTACK_ADVISORIES,
@@ -256,7 +256,7 @@ def test_snapshot_does_not_satisfy_the_paid_live_lookup_cache_contract(monkeypat
 @pytest.mark.parametrize("limit", ["MAX_EVALUATIONS", "MAX_FINDINGS"])
 def test_incomplete_refresh_retains_previous_matches_with_their_original_provenance(monkeypatch, limit):
     from app.pipeline.sca.snapshot import refresh_snapshot
-    from app.scan import cve_match
+    from app.scan.supply import cve_match
 
     raw = project("PyPI", "adyen", "2.2.0")
     initial = free_scan(raw)

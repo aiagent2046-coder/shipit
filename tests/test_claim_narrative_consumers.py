@@ -11,7 +11,7 @@ import pytest
 from app.pipeline.report.evidence import claim_evidence_rows
 from app.pipeline.report.html import _finding_row
 from app.pipeline.report.sarif import build_sarif
-from app.scan.claim_narrative import narrative_projection, project_claim_narrative
+from app.scan.reporting.claim_narrative import narrative_projection, project_claim_narrative
 from tests.test_claim_narrative import FACT_CALLER, fixture
 
 FIXTURES = Path(__file__).parents[1] / "web/src/lib/fixtures/claim_narrative_cases.json"
@@ -47,7 +47,7 @@ def generated(kind):
 
 
 def query_group():
-    from app.scan.cross_rubric_dedup import dedup_cross_rubric
+    from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
     from tests.test_query_read_identity import TITLES, _finding, _raw
 
     findings = [_finding(), _finding(_raw(TITLES[1]), response=7)]
@@ -148,7 +148,7 @@ def test_query_group_scope_and_originals_survive_public_exports_without_claiming
 
 
 def test_fact_group_keeps_each_condition_and_model_original_in_public_exports():
-    from app.scan.fact_projection_grouping import group_fact_projections, validated_fact_group
+    from app.scan.reporting.fact_projection_grouping import group_fact_projections, validated_fact_group
     from tests.test_fact_projection_grouping import pair
 
     finding = asdict(group_fact_projections(pair())[0])
@@ -178,7 +178,7 @@ def test_fact_group_keeps_each_condition_and_model_original_in_public_exports():
 
 
 def test_invalid_fact_group_cannot_advertise_shared_source_scope():
-    from app.scan.fact_projection_grouping import group_fact_projections
+    from app.scan.reporting.fact_projection_grouping import group_fact_projections
     from tests.test_fact_projection_grouping import pair
 
     finding = asdict(group_fact_projections(pair())[0])

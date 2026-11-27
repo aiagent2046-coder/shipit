@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 
-from app.scan.secrets import scan_secrets
+from app.scan.core.secrets import scan_secrets
 
 # Deliberately fake but format-valid samples.
 FAKE_AWS = "AKIA" + "A" * 16
@@ -442,7 +442,7 @@ def test_the_match_spans_the_whole_connection_string():
     is gone, so nothing downstream would have caught it.
     """
     from app.pipeline.fixpack.generate import _apply_secret_fix
-    from app.scan.secrets import iter_secret_matches
+    from app.scan.core.secrets import iter_secret_matches
 
     dsn = _dsn("postgresql", "svc", "zQ8vT2mKp", "db.prod.example.com",
                ":5432/app")

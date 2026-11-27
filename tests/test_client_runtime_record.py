@@ -3,9 +3,13 @@ from copy import deepcopy
 
 import pytest
 
-from app.scan.client_runtime_record import (
-    ARCHIVE_SHA256, CHECK_IDS, SCENARIO_ID, SCENARIO_SHA256,
-    normalize_client_runtime_record, validate_client_runtime_evidence,
+from app.scan.evidence.client_runtime_record import (
+    ARCHIVE_SHA256,
+    CHECK_IDS,
+    SCENARIO_ID,
+    SCENARIO_SHA256,
+    normalize_client_runtime_record,
+    validate_client_runtime_evidence,
 )
 
 RUN_ID = 'c92c6f5f-6759-4768-b768-2d42408bf3de'

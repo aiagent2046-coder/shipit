@@ -1,12 +1,12 @@
 """The production stage must project after grouping using current ZIP bytes."""
-from dataclasses import asdict
 import hashlib
 import json
 import zipfile
+from dataclasses import asdict
 
-from app.scan.claim_narrative import narrative_projection, project_claim_narrative
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.llm_scan import _iter_code_files, run_llm_scan
+from app.scan.reporting.claim_narrative import narrative_projection, project_claim_narrative
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
 from tests.test_audit_llm_wiring import FakeLLM
 from tests.test_source_claim_assessment import CALLER, HELPER, archive
 

@@ -43,25 +43,25 @@ from tree_sitter import Language, Parser
 
 from app.pipeline.fixpack.rls_policy import PolicyProposal, migration_filename, propose_read_policy
 from app.pipeline.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
-from app.scan.checks import (
+from app.scan.core.checks import (
     env_file_is_public_configuration,
     find_committed_env_files,
     gitignore_covers_env,
 )
-from app.scan.ci_deploy_source import RULE_ID as CI_DEPLOY_RULE_ID
-from app.scan.error_boundary import RULE_ID as ERROR_BOUNDARY_RULE_ID
-from app.scan.rls import RULE_ID as RLS_RULE_ID
-from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
-from app.scan.rls import read_committed_sql
-from app.scan.secrets import (
+from app.scan.core.secrets import (
     NON_PRODUCTION_CONTEXTS,
     RULES,
     SecretFinding,
     is_non_production_path,
     iter_secret_matches,
 )
-from app.scan.service_role import RULE_ID as SERVICE_ROLE_RULE_ID
-from app.scan.sql_schema import parse_schema
+from app.scan.detectors_app.data.rls import RULE_ID as RLS_RULE_ID
+from app.scan.detectors_app.data.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
+from app.scan.detectors_app.data.rls import read_committed_sql
+from app.scan.detectors_app.data.service_role import RULE_ID as SERVICE_ROLE_RULE_ID
+from app.scan.detectors_app.data.sql_schema import parse_schema
+from app.scan.detectors_app.runtime.ci_deploy_source import RULE_ID as CI_DEPLOY_RULE_ID
+from app.scan.detectors_app.runtime.error_boundary import RULE_ID as ERROR_BOUNDARY_RULE_ID
 
 logger = logging.getLogger(__name__)
 

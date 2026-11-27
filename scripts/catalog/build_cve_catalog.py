@@ -153,9 +153,9 @@ def read_kev_source(source: Path) -> tuple[dict, dict]:
 
 def build_snapshot(source: Path, ghsa_source: Path | None = None,
                    kev_source: Path | None = None) -> tuple[bytes, bytes]:
-    from app.scan.cve_catalog import build_catalog
-    from app.scan.ghsa_catalog import merge_reviewed_ghsa
-    from app.scan.kev_feed import merge_kev
+    from app.scan.supply.cve_catalog import build_catalog
+    from app.scan.supply.ghsa_catalog import merge_reviewed_ghsa
+    from app.scan.supply.kev_feed import merge_kev
 
     if kev_source is not None and ghsa_source is None:
         raise ValueError("--kev-source requires --ghsa-source; KEV annotates the two-source snapshot")

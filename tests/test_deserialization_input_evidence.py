@@ -6,8 +6,7 @@ import textwrap
 
 import pytest
 
-from app.scan.deserialization_input_evidence import analyze_deserialization_input
-
+from app.scan.evidence.deserialization_input_evidence import analyze_deserialization_input
 
 HEADER = 'from fastapi import FastAPI, Body\nimport pickle\napp = FastAPI()\n'
 

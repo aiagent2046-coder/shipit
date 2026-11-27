@@ -6,8 +6,8 @@ import zipfile
 import pytest
 
 from app.pipeline.report.plain_language import plain_fields
-from app.scan.checks import run_checks
-from app.scan.secrets import scan_secrets
+from app.scan.core.checks import run_checks
+from app.scan.core.secrets import scan_secrets
 
 
 def archive(path: str, body: str) -> io.BytesIO:

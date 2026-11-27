@@ -22,27 +22,27 @@ from typing import BinaryIO
 from app.foundation.llm.accounting import estimate_stats_cost
 from app.foundation.llm.client import LLMClient, LLMError
 from app.foundation.llm.response_diagnostics import response_diagnostics
-from app.scan.claim_evidence import model_claim_evidence, quote_match_window
-from app.scan.claim_narrative import project_claim_narrative
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.fact_projection_grouping import group_fact_projections
-from app.scan.file_scope import is_binary_evidence_path
-from app.scan.issue_identity import SourceIssueResolver
-from app.scan.premise_context import finding_context
-from app.scan.prompt_context import (
+from app.scan.claims.assessments.premise_context import finding_context
+from app.scan.claims.assessments.recommendations import prepare_recommendation
+from app.scan.claims.assessments.source_facts import facts_prompt
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
+from app.scan.context.prompt_context import (
     PromptExcerpt,
     imported_production_files,
     numbered_lines,
     related_test,
     source_excerpt,
 )
-from app.scan.react_async_context import react_async_premise_checks
-from app.scan.recommendations import prepare_recommendation
-from app.scan.rejection_diagnostics import MAX_REJECTION_ITEMS, rejected_item
-from app.scan.scoring import CATEGORIES, ScoredFinding
-from app.scan.secrets import damp_for_non_production_path, is_non_production_path
-from app.scan.source_facts import facts_prompt
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.context.react_async_context import react_async_premise_checks
+from app.scan.core.file_scope import is_binary_evidence_path
+from app.scan.core.secrets import damp_for_non_production_path, is_non_production_path
+from app.scan.identity.claim_evidence import model_claim_evidence, quote_match_window
+from app.scan.reporting.claim_narrative import project_claim_narrative
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.fact_projection_grouping import group_fact_projections
+from app.scan.reporting.rejection_diagnostics import MAX_REJECTION_ITEMS, rejected_item
+from app.scan.reporting.scoring import CATEGORIES, ScoredFinding
 
 # Per-file cap in the prompt, ~5% of MAX_TOTAL_CHARS: no single file may take
 # more than about a nineteenth of a rubric's budget.
@@ -1734,7 +1734,7 @@ def run_llm_scan(fileobj: BinaryIO, client: LLMClient,
                       stats.recategorised += 1
                       origin = category
                   category = declared
-              from app.scan.external_operation_identity import identity_from_assessments
+              from app.scan.identity.external_operation_identity import identity_from_assessments
               assessments = syntax_verifier.source_assessments({**f, "source": "llm"})
               source_identity = (identity_from_assessments(assessments, f["file"])
                                  or issue_resolver.identity(f))

@@ -10,42 +10,50 @@ from typing import BinaryIO
 from app.foundation.ingest.validators import validate_zip
 from app.runtime.capabilities import CHECKS_RUN, EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE
 from app.runtime.finding_text import plain_fields
-from app.scan.archive_extraction import scan_archive_extraction
-from app.scan.auth_read import scan_auth_read
-from app.scan.auth_write import scan_auth_write
-from app.scan.check_failure_scoring import failed_check_categories
 from app.scan.check_loading import is_native_import_error, optional_native_function
-from app.scan.checks import run_checks
-from app.scan.ci_deploy_source import scan_ci_deploy_source
-from app.scan.claim_evidence import static_claim_evidence
-from app.scan.command_injection import scan_command_injection
-from app.scan.error_boundary import MOUNT_UNKNOWN, scan_error_boundary
-from app.scan.http_success import http_success_findings as scan_http_success
-from app.scan.insecure_randomness import scan_insecure_randomness
-from app.scan.open_redirect import scan_open_redirect
-from app.scan.outbound_url import scan_outbound_url
-from app.scan.path_traversal import scan_path_traversal
-from app.scan.rls import scan_rls
-from app.scan.rule_coverage import RULE_COVERAGE_KEYS
-from app.scan.schema_drift import scan_schema_drift
-from app.scan.scoring import ScoredFinding, compute_scores
-from app.scan.secrets import scan_secrets
-from app.scan.security_agent import attach_security_agent
-from app.scan.service_role import scan_service_role
-from app.scan.sql_injection import scan_sql_injection
-from app.scan.unsafe_deserialization import scan_unsafe_deserialization
+from app.scan.core.checks import run_checks
+from app.scan.core.rule_coverage import RULE_COVERAGE_KEYS
+from app.scan.core.secrets import scan_secrets
+from app.scan.detectors_app.data.auth_read import scan_auth_read
+from app.scan.detectors_app.data.auth_write import scan_auth_write
+from app.scan.detectors_app.data.rls import scan_rls
+from app.scan.detectors_app.data.schema_drift import scan_schema_drift
+from app.scan.detectors_app.data.service_role import scan_service_role
+from app.scan.detectors_app.data.sql_injection import scan_sql_injection
+from app.scan.detectors_app.runtime.archive_extraction import scan_archive_extraction
+from app.scan.detectors_app.runtime.ci_deploy_source import scan_ci_deploy_source
+from app.scan.detectors_app.runtime.error_boundary import MOUNT_UNKNOWN, scan_error_boundary
+from app.scan.detectors_app.runtime.unsafe_deserialization import scan_unsafe_deserialization
+from app.scan.detectors_app.runtime.xxe import scan_unsafe_xml_parse
+from app.scan.detectors_web.injection.command_injection import scan_command_injection
+from app.scan.detectors_web.injection.insecure_randomness import scan_insecure_randomness
+from app.scan.detectors_web.injection.open_redirect import scan_open_redirect
+from app.scan.detectors_web.injection.outbound_url import scan_outbound_url
+from app.scan.detectors_web.injection.path_traversal import scan_path_traversal
+from app.scan.detectors_web.injection.xss import scan_xss
+from app.scan.identity.claim_evidence import static_claim_evidence
+from app.scan.reporting.check_failure_scoring import failed_check_categories
+from app.scan.reporting.http_success import http_success_findings as scan_http_success
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
+from app.scan.reporting.security_agent import attach_security_agent
 from app.scan.version import AUDIT_ENGINE_VERSION
-from app.scan.xss import scan_xss
-from app.scan.xxe import scan_unsafe_xml_parse
 
 # Real functions remain bound when their dependencies are installed. This
 # preserves server monkeypatching and source inspection (the golden corpus).
-scan_cookie_flags = optional_native_function("app.scan.cookie_flags", "scan_cookie_flags")
-scan_sql_injection_js = optional_native_function("app.scan.sql_injection_js", "scan_sql_injection_js")
-scan_tls_verification = optional_native_function("app.scan.tls_verification", "scan_tls_verification")
-scan_llm_browser_client = optional_native_function("app.scan.llm_browser_client", "scan_llm_browser_client")
-collect_source_facts = optional_native_function("app.scan.source_facts", "collect_source_facts")
-prepare_recommendation = optional_native_function("app.scan.recommendations", "prepare_recommendation")
+scan_cookie_flags = optional_native_function("app.scan.detectors_web.transport.cookie_flags", "scan_cookie_flags")
+scan_sql_injection_js = optional_native_function(
+    "app.scan.detectors_app.data.sql_injection_js", "scan_sql_injection_js"
+)
+scan_tls_verification = optional_native_function(
+    "app.scan.detectors_web.transport.tls_verification", "scan_tls_verification"
+)
+scan_llm_browser_client = optional_native_function(
+    "app.scan.detectors_web.transport.llm_browser_client", "scan_llm_browser_client"
+)
+collect_source_facts = optional_native_function("app.scan.claims.assessments.source_facts", "collect_source_facts")
+prepare_recommendation = optional_native_function(
+    "app.scan.claims.assessments.recommendations", "prepare_recommendation"
+)
 
 
 class _CheckDidNotRun:
@@ -454,6 +462,6 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                           engine_version=AUDIT_ENGINE_VERSION, source_archive=fileobj,
                           synthetic_sql_executor=synthetic_sql_executor)
     if client_runtime_evidence is not None or client_runtime_run_id is not None:
-        from app.scan.client_runtime_chain import attach_client_runtime
+        from app.scan.evidence.client_runtime_chain import attach_client_runtime
         attach_client_runtime(result["security_agent"], client_runtime_evidence, run_id=client_runtime_run_id)
     return result

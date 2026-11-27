@@ -14,8 +14,8 @@ asking "did the presentation layer stay out of the arithmetic".
 from __future__ import annotations
 
 from app.pipeline.report.grouping import group_for_display
-from app.scan.rls import RULE_ID, WRITE_RULE_ID
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.detectors_app.data.rls import RULE_ID, WRITE_RULE_ID
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 
 def write(table: str) -> dict:

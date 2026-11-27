@@ -2,9 +2,9 @@
 import hashlib
 import json
 
-from app.scan import binary_evidence as binary
-from app.scan.forensic_chain import run_forensic_investigation
-from app.scan.obfuscation_delta import analyze_archive_code_dna
+from app.scan.supply import binary_evidence as binary
+from app.scan.supply.forensic_chain import run_forensic_investigation
+from app.scan.supply.obfuscation_delta import analyze_archive_code_dna
 from tests.test_binary_evidence import archive, elf
 
 

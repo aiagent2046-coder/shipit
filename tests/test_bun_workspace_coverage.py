@@ -5,7 +5,7 @@ import pytest
 
 from app.foundation.lockfiles import bun_lock, lockfiles
 from app.pipeline import local_cli
-from app.scan import cve_match
+from app.scan.supply import cve_match
 from tests.bun_fixtures import archive, bun, registry
 from tests.test_cve_match import catalog
 

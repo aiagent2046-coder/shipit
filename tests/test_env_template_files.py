@@ -29,8 +29,8 @@ import zipfile
 import pytest
 
 from app.pipeline.fixpack.generate import build_fixpack_plan, render_pr_body
-from app.scan.checks import find_committed_env_files, run_checks
-from app.scan.secrets import scan_secrets
+from app.scan.core.checks import find_committed_env_files, run_checks
+from app.scan.core.secrets import scan_secrets
 
 # Both orderings, because both are common in the wild and neither carries a
 # secret: `.env.local.example` (Next.js) and `.env.example.local`.

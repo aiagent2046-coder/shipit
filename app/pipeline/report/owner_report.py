@@ -8,8 +8,8 @@ from __future__ import annotations
 import re
 from typing import Literal, TypedDict
 
-from app.scan.evidence_record import normalize_acquisition
-from app.scan.security_agent import agent_record, deserialization_observation
+from app.scan.evidence.evidence_record import normalize_acquisition
+from app.scan.reporting.security_agent import agent_record, deserialization_observation
 
 _SHA256 = re.compile(r"[a-f0-9]{64}\Z")
 _TITLE = "File loading needs a trust check"

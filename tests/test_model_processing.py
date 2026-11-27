@@ -8,12 +8,12 @@ from pathlib import Path
 from app.foundation.llm.client import LLMClient, LLMUsage
 from app.pipeline.report.evidence import manifest_rows
 from app.pipeline.report.html import render_report
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.function_context import collect_function_context
+from app.scan.claims.assessments.function_context import collect_function_context
+from app.scan.claims.assessments.premise_context import finding_context
 from app.scan.llm_scan import run_llm_scan
-from app.scan.manifest import scan_manifest
-from app.scan.premise_context import finding_context
-from app.scan.scoring import ScoredFinding
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.manifest import scan_manifest
+from app.scan.reporting.scoring import ScoredFinding
 
 
 def archive(files):
@@ -112,7 +112,7 @@ def test_actual_operator_route_context_and_equivalent_claims():
 def test_source_order_does_not_claim_runtime_authorization():
     import ast
 
-    from app.scan.operator_context import operator_guard_context
+    from app.scan.context.operator_context import operator_guard_context
     for source, expected in [
         ('async def route():\n    _require_bearer_token(request, token)\n'
          '    return await payment_repo.get(id)', 'observed'),

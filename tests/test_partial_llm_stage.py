@@ -30,7 +30,7 @@ from app.pipeline.scan_pipeline import (
     run_scan,
 )
 from app.scan.llm_scan import ALL_RUBRICS, RUBRICS, run_llm_scan
-from app.scan.scoring import LLM_ONLY_CATEGORIES, ScoredFinding, compute_scores
+from app.scan.reporting.scoring import LLM_ONLY_CATEGORIES, ScoredFinding, compute_scores
 
 # Matches every rubric's keywords, so the order calls arrive in is the rubric
 # declaration order and a test can say "fail on the third" and mean it.

@@ -61,7 +61,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from app.proof.disclosure import Disclosure, Ownership, plan_disclosure
 from app.proof.secret_registry import Finding, ProbeResult, scan_text
-from app.scan.secrets import _is_demo_jwt, _jwt_severity
+from app.scan.core.secrets import _is_demo_jwt, _jwt_severity
 
 FETCH_TIMEOUT_S = 15
 MAX_HTML_BYTES = 2 * 1024 * 1024        # an index.html naming its bundles

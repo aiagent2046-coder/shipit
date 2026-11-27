@@ -4,7 +4,7 @@ from copy import deepcopy
 import pytest
 
 from app.pipeline.report.js_sql_review import js_sql_review_rows
-from app.scan.js_sql_review import _observation
+from app.scan.detectors_app.data.js_sql_review import _observation
 
 SOURCE = {"archive_sha256": "a" * 64, "engine_version": "test"}
 

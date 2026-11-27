@@ -15,7 +15,7 @@ from app.pipeline.report.evidence import (
 from app.pipeline.report.html import render_report
 from app.pipeline.report.plain_language import plain_fields
 from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
-from app.scan.manifest import scan_manifest
+from app.scan.reporting.manifest import scan_manifest
 from tests.test_audit_llm_wiring import AUTH_ZIP, FakeLLM, make_zip
 
 
@@ -85,7 +85,7 @@ def test_fixture_counts_and_old_credential_claims_cannot_inflate_the_headline():
 
 def test_display_grouping_preserves_source_and_example_counts():
     from app.pipeline.report.grouping import group_for_display
-    from app.scan.rls import RULE_ID
+    from app.scan.detectors_app.data.rls import RULE_ID
     common = {"rule_id": RULE_ID, "severity": "medium", "category": "Security", "title": "RLS"}
     findings = [{**common, "file": "schema/a.sql"}, {**common, "file": "schema/b.sql"},
                 {**common, "file": "tests/schema.sql"}]
@@ -96,7 +96,7 @@ def test_display_grouping_preserves_source_and_example_counts():
 
 def test_mixed_severity_display_group_retains_the_original_source_summary():
     from app.pipeline.report.grouping import group_for_display
-    from app.scan.rls import RULE_ID
+    from app.scan.detectors_app.data.rls import RULE_ID
     common = {"rule_id": RULE_ID, "category": "Security", "title": "RLS", "file": "schema.sql"}
     findings = [{**common, "severity": "high"}, {**common, "severity": "medium"},
                 {**common, "severity": "critical", "file": "tests/schema.sql"}]

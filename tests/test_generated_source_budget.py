@@ -3,9 +3,9 @@
 import pytest
 
 from app.pipeline.report.sarif import build_sarif
-from app.scan.cookie_flags import scan_cookie_flags
-from app.scan.manifest import scan_manifest
-from app.scan.secrets import scan_secrets
+from app.scan.core.secrets import scan_secrets
+from app.scan.detectors_web.transport.cookie_flags import scan_cookie_flags
+from app.scan.reporting.manifest import scan_manifest
 from app.scan.static import run_static_scan
 from tests.test_cookie_flags import PYTHON_POSITIVE, TS_POSITIVE
 from tests.test_dependency_scan_budget import CASES, archive

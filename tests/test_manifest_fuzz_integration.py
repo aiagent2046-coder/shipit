@@ -9,7 +9,7 @@ import pytest
 
 from app.foundation.lockfiles import lockfiles
 from app.pipeline import local_cli, local_store
-from app.scan import cve_match
+from app.scan.supply import cve_match
 
 
 def test_malformed_lockfile_cannot_report_success_with_retained_positive(tmp_path, capsys):

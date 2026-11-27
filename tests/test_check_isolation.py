@@ -20,8 +20,8 @@ import pytest
 
 from app.runtime.capabilities import CHECKS_RUN
 from app.scan import static
-from app.scan.error_boundary import MOUNT_UNKNOWN
-from app.scan.manifest import scan_manifest
+from app.scan.detectors_app.runtime.error_boundary import MOUNT_UNKNOWN
+from app.scan.reporting.manifest import scan_manifest
 from tests.detector_samples import expand_samples
 
 SECRET_FILE = "src/gh.ts"

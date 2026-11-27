@@ -20,7 +20,7 @@ drops"). This file keeps that boundary from being widened by accident.
 import io
 import zipfile
 
-from app.scan.secrets import scan_secrets, value_looks_synthetic
+from app.scan.core.secrets import scan_secrets, value_looks_synthetic
 
 
 def _context_of(text: str, name: str = "tests/test_app.py") -> str | None:

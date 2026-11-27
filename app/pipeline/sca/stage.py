@@ -39,8 +39,8 @@ from app.foundation.lockfiles import (
 )
 from app.pipeline.sca.cve import CveClient
 from app.pipeline.sca.osv import OsvClient, OsvUnavailable
-from app.scan.checks import CheckFinding
-from app.scan.cve_evidence import empty_cve_summary, normalize_cve_summary
+from app.scan.core.checks import CheckFinding
+from app.scan.supply.cve_evidence import empty_cve_summary, normalize_cve_summary
 
 # One rule id for the whole stage: the reader's action is the same for every
 # advisory -- find out whether this dependency is used and upgrade it -- and a

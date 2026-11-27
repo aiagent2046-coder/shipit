@@ -14,7 +14,7 @@ import io
 import zipfile
 
 from app.pipeline.fixpack.generate import build_fixpack_plan
-from app.scan.error_boundary import RULE_ID, scan_error_boundary
+from app.scan.detectors_app.runtime.error_boundary import RULE_ID, scan_error_boundary
 
 
 def make_zip(entries: dict[str, str]) -> bytes:

@@ -7,10 +7,10 @@ import zipfile
 import pytest
 
 from app.pipeline.report.evidence import manifest_rows
-from app.scan import react_async_context as context
-from app.scan.claim_evidence import syntax_contradicted
-from app.scan.premise_context import finding_context
-from app.scan.source_facts import collect_source_facts, facts_prompt
+from app.scan.claims.assessments.premise_context import finding_context
+from app.scan.claims.assessments.source_facts import collect_source_facts, facts_prompt
+from app.scan.context import react_async_context as context
+from app.scan.identity.claim_evidence import syntax_contradicted
 from tests.test_operation_context import archive
 
 

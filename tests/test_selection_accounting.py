@@ -4,7 +4,7 @@ import zipfile
 
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage
 from app.scan import llm_scan
-from app.scan.manifest import scan_manifest
+from app.scan.reporting.manifest import scan_manifest
 
 
 def archive(files):

@@ -11,11 +11,11 @@ import json
 import zipfile
 
 import pytest
-from hypothesis import example, given, settings, strategies as st
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
 
-from app.scan.advisory_evaluation import compare_versions, evaluate_advisory
-from app.scan.cve_match import match_archive
-
+from app.scan.supply.advisory_evaluation import compare_versions, evaluate_advisory
+from app.scan.supply.cve_match import match_archive
 
 PROPERTY_SETTINGS = settings(max_examples=40, derandomize=True)
 RELEASES = st.integers(min_value=0, max_value=999_999)

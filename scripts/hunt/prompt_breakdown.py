@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from app.scan.claims.assessments.source_facts import facts_prompt  # noqa: E402
 from app.scan.llm_scan import (  # noqa: E402
     ALL_RUBRICS,
     RUBRICS,
@@ -25,7 +26,6 @@ from app.scan.llm_scan import (  # noqa: E402
     build_prompt,
     select_files,
 )
-from app.scan.source_facts import facts_prompt  # noqa: E402
 
 URL = "https://codeload.github.com/NandhaKishorM/laya/zip/refs/heads/main"
 

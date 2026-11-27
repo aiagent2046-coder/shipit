@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from app.scan.sql_slot_evidence import classify_sql_slots
+from app.scan.evidence.sql_slot_evidence import classify_sql_slots
 
 
 def classify(parts):

@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from app.scan.detectors_web.transport.tls_verification import RULE_ID, scan_tls_verification
 from app.scan.static import run_static_scan
-from app.scan.tls_verification import RULE_ID, scan_tls_verification
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

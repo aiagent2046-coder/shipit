@@ -12,7 +12,7 @@ ScoredFinding.context is what branches this, so a finding is damped by what it
 IS, not by string-matching a title suffix.
 """
 
-from app.scan.scoring import ScoredFinding, _score, compute_scores
+from app.scan.reporting.scoring import ScoredFinding, _score, compute_scores
 
 
 def _finding(context: str | None) -> ScoredFinding:

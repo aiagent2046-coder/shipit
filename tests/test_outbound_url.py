@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.outbound_url import RULE_ID, scan_outbound_url
+from app.scan.detectors_web.injection.outbound_url import RULE_ID, scan_outbound_url
 from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

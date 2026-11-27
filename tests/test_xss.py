@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.xss import RULE_ID, scan_xss
+from app.scan.detectors_web.injection.xss import RULE_ID, scan_xss
 from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

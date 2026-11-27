@@ -15,7 +15,7 @@ import io
 import time
 
 from app.runtime.proof_types import ExploitAttempt
-from app.scan.secrets import NON_PRODUCTION_CONTEXTS, scan_secrets
+from app.scan.core.secrets import NON_PRODUCTION_CONTEXTS, scan_secrets
 
 # Findings at or above this severity count as a successful "exploit"
 # for proof purposes. Low/informational (anon keys, dev DSN defaults)

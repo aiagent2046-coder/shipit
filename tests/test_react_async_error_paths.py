@@ -5,10 +5,10 @@ import pytest
 
 from app.pipeline.report.evidence import claim_evidence_rows, finding_counts
 from app.pipeline.report.html import render_report
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.scoring import ScoredFinding
-from app.scan.source_facts import facts_prompt
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.claims.assessments.source_facts import facts_prompt
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding
 from tests.test_react_async_context import archive, check, component, scan
 
 WORKSTYLE = '''setBusy(true);
@@ -31,7 +31,7 @@ def assessed(body=WORKSTYLE, title='send() has no catch reset for busy'):
     record, = facts['react_async']['records']
     finding = {'title': title, 'file': record['file'], 'line_start': record['line'],
                'line_end': record['line_end']}
-    from app.scan.premise_context import finding_context
+    from app.scan.claims.assessments.premise_context import finding_context
     evidence = {'version': 1, 'syntax_check': SyntaxVerifier(
         archive({'src/Page.tsx': source}), facts).check(finding),
         'context_checks': finding_context(finding, facts)}
@@ -239,8 +239,8 @@ def test_html_preserves_free_original_and_excludes_only_contradicted_absence():
 
 def test_model_output_is_checked_against_precollected_facts_without_extra_calls():
     from app.foundation.llm.client import LLMClient, LLMUsage, Provider
+    from app.scan.claims.assessments.source_facts import collect_source_facts
     from app.scan.llm_scan import run_llm_scan
-    from app.scan.source_facts import collect_source_facts
     source = component(WORKSTYLE)
     bundle = archive({'src/Page.tsx': source})
     facts = collect_source_facts(bundle)

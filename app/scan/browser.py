@@ -6,17 +6,17 @@ Native parsers are optional; unavailable checks remain explicit failures.
 """
 from __future__ import annotations
 
-import io
 import hashlib
+import io
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from app.scan.sarif_format import build_sarif
-from app.scan.manifest import scan_manifest
-from app.scan.kev_catalog import load_catalog as load_kev_catalog
+from app.scan.reporting.manifest import scan_manifest
+from app.scan.reporting.sarif_format import build_sarif
+from app.scan.reporting.security_agent import agent_record, attach_security_agent
 from app.scan.static import run_static_scan
-from app.scan.security_agent import agent_record, attach_security_agent
+from app.scan.supply.kev_catalog import load_catalog as load_kev_catalog
 from app.scan.version import AUDIT_ENGINE_VERSION
 
 
@@ -38,7 +38,7 @@ def scan_archive(data: bytes, catalog: dict | None = None, *,
 def _dependencies(data: bytes, catalog: dict | None) -> dict | None:
     if catalog is None:
         return None
-    from app.scan.cve_match import match_archive
+    from app.scan.supply.cve_match import match_archive
     try:
         return match_archive(data, catalog)
     except (ValueError, TypeError, KeyError, RecursionError):
@@ -139,10 +139,10 @@ class ScanSession:
 
     def continue_scan(self) -> dict:
         from app.scan import static as stage
-        from app.scan.rule_coverage import resume_rule
-        from app.scan.scoring import ScoredFinding, compute_scores
-        from app.scan.claim_evidence import static_claim_evidence
-        from app.scan.check_failure_scoring import failed_check_categories
+        from app.scan.core.rule_coverage import resume_rule
+        from app.scan.identity.claim_evidence import static_claim_evidence
+        from app.scan.reporting.check_failure_scoring import failed_check_categories
+        from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
         scanners = {
             "sql_injection": stage.scan_sql_injection,

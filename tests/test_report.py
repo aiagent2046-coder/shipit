@@ -138,7 +138,7 @@ def test_collapsed_occurrence_note_surfaces_in_html():
     """The "appears in N files" note that collapse_repeats appends must
     reach the rendered HTML, even for rule_ids with a hardcoded plain
     translation (which otherwise replaces the explanation wholesale)."""
-    from app.scan.collapse import collapse_repeats
+    from app.scan.identity.collapse import collapse_repeats
 
     findings = [{
         "rule_id": "supabase-anon-key", "title": "anon key",
@@ -188,7 +188,7 @@ def test_every_damping_context_reaches_the_same_section():
     to that set and not to the renderer's understanding would leave a damped
     finding sitting in the main table -- damped where nobody looks and loud
     where everybody does."""
-    from app.scan.secrets import NON_PRODUCTION_CONTEXTS
+    from app.scan.core.secrets import NON_PRODUCTION_CONTEXTS
 
     for context in NON_PRODUCTION_CONTEXTS:
         html = render_report(result([dict(_TEST_FILE, context=context)]))
@@ -380,7 +380,7 @@ def test_zero_findings_is_not_a_safety_verdict():
 
 
 def test_finding_count_is_not_changed_by_display_grouping():
-    from app.scan.rls import RULE_ID
+    from app.scan.detectors_app.data.rls import RULE_ID
 
     f = dict(_finding(), rule_id=RULE_ID)
     # Count both records even though the table combines them into one row.

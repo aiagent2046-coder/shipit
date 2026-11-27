@@ -6,10 +6,10 @@ from dataclasses import fields
 
 import pytest
 
-from app.scan import cve_match
-from app.scan.advisory_evaluation import compare_versions, evaluate_advisory
-from app.scan.cve_match import match_archive
-from app.scan.scoring import ScoredFinding
+from app.scan.reporting.scoring import ScoredFinding
+from app.scan.supply import cve_match
+from app.scan.supply.advisory_evaluation import compare_versions, evaluate_advisory
+from app.scan.supply.cve_match import match_archive
 
 
 def archive(files):

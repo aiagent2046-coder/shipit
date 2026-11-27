@@ -1,13 +1,13 @@
 """KEV supplies urgency for existing exact-version findings, never new findings or exploit proof."""
-from copy import deepcopy
 import hashlib
 import socket
 import subprocess
+from copy import deepcopy
 
 import pytest
 
-from app.scan import kev_catalog as kev
-from app.scan import threat_context as threat
+from app.scan.supply import kev_catalog as kev
+from app.scan.supply import threat_context as threat
 from tests.test_kev_catalog import COMMIT, CVE, STAMP, install, loader, raw, upstream
 
 

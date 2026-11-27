@@ -68,7 +68,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.db import _backfill_unexamined  # noqa: E402
-from app.scan.scoring import (  # noqa: E402
+from app.scan.reporting.scoring import (  # noqa: E402
     _RAW_CATEGORY_WEIGHT,
     CATEGORIES,
     CRITICAL_GATE_MIN_CONFIDENCE,

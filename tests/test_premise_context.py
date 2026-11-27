@@ -2,9 +2,9 @@ import ast
 import json
 from pathlib import Path
 
-from app.scan.function_context import collect_function_context
-from app.scan.premise_context import finding_context, transaction_templates, update_predicates
-from app.scan.source_facts import collect_source_facts, facts_prompt
+from app.scan.claims.assessments.function_context import collect_function_context
+from app.scan.claims.assessments.premise_context import finding_context, transaction_templates, update_predicates
+from app.scan.claims.assessments.source_facts import collect_source_facts, facts_prompt
 from tests.test_operation_context import archive
 
 

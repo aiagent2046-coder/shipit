@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from app.scan import guard_context as context
+from app.scan.context import guard_context as context
 
 
 def archive(files):

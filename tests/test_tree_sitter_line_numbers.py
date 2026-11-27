@@ -1,8 +1,8 @@
 """Native parser regressions run in a child so a SIGSEGV cannot kill pytest."""
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -26,8 +26,8 @@ except ImportError:
 else:
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
-from app.scan.source_facts import collect_source_facts
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.claims.assessments.source_facts import collect_source_facts
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
 
 scanner, padding = sys.argv[1], int(sys.argv[2])
 if scanner == "operations":

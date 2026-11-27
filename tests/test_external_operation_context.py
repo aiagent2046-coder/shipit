@@ -5,9 +5,19 @@ import zipfile
 
 import pytest
 
-from app.scan.external_call_assessment import ExternalCallVerifier
+from app.scan.claims.assessments.external_call_assessment import ExternalCallVerifier
 from tests.test_external_call_assessment import (
-    CALLER, CLASSIFIED, COUNT, DUPLICATE, HELPER, POLL, WRAPPER, archive, check, finding, kind,
+    CALLER,
+    CLASSIFIED,
+    COUNT,
+    DUPLICATE,
+    HELPER,
+    POLL,
+    WRAPPER,
+    archive,
+    check,
+    finding,
+    kind,
 )
 
 

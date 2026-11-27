@@ -8,8 +8,8 @@ import pytest
 
 from app.pipeline.report.evidence import manifest_rows
 from app.pipeline.report.html import render_report
-from app.scan import operation_context as context
-from app.scan.source_facts import collect_source_facts, facts_prompt
+from app.scan.claims.assessments.source_facts import collect_source_facts, facts_prompt
+from app.scan.context import operation_context as context
 
 
 def archive(files):

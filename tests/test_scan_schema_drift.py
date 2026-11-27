@@ -12,8 +12,8 @@ import zipfile
 
 import pytest
 
-from app.scan.schema_drift import RULE_ID, scan_schema_drift
-from app.scan.table_names import read_named_tables
+from app.scan.detectors_app.data.schema_drift import RULE_ID, scan_schema_drift
+from app.scan.detectors_app.data.table_names import read_named_tables
 
 
 @pytest.mark.parametrize("source", [
@@ -244,7 +244,7 @@ def test_the_finding_is_not_filed_where_a_free_audit_ignores_it():
     so this is where the detector's output would be silently discarded.
     app/scan/rls.py files under Security for the same reason.
     """
-    from app.scan.scoring import LLM_ONLY_CATEGORIES
+    from app.scan.reporting.scoring import LLM_ONLY_CATEGORIES
 
     finding = scan_schema_drift(make_zip({
         "repo/supabase/migrations/0001.sql": SCHEMA,

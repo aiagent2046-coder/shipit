@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from app.scan.detectors_app.runtime.unsafe_deserialization import RULE_ID, scan_unsafe_deserialization
 from app.scan.static import run_static_scan
-from app.scan.unsafe_deserialization import RULE_ID, scan_unsafe_deserialization
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

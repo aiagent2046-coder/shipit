@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from app.scan.scoring import ScoredFinding
+from app.scan.reporting.scoring import ScoredFinding
 from scripts.measure.measure_unexamined_evidence import _is_ours, _total, main
 
 

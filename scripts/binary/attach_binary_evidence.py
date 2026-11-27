@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.foundation.ingest.validators import MAX_ARCHIVE_BYTES, ArchiveValidationError
-from app.scan.binary_evidence import MAX_REPORT_BYTES, attach_binary_reports, collect_binary_evidence
+from app.scan.supply.binary_evidence import MAX_REPORT_BYTES, attach_binary_reports, collect_binary_evidence
 
 
 def read_regular(path: str, limit: int) -> bytes:

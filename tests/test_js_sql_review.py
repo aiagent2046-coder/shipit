@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from app.pipeline.report.js_sql_review import js_sql_review_rows
-from app.scan.js_sql_review import normalize_review, review_js_sql
-from app.scan.security_agent import agent_record
+from app.scan.detectors_app.data.js_sql_review import normalize_review, review_js_sql
+from app.scan.reporting.security_agent import agent_record
 from app.scan.static import run_static_scan
 from tests.test_security_agent import archive
 
@@ -29,7 +29,7 @@ def reviewed(raw=FIXED):
 
 
 def test_ordinary_scan_runs_source_workers_and_preserves_findings(monkeypatch):
-    import app.scan.js_sql_review as module
+    import app.scan.detectors_app.data.js_sql_review as module
     result, bundle = reviewed()
     record = result["security_agent"]["js_sql_review"]
     assert len(record["observations"]) == 1
@@ -87,7 +87,7 @@ def test_source_binding_failure_and_native_failure_retain_findings(monkeypatch):
                       engine_version=source["engine_version"])
     assert r["status"] == "partial"
     assert r["observations"][0]["state"] == "unavailable"
-    import app.scan.js_sql_source as researcher
+    import app.scan.detectors_app.data.js_sql_source as researcher
 
     def unavailable(*args):
         raise ImportError("native parser unavailable")

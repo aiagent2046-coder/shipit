@@ -1,5 +1,5 @@
 """CVE source state and coverage, separate from package-version evidence."""
-from app.scan.cve_evidence import normalize_cve_summary
+from app.scan.supply.cve_evidence import normalize_cve_summary
 
 
 def cve_rows(value: object) -> list[tuple[str, str]]:

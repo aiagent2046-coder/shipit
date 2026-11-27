@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from app.scan.auth_source_assessment import AuthSourceVerifier
-from app.scan.claim_evidence import unsupported_transport
+from app.scan.claims.assessments.auth_source_assessment import AuthSourceVerifier
+from app.scan.identity.claim_evidence import unsupported_transport
 from tests.test_auth_source_assessment import archive, raw
 
 API_PATH = "app/api/lab/stats/route.ts"

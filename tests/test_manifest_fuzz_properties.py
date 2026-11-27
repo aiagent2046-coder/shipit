@@ -15,7 +15,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from app.foundation.lockfiles import collect_dependency_inventory
-from app.scan.cve_match import match_archive
+from app.scan.supply.cve_match import match_archive
 
 MANIFESTS = ("package-lock.json", "pnpm-lock.yaml", "poetry.lock", "uv.lock", "requirements.txt")
 PROPERTY_SETTINGS = settings(max_examples=24, derandomize=True)

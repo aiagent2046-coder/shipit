@@ -1,8 +1,8 @@
 import base64
 import hashlib
 
-from app.scan import binary_evidence as binary
-from app.scan.obfuscation_delta import analyze_python_obfuscation
+from app.scan.supply import binary_evidence as binary
+from app.scan.supply.obfuscation_delta import analyze_python_obfuscation
 from tests.test_binary_evidence import elf, with_report
 
 

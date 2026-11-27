@@ -62,8 +62,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.scan.checks import archive_root  # noqa: E402
-from app.scan.error_boundary import (  # noqa: E402
+from app.scan.core.checks import archive_root  # noqa: E402
+from app.scan.detectors_app.runtime.error_boundary import (  # noqa: E402
     _MAX_FILE_BYTES,
     _RENDER_CALLS,
     COVERAGE_EXHAUSTED,

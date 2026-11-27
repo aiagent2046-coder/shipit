@@ -3,8 +3,10 @@ from copy import deepcopy
 
 import pytest
 
-from app.scan.external_operation_identity import (
-    compatible_external_claims, identity_from_assessments, valid_external_identity,
+from app.scan.identity.external_operation_identity import (
+    compatible_external_claims,
+    identity_from_assessments,
+    valid_external_identity,
 )
 from tests.test_external_call_assessment import CLASSIFIED, POLL, check
 

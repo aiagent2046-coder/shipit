@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from app.scan.kev_catalog import decode_catalog
+from app.scan.supply.kev_catalog import decode_catalog
 from scripts.catalog import build_kev_catalog as builder
 
 

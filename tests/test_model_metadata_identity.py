@@ -1,19 +1,18 @@
 """Synthetic model metadata claims; no private source, models or API calls."""
-from collections import Counter
-from copy import deepcopy
-from dataclasses import asdict, replace
 import io
 import json
 import zipfile
+from collections import Counter
+from copy import deepcopy
+from dataclasses import asdict, replace
 
 import pytest
 
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.claim_evidence import model_claim_evidence
-from app.scan.issue_identity import SourceIssueResolver
-from app.scan.model_metadata_identity import valid_model_metadata_identity
-from app.scan.scoring import ScoredFinding, compute_scores
-
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
+from app.scan.identity.claim_evidence import model_claim_evidence
+from app.scan.identity.model_metadata_identity import valid_model_metadata_identity
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 SOURCE = """async function version() {
   const response = await fetch('https://provider.invalid/models/example');

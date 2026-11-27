@@ -6,7 +6,7 @@ import textwrap
 
 import pytest
 
-from app.scan.deserialization_file_evidence import analyze_deserialization_file_input
+from app.scan.evidence.deserialization_file_evidence import analyze_deserialization_file_input
 
 
 def loader(body=None, *, header='import pickle\n', parameters='path', name='read_checkpoint'):
@@ -252,7 +252,7 @@ def test_source_depth_and_node_count_are_bounded(source):
 
 
 def test_work_limit_and_identifier_limit_are_bounded(monkeypatch):
-    import app.scan.deserialization_file_evidence as module
+    import app.scan.evidence.deserialization_file_evidence as module
 
     assert collect(loader(name='x' * 129))['facts'] == []
     monkeypatch.setattr(module, '_MAX_WORK', 40)

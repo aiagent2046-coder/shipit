@@ -1,15 +1,14 @@
 """Upgrade recipes must not promote one advisory boundary into package safety."""
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
-from app.scan import remediation_catalog
-from app.scan.advisory_evaluation import evaluate_advisory
-from app.scan.remediation_catalog import UpgradeBudget, plan_dependency_upgrade
-
+from app.scan.supply import remediation_catalog
+from app.scan.supply.advisory_evaluation import evaluate_advisory
+from app.scan.supply.remediation_catalog import UpgradeBudget, plan_dependency_upgrade
 
 SOURCES = {
     "cvelist": {

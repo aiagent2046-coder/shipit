@@ -1,12 +1,15 @@
 """Paired source fixtures for RLS-aware recommendations; never a live database."""
-from io import BytesIO
 import json
 import zipfile
+from io import BytesIO
 
 import pytest
 
-from app.scan.rls_recommendations import (MAX_FILES, collect_rls_recommendations,
-                                          rls_recommendation_context)
+from app.scan.claims.assessments.rls_recommendations import (
+    MAX_FILES,
+    collect_rls_recommendations,
+    rls_recommendation_context,
+)
 
 
 def archive(files):
@@ -219,7 +222,7 @@ def test_restrictive_or_wrong_role_command_is_never_claimed_to_grant_access():
 
 
 def test_budget_is_reported_and_not_silent(monkeypatch):
-    import app.scan.rls_recommendations as module
+    import app.scan.claims.assessments.rls_recommendations as module
     monkeypatch.setattr(module, "MAX_FILES", 1)
     facts = collect(policy("SELECT"))
     assert "scan_budget_reached" in facts["limitations"]
@@ -387,8 +390,8 @@ def test_select_operation_records_read_command_without_write_permission_claim():
 
 
 def test_client_switch_advice_is_replaced_and_original_retained():
-    from app.scan.recommendations import prepare_recommendation
-    from app.scan.scoring import ScoredFinding
+    from app.scan.claims.assessments.recommendations import prepare_recommendation
+    from app.scan.reporting.scoring import ScoredFinding
     raw = recommendation()
     original = ScoredFinding(rule_id="llm-auth", category="Auth", severity="high", confidence=1,
                              **raw)
@@ -400,8 +403,8 @@ def test_client_switch_advice_is_replaced_and_original_retained():
 
 
 def test_unresolved_operations_still_require_validation_before_switch():
-    from app.scan.recommendations import prepare_recommendation
-    from app.scan.scoring import ScoredFinding
+    from app.scan.claims.assessments.recommendations import prepare_recommendation
+    from app.scan.reporting.scoring import ScoredFinding
     original = ScoredFinding(rule_id="service-role", category="Auth", severity="high", confidence=1, source="static",
                              **recommendation())
     fixed = prepare_recommendation(original, {})

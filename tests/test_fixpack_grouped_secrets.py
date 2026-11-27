@@ -12,8 +12,8 @@ from app.pipeline.fixpack.generate import build_fixpack_plan
 from app.proof.compare import run_proof_pair
 from app.proof.core.workspace import apply_plan_to_zip
 from app.proof.gate import decide_proof_gate
-from app.scan.collapse import collapse_repeats
-from app.scan.secrets import scan_secrets
+from app.scan.core.secrets import scan_secrets
+from app.scan.identity.collapse import collapse_repeats
 
 _SYNTHETIC = "synTheticTokenValue314159"
 

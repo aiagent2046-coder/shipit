@@ -19,44 +19,43 @@ from app.foundation.llm import client as client_mod
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.pipeline import scan_pipeline as pipeline_mod
 from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION
-from app.scan import (
-    atomic_claims,
+from app.scan import llm_scan
+from app.scan.claims.assessments import (
     auth_source_assessment,
-    claim_evidence,
-    claim_narrative,
-    cost_context,
     credential_transport_assessment,
-    cross_rubric_dedup,
     external_call_assessment,
     external_operation_context,
-    external_operation_identity,
-    fact_projection_grouping,
-    file_scope,
     function_context,
-    guard_context,
-    imported_error_context,
-    issue_identity,
-    llm_scan,
-    model_metadata_identity,
-    operation_context,
-    operator_context,
-    paid_operation_recommendations,
     premise_context,
-    prompt_context,
-    python_sql_identity,
-    query_read_identity,
-    react_async_context,
-    recommendation_contract,
     recommendations,
-    rejection_diagnostics,
     review_counterevidence,
     rls_recommendations,
     scoped_ui_claim_assessment,
     source_claim_assessment,
     source_facts,
-    source_limit_context,
     syntax_claims,
     url_token_assessment,
+)
+from app.scan.claims.resolvers import atomic_claims, issue_identity, query_read_identity
+from app.scan.context import (
+    cost_context,
+    guard_context,
+    imported_error_context,
+    operation_context,
+    operator_context,
+    prompt_context,
+    react_async_context,
+    source_limit_context,
+)
+from app.scan.core import file_scope
+from app.scan.core.secrets import damp_for_non_production_path
+from app.scan.identity import (
+    claim_evidence,
+    external_operation_identity,
+    model_metadata_identity,
+    paid_operation_recommendations,
+    python_sql_identity,
+    recommendation_contract,
 )
 from app.scan.llm_scan import (
     BEHAVIOUR,
@@ -73,14 +72,14 @@ from app.scan.llm_scan import (
     system_prompt_for,
     verify_finding,
 )
-from app.scan.scoring import CATEGORIES
-from app.scan.secrets import damp_for_non_production_path
+from app.scan.reporting import claim_narrative, cross_rubric_dedup, fact_projection_grouping, rejection_diagnostics
+from app.scan.reporting.scoring import CATEGORIES
 
 # sha256 of everything that decides what the model is shown -- the prompts,
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "3d7b384553eeef54"
+PROMPT_FINGERPRINT = "52fe2d6b53deee31"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -730,8 +729,8 @@ def test_the_error_body_is_clipped():
 
 
 def test_cross_rubric_dedup_keeps_most_severe():
-    from app.scan.cross_rubric_dedup import dedup_cross_rubric
-    from app.scan.scoring import ScoredFinding
+    from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+    from app.scan.reporting.scoring import ScoredFinding
 
     def f(rubric, sev, conf):
         return ScoredFinding(rule_id=f"llm-{rubric}", title="cron secret",
@@ -895,7 +894,7 @@ def test_llm_finding_in_migration_keeps_full_severity():
 def test_damping_agrees_with_path_predicate():
     """The damper and is_non_production_path are two answers to one question.
     They are separate functions, so pin that they never disagree."""
-    from app.scan.secrets import (
+    from app.scan.core.secrets import (
         damp_for_non_production_path,
         is_non_production_path,
     )
@@ -980,8 +979,8 @@ def test_fixtures_alone_no_longer_zero_the_security_score():
     each against a category budget of 10, so a repo whose only findings were
     its own test fixtures scored Security 0.0 -- measured on this repository,
     where every one of them was a fixture and seven would have been enough."""
-    from app.scan.scoring import ScoredFinding, compute_scores
-    from app.scan.secrets import damp_for_non_production_path
+    from app.scan.core.secrets import damp_for_non_production_path
+    from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
     paths = [f"tests/test_{i}.py" for i in range(14)]
 
@@ -1766,7 +1765,7 @@ def test_finding_category_comes_from_the_finding_not_the_rubric():
     # trail, and it is what this test used to check alone.
     assert [f.origin_category for f in findings] == ["Auth"]
 
-    from app.scan.scoring import compute_scores
+    from app.scan.reporting.scoring import compute_scores
     assert compute_scores(findings)["reported_elsewhere"] == {"Auth": ["Security"]}
 
 

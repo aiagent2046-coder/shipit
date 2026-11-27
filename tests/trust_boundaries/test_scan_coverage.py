@@ -3,7 +3,7 @@ import io
 import stat
 import zipfile
 
-from app.scan.secrets import MAX_SCANNED_FILE_BYTES
+from app.scan.core.secrets import MAX_SCANNED_FILE_BYTES
 from app.scan.static import run_static_scan
 
 from .conftest import make_zip

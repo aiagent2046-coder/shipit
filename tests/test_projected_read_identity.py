@@ -1,20 +1,23 @@
 """Minimized, synthetic regression for projected reads followed by a sanitizer."""
+import io
+import json
+import zipfile
 from collections import Counter
 from copy import deepcopy
 from dataclasses import asdict, replace
-import json
-import io
-import zipfile
 
 import pytest
 
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.issue_identity import SourceIssueResolver
-from app.scan.projected_read_identity import (
-    compatible_projected_read_claims, projected_read_claim, projected_read_identity,
-    projected_read_related_title, valid_projected_read_identity,
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
+from app.scan.claims.resolvers.projected_read_identity import (
+    compatible_projected_read_claims,
+    projected_read_claim,
+    projected_read_identity,
+    projected_read_related_title,
+    valid_projected_read_identity,
 )
-from app.scan.scoring import ScoredFinding
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding
 
 SOURCE = """async function POST() {
   const { data: facts } = await db.from('agent_context')

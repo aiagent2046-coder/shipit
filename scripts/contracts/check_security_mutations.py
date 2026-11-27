@@ -35,13 +35,13 @@ class Mutation:
 
 MUTATIONS = (
     Mutation(
-        "cve-exclusive-upper-bound", "app/scan/advisory_evaluation.py",
+        "cve-exclusive-upper-bound", "app/scan/supply/advisory_evaluation.py",
         "upper_relation > 0 or (exclusive is not None and upper_relation == 0)",
         "upper_relation > 0",
         "tests/test_cve_properties.py::test_generated_cve_and_osv_bounds_follow_integer_interval",
     ),
     Mutation(
-        "cve-uncertainty-reported-unaffected", "app/scan/cve_match.py",
+        "cve-uncertainty-reported-unaffected", "app/scan/supply/cve_match.py",
         'status = next(iter(statuses)) if len(statuses) == 1 and not truncated else "unknown"',
         'status = next(iter(statuses)) if len(statuses) == 1 and not truncated else "unaffected"',
         "tests/test_cve_properties.py::test_source_uncertainty_and_evidence_survive_source_reordering",
@@ -61,7 +61,7 @@ MUTATIONS = (
         "test_malformed_lockfile_cannot_report_success_with_retained_positive",
     ),
     Mutation(
-        "sql-parse-gap-reported-complete", "app/scan/sql_injection.py",
+        "sql-parse-gap-reported-complete", "app/scan/detectors_app/data/sql_injection.py",
         'accounting.skip("parse_error")',
         'accounting.analyzed()  # deliberately claim unread SQL source was checked',
         "tests/test_sql_coverage_contracts.py::"

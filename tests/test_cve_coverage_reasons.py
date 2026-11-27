@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from app.scan import cve_match
+from app.scan.supply import cve_match
 
 
 def _archive(files, compression=zipfile.ZIP_STORED):

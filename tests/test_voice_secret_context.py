@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from app.scan.secrets import scan_secrets
+from app.scan.core.secrets import scan_secrets
 from tests.test_secrets import make_zip
 
 

@@ -9,7 +9,7 @@ import sqlite3
 import urllib.request
 from pathlib import Path
 
-from app.scan.cve_match import _sources
+from app.scan.supply.cve_match import _sources
 
 MAX_CATALOG_BYTES = 64 * 1024 * 1024
 CATALOG_ROOT = Path(__file__).resolve().parents[1] / "data"

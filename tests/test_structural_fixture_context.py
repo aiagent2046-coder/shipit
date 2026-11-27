@@ -5,8 +5,8 @@ import zipfile
 
 import pytest
 
-from app.scan.checks import find_committed_env_files, run_checks
-from app.scan.secrets import scan_secrets
+from app.scan.core.checks import find_committed_env_files, run_checks
+from app.scan.core.secrets import scan_secrets
 
 
 def archive(entries, prefix):

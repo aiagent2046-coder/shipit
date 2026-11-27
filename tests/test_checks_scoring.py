@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.checks import run_checks
-from app.scan.scoring import (
+from app.scan.core.checks import run_checks
+from app.scan.reporting.scoring import (
     CATEGORIES,
     CATEGORY_WEIGHT,
     CRITICAL_GATE_MIN_CONFIDENCE,
@@ -654,7 +654,7 @@ def test_every_scored_category_has_a_producer():
     # so their categories are read out of the source. Crude on purpose: a
     # structural reader would have to track two modules' shapes, and what this
     # needs to know is only which names can ever be emitted.
-    for module in ("checks", "secrets", "static"):
+    for module in ("core/checks", "core/secrets", "static"):
         source = (
             Path(__file__).resolve().parents[1] / "app" / "scan" / f"{module}.py"
         ).read_text()
@@ -742,7 +742,7 @@ def test_a_critical_frontend_finding_does_not_gate_the_headline():
 
 
 def test_a_committed_virtualenv_is_reported_with_its_size():
-    from app.scan.checks import _committed_dependency_dirs
+    from app.scan.core.checks import _committed_dependency_dirs
 
     files = [f"venv/lib/python3.12/site-packages/pkg/mod{i}.py" for i in range(40)]
     files += ["app.py", "README.md"]
@@ -753,7 +753,7 @@ def test_a_committed_virtualenv_is_reported_with_its_size():
 def test_only_the_outermost_tree_is_reported():
     """A virtualenv contains site-packages/ and dozens of __pycache__/. Listing
     each would bury the one fact the owner needs under its own consequences."""
-    from app.scan.checks import _committed_dependency_dirs
+    from app.scan.core.checks import _committed_dependency_dirs
 
     # Attribution stops at the FIRST marker in _DEPENDENCY_DIRS order, so a
     # path inside venv/ never reaches the site-packages/ or __pycache__/
@@ -774,7 +774,7 @@ def test_only_the_outermost_tree_is_reported():
 
 def test_a_stray_file_is_not_a_committed_dependency_tree():
     """One file slipping through is a mistake, not the problem this describes."""
-    from app.scan.checks import _committed_dependency_dirs
+    from app.scan.core.checks import _committed_dependency_dirs
 
     assert _committed_dependency_dirs(["node_modules/.package-lock.json"]) == []
 
@@ -784,7 +784,7 @@ def test_the_check_reads_no_file_contents():
     prevent, and this check must not become the reason they are read."""
     import inspect
 
-    from app.scan import checks
+    from app.scan.core import checks
 
     source = inspect.getsource(checks._committed_dependency_dirs)
     for forbidden in ("open(", "read(", "decode("):
@@ -804,7 +804,7 @@ def test_the_dependency_check_fires_through_run_checks():
     import io
     import zipfile
 
-    from app.scan.checks import run_checks
+    from app.scan.core.checks import run_checks
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:

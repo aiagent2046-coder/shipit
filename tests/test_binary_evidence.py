@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.foundation.ingest.validators import ArchiveValidationError
-from app.scan import binary_evidence as binary
+from app.scan.supply import binary_evidence as binary
 
 
 def elf(extra=b''):

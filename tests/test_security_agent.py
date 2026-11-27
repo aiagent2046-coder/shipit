@@ -15,9 +15,10 @@ from app.pipeline import local_cli
 from app.pipeline.report.evidence import claim_evidence_rows, manifest_rows
 from app.pipeline.report.html import render_report
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
-from app.scan import security_agent, sql_injection
 from app.scan.browser import ScanSession, scan_archive
-from app.scan.pattern_catalog import catalog_manifest
+from app.scan.core.pattern_catalog import catalog_manifest
+from app.scan.detectors_app.data import sql_injection
+from app.scan.reporting import security_agent
 from app.scan.static import run_static_scan
 from tests.test_browser_cve import CATALOG
 

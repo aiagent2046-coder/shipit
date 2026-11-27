@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from app.scan import cost_context as context
+from app.scan.context import cost_context as context
 from tests.test_operation_context import archive
 
 HELPER = '''export const MAX_FACTS = 40;

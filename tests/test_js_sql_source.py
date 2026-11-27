@@ -3,7 +3,7 @@ import hashlib
 
 import pytest
 
-from app.scan import js_sql_source as source
+from app.scan.detectors_app.data import js_sql_source as source
 
 
 def analyze(code, line=None, method=None):

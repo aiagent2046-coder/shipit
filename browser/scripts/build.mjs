@@ -50,9 +50,10 @@ await writeFile(join(out, 'runtime/pyodide-lock.json'), JSON.stringify(lock));
 const files = {};
 // Never ship provider clients, the API, billing, or the orchestration pipeline.
 const excluded = new Set(['pipeline.py', 'llm_scan.py']);
-const paths = (await readdir(join(root, 'app/scan')))
-  .filter(name => name.endsWith('.py') && !excluded.has(name))
-  .map(name => `app/scan/${name}`);
+const paths = (await readdir(join(root, 'app/scan'), { recursive: true }))
+  .map(rel => rel.replaceAll('\\', '/'))
+  .filter(rel => rel.endsWith('.py') && !rel.includes('__pycache__') && !excluded.has(rel.split('/').pop()))
+  .map(rel => `app/scan/${rel}`);
 paths.push('app/__init__.py', 'app/runtime/__init__.py',
   'app/runtime/capabilities.py', 'app/foundation/__init__.py', 'app/foundation/ingest/__init__.py',
   'app/foundation/ingest/validators.py', 'app/pipeline/__init__.py', 'app/pipeline/report/__init__.py', 'app/pipeline/report/plain_language.py',

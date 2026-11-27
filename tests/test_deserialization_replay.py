@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.pipeline.report.evidence import security_agent_rows
-from app.scan.security_agent import agent_record
+from app.scan.reporting.security_agent import agent_record
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BASE = json.loads((FIXTURES / "deserialization-agent.json").read_text())[0]["report"]["security_agent"]

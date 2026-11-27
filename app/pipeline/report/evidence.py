@@ -11,33 +11,38 @@ import re
 from app.pipeline.dependency_snapshot import SCOPE_REASONS, snapshot_finding_rows, snapshot_notices, snapshot_rows
 from app.pipeline.report.cve import cve_notices, cve_rows
 from app.pipeline.sca.stage import freshness
-from app.scan.check_failures import normalize_check_failures
-from app.scan.claim_evidence import (
+from app.scan.claims.resolvers.query_read_identity import valid_query_read_identity
+from app.scan.core.rule_coverage import normalize_rule_coverage
+from app.scan.core.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
+from app.scan.evidence.evidence_record import acquisition_rows, normalize_acquisition
+from app.scan.evidence.synthetic_record import normalize_synthetic_contract, synthetic_contract_rows
+from app.scan.identity.claim_evidence import (
     narrative_review_checks,
     partial_contradicted,
     source_assessments,
     syntax_contradicted,
     unsupported_transport,
 )
-from app.scan.claim_narrative import narrative_projection
-from app.scan.evidence_record import acquisition_rows, normalize_acquisition
-from app.scan.fact_projection_grouping import (
+from app.scan.reporting.check_failures import normalize_check_failures
+from app.scan.reporting.claim_narrative import narrative_projection
+from app.scan.reporting.fact_projection_grouping import (
     CONSEQUENCES as FACT_CONSEQUENCES,
 )
-from app.scan.fact_projection_grouping import (
+from app.scan.reporting.fact_projection_grouping import (
     SCOPE as FACT_SCOPE,
 )
-from app.scan.fact_projection_grouping import (
+from app.scan.reporting.fact_projection_grouping import (
     validated_fact_group,
 )
-from app.scan.manifest import SCA_LIMITATIONS
-from app.scan.query_read_identity import valid_query_read_identity
-from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
-from app.scan.rule_coverage import normalize_rule_coverage
-from app.scan.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
-from app.scan.secrets import NON_PRODUCTION_CONTEXTS, is_non_production_path
-from app.scan.security_agent import agent_record, deserialization_observation, sql_driver_rows, sql_observation
-from app.scan.synthetic_record import normalize_synthetic_contract, synthetic_contract_rows
+from app.scan.reporting.manifest import SCA_LIMITATIONS
+from app.scan.reporting.rejection_diagnostics import acceptance_summary, diagnostics_manifest
+from app.scan.reporting.scoring import CATEGORIES, LLM_ONLY_CATEGORIES
+from app.scan.reporting.security_agent import (
+    agent_record,
+    deserialization_observation,
+    sql_driver_rows,
+    sql_observation,
+)
 
 
 def is_non_production(finding: dict) -> bool:

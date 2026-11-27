@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.scan.evidence_record import normalize_acquisition, normalize_deserialization_observation
+from app.scan.evidence.evidence_record import normalize_acquisition, normalize_deserialization_observation
 
 
 @pytest.fixture

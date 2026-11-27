@@ -11,8 +11,9 @@ import pytest
 from app.foundation.llm.client import LLMClient
 from app.pipeline import local_cli
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
-from app.scan import security_agent, sql_injection
 from app.scan.browser import ScanSession, scan_archive
+from app.scan.detectors_app.data import sql_injection
+from app.scan.reporting import security_agent
 from app.scan.static import run_static_scan
 from tests.test_security_agent import archive, sql_findings
 
@@ -208,7 +209,7 @@ def test_browser_cli_and_online_preview_acquire_facts_without_execution_or_netwo
 
 
 def test_forged_file_digest_cannot_attach_facts_from_another_snapshot():
-    from app.scan.source_snapshot import SourceSnapshot
+    from app.scan.evidence.source_snapshot import SourceSnapshot
 
     raw = archive({"src/query.py": HTTP_SQL})
     static = deepcopy(run_static_scan(io.BytesIO(raw)))
@@ -229,7 +230,7 @@ def test_forged_file_digest_cannot_attach_facts_from_another_snapshot():
 
 @pytest.mark.parametrize("limit", ["MAX_EVIDENCE_WORK", "MAX_EVIDENCE_ACTIONS", "MAX_CANDIDATE_STEPS"])
 def test_exhausted_evidence_budget_preserves_findings_and_marks_partial(monkeypatch, limit):
-    from app.scan import evidence_acquisition
+    from app.scan.evidence import evidence_acquisition
 
     monkeypatch.setattr(evidence_acquisition, limit, 0)
     result, observation, acquisition = acquired()
@@ -245,7 +246,7 @@ def test_exhausted_evidence_budget_preserves_findings_and_marks_partial(monkeypa
 
 
 def test_partial_acquisition_keeps_established_facts_without_claiming_completion(monkeypatch):
-    from app.scan import evidence_acquisition
+    from app.scan.evidence import evidence_acquisition
 
     monkeypatch.setattr(evidence_acquisition, "MAX_CANDIDATE_STEPS", 2)
     result, observation, acquisition = acquired()
@@ -259,7 +260,7 @@ def test_partial_acquisition_keeps_established_facts_without_claiming_completion
 
 
 def test_action_budget_is_shared_between_candidates_in_one_scan(monkeypatch):
-    from app.scan import evidence_acquisition
+    from app.scan.evidence import evidence_acquisition
 
     monkeypatch.setattr(evidence_acquisition, "MAX_EVIDENCE_ACTIONS", 4)
     raw = archive({"src/a.py": HTTP_SQL, "src/z.py": HTTP_SQL})
@@ -276,7 +277,7 @@ def test_action_budget_is_shared_between_candidates_in_one_scan(monkeypatch):
 
 
 def test_failed_collector_preserves_findings_and_prior_facts_without_exception_text(monkeypatch):
-    from app.scan import sql_slot_evidence
+    from app.scan.evidence import sql_slot_evidence
 
     def failed(*args, **kwargs):
         raise ValueError("private SQL text and password must not reach the report")
@@ -306,7 +307,7 @@ def test_collector_location_limits_make_review_incomplete(count):
 
 
 def test_sql_parser_node_budget_retains_input_facts_and_marks_incomplete(monkeypatch):
-    from app.scan import sql_slot_evidence
+    from app.scan.evidence import sql_slot_evidence
 
     monkeypatch.setattr(sql_slot_evidence, '_MAX_AST_NODES', 1)
     result, observation, acquisition = acquired()

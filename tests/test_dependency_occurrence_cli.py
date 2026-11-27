@@ -3,7 +3,7 @@ import json
 from copy import deepcopy
 
 from app.pipeline import local_cli as cli
-from app.scan.cve_match import match_archive
+from app.scan.supply.cve_match import match_archive
 from tests.test_cve_match import archive, catalog
 from tests.test_local_report_display import report_with, terminal_rows
 

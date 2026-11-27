@@ -1,10 +1,10 @@
 """Reviewed GHSA ingestion keeps OSV evidence bounded and source-specific."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 
 import pytest
 
-from app.scan import cve_catalog, ghsa_catalog
+from app.scan.supply import cve_catalog, ghsa_catalog
 
 COMMIT = "b" * 40
 DATE = "2026-09-14T12:00:00Z"

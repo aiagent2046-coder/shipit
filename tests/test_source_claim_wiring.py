@@ -5,8 +5,8 @@ import pytest
 
 from app.pipeline.report.html import _finding_row
 from app.pipeline.scan_pipeline import run_scan
-from app.scan.claim_evidence import partial_contradicted, unsupported_transport
-from app.scan.claim_narrative import narrative_projection
+from app.scan.identity.claim_evidence import partial_contradicted, unsupported_transport
+from app.scan.reporting.claim_narrative import narrative_projection
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 from tests.test_source_claim_assessment import CALLER, HELPER, TIMEZONE, finding
 

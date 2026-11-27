@@ -77,7 +77,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.scan.secrets import _is_demo_jwt, _jwt_severity  # noqa: E402
+from app.scan.core.secrets import _is_demo_jwt, _jwt_severity  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "scripts" / "measure" / "data"

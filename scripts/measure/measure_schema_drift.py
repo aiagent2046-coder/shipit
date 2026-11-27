@@ -62,10 +62,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from app.scan.rls import read_committed_sql  # noqa: E402
-from app.scan.schema_drift import scan_schema_drift  # noqa: E402
-from app.scan.sql_schema import parse_schema  # noqa: E402
-from app.scan.table_names import read_named_tables  # noqa: E402
+from app.scan.detectors_app.data.rls import read_committed_sql  # noqa: E402
+from app.scan.detectors_app.data.schema_drift import scan_schema_drift  # noqa: E402
+from app.scan.detectors_app.data.sql_schema import parse_schema  # noqa: E402
+from app.scan.detectors_app.data.table_names import read_named_tables  # noqa: E402
 
 DATA = ROOT / "scripts" / "measure" / "data"
 OUT = ROOT / "batch_reports" / "schema_drift.json"

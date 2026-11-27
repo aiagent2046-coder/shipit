@@ -8,9 +8,9 @@ import zipfile
 
 import pytest
 
-from app.scan import source_limit_context as c
-from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.context import source_limit_context as c
+from app.scan.identity.claim_evidence import partial_contradicted, syntax_contradicted
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 NUMERIC = """export async function endpoint(req, db) {
  const rawLimit = parseInt(req.searchParams.get('PRIVATE_QUERY') ?? '20', 10);

@@ -24,7 +24,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.scan.cve_catalog import _identity  # noqa: E402
+from app.scan.supply.cve_catalog import _identity  # noqa: E402
 
 
 def _container_entries(record: dict, name: str):

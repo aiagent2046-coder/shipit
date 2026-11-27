@@ -51,7 +51,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.pipeline.scan_pipeline import BASIS_STATIC_ONLY
-from app.scan.scoring import CATEGORIES
+from app.scan.reporting.scoring import CATEGORIES
 
 logger = logging.getLogger("app.db")
 

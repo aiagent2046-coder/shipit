@@ -22,12 +22,12 @@ from app.pipeline.local_store import connect, default_state_dir, load_catalog, u
 from app.pipeline.report.plain_language import plain_fields
 from app.runtime.logging_config import configure_logging
 from app.runtime.threat_context import threat_context_record, threat_context_rows
-from app.scan.binary_evidence import attach_binary_reports
 from app.scan.browser import ScanSession
-from app.scan.kev_catalog import fingerprint as kev_fingerprint
-from app.scan.remediation_catalog import remediation_hint, remediation_record
-from app.scan.secrets import NON_PRODUCTION_CONTEXTS
-from app.scan.security_agent import agent_record
+from app.scan.core.secrets import NON_PRODUCTION_CONTEXTS
+from app.scan.reporting.security_agent import agent_record
+from app.scan.supply.binary_evidence import attach_binary_reports
+from app.scan.supply.kev_catalog import fingerprint as kev_fingerprint
+from app.scan.supply.remediation_catalog import remediation_hint, remediation_record
 from app.scan.version import AUDIT_ENGINE_VERSION
 
 # Keep local archives within both the static and offline dependency matcher budgets.
@@ -511,7 +511,7 @@ def main(argv: list[str] | None = None) -> int:
     update.add_argument("--revision", required=True, help="full Shipit commit SHA; this command uses the network")
     args = parser.parse_args(argv)
     if args.command == "recipes":
-        from app.scan.remediation_catalog import recipe_catalog
+        from app.scan.supply.remediation_catalog import recipe_catalog
         catalog = recipe_catalog()
         if args.json:
             print(json.dumps(catalog, ensure_ascii=False))
@@ -521,7 +521,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(recipe))
         return 0
     if args.command == "patterns":
-        from app.scan.pattern_catalog import catalog_manifest
+        from app.scan.core.pattern_catalog import catalog_manifest
         catalog = catalog_manifest()
         if args.json:
             print(json.dumps(catalog, ensure_ascii=False))
@@ -547,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             state_dir = state_dir.resolve()
             if args.command == "forensics":
-                from app.scan.forensic_chain import run_forensic_investigation
+                from app.scan.supply.forensic_chain import run_forensic_investigation
                 raw, scope = snapshot(root, state_dir)
                 if args.binary_evidence:
                     reports = []

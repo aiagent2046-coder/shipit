@@ -19,7 +19,7 @@ import zipfile
 
 import pytest
 
-from app.scan.checks import run_checks
+from app.scan.core.checks import run_checks
 from app.scan.static import run_static_scan
 
 

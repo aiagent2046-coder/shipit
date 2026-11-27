@@ -7,9 +7,9 @@ from copy import deepcopy
 import pytest
 
 from app.pipeline.report.evidence import claim_evidence_rows, security_agent_rows
-from app.scan.psycopg_provenance import cursor_provenance
-from app.scan.security_agent import sql_observation
-from app.scan.sql_injection import scan_sql_injection
+from app.scan.detectors_app.data.psycopg_provenance import cursor_provenance
+from app.scan.detectors_app.data.sql_injection import scan_sql_injection
+from app.scan.reporting.security_agent import sql_observation
 from tests.test_security_agent import archive, report, sql_findings
 
 CHAIN = 'import psycopg\nconn = psycopg.connect("PRIVATE_DSN")\ncur = conn.cursor()\n'

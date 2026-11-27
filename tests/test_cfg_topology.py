@@ -2,12 +2,12 @@
 import hashlib
 import json
 
-from app.scan import binary_evidence as binary
-from app.scan.cfg_topology import (
+from app.scan.supply import binary_evidence as binary
+from app.scan.supply.cfg_topology import (
     KNOWN_TOPOLOGY_SIGNATURES,
     compute_cfg_dna,
 )
-from app.scan.forensic_chain import run_forensic_investigation
+from app.scan.supply.forensic_chain import run_forensic_investigation
 from tests.test_binary_evidence import archive, elf
 
 
@@ -137,7 +137,7 @@ def test_stripped_decoder_stub_is_caught_purely_by_cfg_topology_and_wl_signature
 
 def test_tarjan_scc_distinguishes_goto_error_cleanup_from_flattened_state_machine():
 
-    from app.scan.cfg_topology import analyze_function_topologies
+    from app.scan.supply.cfg_topology import analyze_function_topologies
 
 
 

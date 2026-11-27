@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from app.foundation.lockfiles import collect_dependency_inventory
-from app.scan.cve_match import match_archive
+from app.scan.supply.cve_match import match_archive
 from tests.test_browser_cve import CATALOG
 
 

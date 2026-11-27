@@ -12,15 +12,15 @@ from hashlib import sha256
 import pytest
 
 from app.foundation.llm.client import LLMClient, LLMUsage
-from app.scan.claim_evidence import model_claim_evidence
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.issue_identity import SourceIssueResolver
+from app.scan.claims.assessments.source_facts import facts_prompt
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
+from app.scan.claims.resolvers.react_network_identity import MECHANISM, network_cleanup_identity, valid_network_identity
+from app.scan.context.react_async_context import collect_react_async_context, react_async_premise_checks
+from app.scan.identity.claim_evidence import model_claim_evidence
 from app.scan.llm_scan import run_llm_scan
-from app.scan.react_async_context import collect_react_async_context, react_async_premise_checks
-from app.scan.react_network_identity import MECHANISM, network_cleanup_identity, valid_network_identity
-from app.scan.scoring import ScoredFinding, compute_scores
-from app.scan.source_facts import facts_prompt
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 BODY = """setSaving(true);
 const token = await getToken();

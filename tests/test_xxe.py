@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.xxe import RULE_ID, scan_unsafe_xml_parse
+from app.scan.detectors_app.runtime.xxe import RULE_ID, scan_unsafe_xml_parse
 from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
