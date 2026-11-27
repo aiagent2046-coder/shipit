@@ -44,8 +44,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.scan.rls import read_committed_sql  # noqa: E402
-from app.scan.sql_schema import _is_constant_true, parse_schema  # noqa: E402
+from app.scan.detectors_app.data.rls import read_committed_sql  # noqa: E402
+from app.scan.detectors_app.data.sql_schema import _is_constant_true, parse_schema  # noqa: E402
 
 DATA = Path(__file__).resolve().parent / "data"
 STRATA = (("Lovable", "lovable_candidates.txt"),

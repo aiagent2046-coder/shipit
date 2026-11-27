@@ -6,8 +6,8 @@ from html import escape
 
 from app.pipeline.report.html import _finding_row, render_report
 from app.pipeline.scan_pipeline import run_scan
-from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.identity.claim_evidence import partial_contradicted, syntax_contradicted
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 from tests.test_http_success import component
 

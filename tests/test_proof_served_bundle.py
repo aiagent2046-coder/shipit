@@ -27,7 +27,7 @@ from app.proof.served_bundle import (
     resolve_and_vet,
     validate_deployment_url,
 )
-from app.scan.secrets import _SUPABASE_DEMO_JWT_SECRETS
+from app.scan.core.secrets import _SUPABASE_DEMO_JWT_SECRETS
 
 # A non-public secret: a service_role JWT signed with it is a real credential,
 # so app.scan.secrets._jwt_severity grades it `critical`.

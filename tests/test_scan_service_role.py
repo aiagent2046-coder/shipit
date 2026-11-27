@@ -20,13 +20,13 @@ import zipfile
 
 import pytest
 
-from app.scan.collapse import collapse_repeats
-from app.scan.service_role import (
+from app.scan.detectors_app.data.service_role import (
     RULE_ID,
     is_request_handler,
     scan_service_role,
     service_role_env_reads,
 )
+from app.scan.identity.collapse import collapse_repeats
 
 
 def make_zip(entries: dict[str, str]) -> io.BytesIO:

@@ -10,7 +10,7 @@ import zipfile
 
 import pytest
 
-from app.scan import sql_injection
+from app.scan.detectors_app.data import sql_injection
 
 
 def scan(source: str | bytes, *, coverage: dict | None = None):

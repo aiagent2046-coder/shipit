@@ -7,7 +7,6 @@ pipeline must never enter the static scanner runtime.
 from __future__ import annotations
 
 import ast
-import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,9 +26,9 @@ def _shipped_paths() -> set[str]:
     literals = set(re.findall(r"'(app/[^']+\.py)'", BUILD_MJS.read_text(encoding="utf-8")))
     scan_dir = ROOT / "app" / "scan"
     scan_modules = {
-        f"app/scan/{name}"
-        for name in os.listdir(scan_dir)
-        if name.endswith(".py") and name not in EXCLUDED_SCAN_MODULES
+        p.relative_to(ROOT).as_posix()
+        for p in scan_dir.rglob("*.py")
+        if "__pycache__" not in p.parts and p.name not in EXCLUDED_SCAN_MODULES
     }
     return literals | scan_modules
 

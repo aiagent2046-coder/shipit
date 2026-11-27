@@ -9,7 +9,7 @@ from app.foundation.lockfiles import (
     collect_dependency_inventory,
     unusable_lockfiles,
 )
-from app.scan.cve_match import match_archive
+from app.scan.supply.cve_match import match_archive
 
 
 def _archive(files):

@@ -63,7 +63,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.scan.service_role import (  # noqa: E402
+from app.scan.detectors_app.data.service_role import (  # noqa: E402
     is_request_handler,
     service_role_env_reads,
 )

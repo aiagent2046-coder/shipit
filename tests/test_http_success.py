@@ -5,8 +5,8 @@ import zipfile
 
 import pytest
 
-from app.scan.http_success import RULE_ID, http_success_findings
-from app.scan.react_async_context import collect_react_async_context
+from app.scan.context.react_async_context import collect_react_async_context
+from app.scan.reporting.http_success import RULE_ID, http_success_findings
 
 
 def component(body, *, extra="", label="Saved", jsx=None):

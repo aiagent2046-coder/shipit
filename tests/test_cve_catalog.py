@@ -1,10 +1,10 @@
 """CVE package identity and offline catalogue trust boundaries."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 
 import pytest
 
-from app.scan import cve_catalog
+from app.scan.supply import cve_catalog
 
 COMMIT = "a" * 40
 DATE = "2026-09-14T12:00:00Z"

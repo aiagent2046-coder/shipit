@@ -1,17 +1,17 @@
 """Source-bound pagination grouping, with no repository execution or API calls."""
-from collections import Counter
-from copy import deepcopy
-from dataclasses import asdict, replace
 import io
 import json
 import zipfile
+from collections import Counter
+from copy import deepcopy
+from dataclasses import asdict, replace
 
 import pytest
 
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.issue_identity import SourceIssueResolver
-from app.scan.query_read_identity import valid_query_read_identity
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
+from app.scan.claims.resolvers.query_read_identity import valid_query_read_identity
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 SOURCE = """async function GET(req) {
   const afterTs = req.after;
@@ -255,7 +255,7 @@ def test_different_execution_dispositions_remain_separate(field, value):
 
 
 def test_parser_unavailable_and_budget_exhaustion_abstain(monkeypatch):
-    import app.scan.issue_identity as module
+    import app.scan.claims.resolvers.issue_identity as module
     for field in ("remaining_nodes", "remaining"):
         resolver = _resolver()
         setattr(resolver, field, 0)

@@ -12,7 +12,7 @@ import ast
 
 import pytest
 
-from app.scan.literal_values import UNRESOLVED, literal_context
+from app.scan.core.literal_values import UNRESOLVED, literal_context
 
 
 def resolve(source: str, expression: str) -> object:

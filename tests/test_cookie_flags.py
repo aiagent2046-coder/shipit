@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.cookie_flags import RULE_ID, _MAX_FINDINGS, scan_cookie_flags
+from app.scan.detectors_web.transport.cookie_flags import _MAX_FINDINGS, RULE_ID, scan_cookie_flags
 from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

@@ -195,7 +195,7 @@ def exercise(namespace, temporary):
         require(cli.poll_project(db, root, state, key)[1] is None, "Unchanged watch poll rescanned")
 
         # Actual SQL+JS cross-file collector must parse both halves, not merely import pglast.
-        collector = importlib.import_module(f"{namespace}.scan.rls_recommendations")
+        collector = importlib.import_module(f"{namespace}.scan.claims.assessments.rls_recommendations")
         raw, _ = cli.snapshot(root, state)
         sql = collector.collect_rls_recommendations(io.BytesIO(raw))
         require(sql["migration_files"] == 1 and sql["records"], "SQL/JS policy context unavailable")

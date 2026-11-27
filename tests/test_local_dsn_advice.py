@@ -24,7 +24,7 @@ import io
 import zipfile
 
 from app.pipeline.report.plain_language import PLAIN, plain_fields
-from app.scan.secrets import scan_secrets
+from app.scan.core.secrets import scan_secrets
 
 # Not in _DSN_DEV_PASSWORDS, and shaped like something a person chose.
 # Assembled from parts like the rest of this repo's DSN fixtures: written

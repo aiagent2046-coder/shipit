@@ -55,7 +55,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.scan.sql_schema import Table
+from app.scan.detectors_app.data.sql_schema import Table
 
 # Foreign keys that scope a row to a person directly rather than through
 # another table. A policy keyed on one of these is about ownership, and

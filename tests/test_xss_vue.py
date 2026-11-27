@@ -4,7 +4,7 @@ import zipfile
 
 import pytest
 
-from app.scan.xss import scan_xss
+from app.scan.detectors_web.injection.xss import scan_xss
 
 
 def archive(source, path="repo/src/View.vue"):
@@ -128,7 +128,7 @@ def test_vue_depth_budget_is_enforced_before_reporting():
 
 
 def test_expression_node_budget_is_cumulative_across_directives(monkeypatch):
-    import app.scan.xss as xss
+    import app.scan.detectors_web.injection.xss as xss
     monkeypatch.setattr(xss, "_MAX_NODES", 80)
     findings, coverage = scan('<template>' + '<p v-html="message.x.y.z" />' * 8 + '</template>')
     assert findings == []

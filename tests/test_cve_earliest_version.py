@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from app.scan.cve_match import evaluate_advisory, match_archive
+from app.scan.supply.cve_match import evaluate_advisory, match_archive
 
 
 def _entry(rows):

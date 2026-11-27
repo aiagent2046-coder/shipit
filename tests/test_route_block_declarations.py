@@ -5,10 +5,10 @@ import zipfile
 
 import pytest
 
-from app.scan.auth_read import scan_auth_read
-from app.scan.auth_write import scan_auth_write
-from app.scan.outbound_url import scan_outbound_url
-from app.scan.path_traversal import scan_path_traversal
+from app.scan.detectors_app.data.auth_read import scan_auth_read
+from app.scan.detectors_app.data.auth_write import scan_auth_write
+from app.scan.detectors_web.injection.outbound_url import scan_outbound_url
+from app.scan.detectors_web.injection.path_traversal import scan_path_traversal
 
 BASE = "from fastapi import APIRouter, Depends\nrouter = APIRouter()\nrepo = Repository()\n"
 READ_PROTECTED = '''@router.get("/notes")

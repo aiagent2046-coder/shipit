@@ -1,14 +1,13 @@
 """Minimized, offline regressions for policy and cascade review hypotheses."""
-from copy import deepcopy
-from dataclasses import replace
 import io
 import zipfile
+from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
-from app.scan import sql_policy_identity as sql
-from app.scan.scoring import ScoredFinding
-
+from app.scan.identity import sql_policy_identity as sql
+from app.scan.reporting.scoring import ScoredFinding
 
 SOURCE = '''-- Миграция: Unicode before AST offsets.
 CREATE TABLE public.profiles (id uuid PRIMARY KEY);

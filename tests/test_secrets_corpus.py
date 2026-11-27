@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.secrets import scan_secrets
+from app.scan.core.secrets import scan_secrets
 
 RULE_ID = "generic-assignment"
 REPO_ROOT = Path(__file__).resolve().parent.parent

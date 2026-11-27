@@ -8,7 +8,7 @@ import zipfile
 
 import pytest
 
-from app.scan import credential_transport_assessment as c
+from app.scan.claims.assessments import credential_transport_assessment as c
 
 PATH = "app/api/chat/route.ts"
 GITHUB_TITLE = "GitHub OAuth client_secret exposed in server-side fetch"

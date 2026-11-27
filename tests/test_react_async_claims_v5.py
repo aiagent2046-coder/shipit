@@ -3,10 +3,9 @@ import copy
 
 import pytest
 
-from app.scan.http_success import http_success_findings
-from app.scan.react_async_context import react_async_premise_checks, react_async_syntax_check
+from app.scan.context.react_async_context import react_async_premise_checks, react_async_syntax_check
+from app.scan.reporting.http_success import http_success_findings
 from tests.test_http_success import component, scan
-
 
 BODY = """setSaving(true);
 try {

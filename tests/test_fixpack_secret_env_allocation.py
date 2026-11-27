@@ -8,8 +8,8 @@ from dataclasses import asdict
 import pytest
 
 from app.pipeline.fixpack.generate import _validate_syntax, build_fixpack_plan, render_pr_body
-from app.scan.collapse import collapse_repeats
-from app.scan.secrets import scan_secrets
+from app.scan.core.secrets import scan_secrets
+from app.scan.identity.collapse import collapse_repeats
 
 
 def _zip(entries):

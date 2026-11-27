@@ -13,8 +13,8 @@ import pytest
 
 from app.pipeline import scan_pipeline as pipeline
 from app.pipeline.report.html import render_report
+from app.scan.core.secrets import MAX_SCANNED_FILE_BYTES
 from app.scan.llm_scan import LLMScanStats
-from app.scan.secrets import MAX_SCANNED_FILE_BYTES
 from app.services.audit_history import ensure_paid_baseline
 
 from .conftest import clean_nextjs_repo, make_zip

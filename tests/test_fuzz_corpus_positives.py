@@ -48,16 +48,16 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.archive_extraction import scan_archive_extraction
-from app.scan.command_injection import scan_command_injection
-from app.scan.insecure_randomness import scan_insecure_randomness
-from app.scan.llm_browser_client import scan_llm_browser_client
-from app.scan.path_traversal import scan_path_traversal
-from app.scan.sql_injection import scan_sql_injection
-from app.scan.sql_injection_js import scan_sql_injection_js
-from app.scan.unsafe_deserialization import scan_unsafe_deserialization
-from app.scan.xxe import scan_unsafe_xml_parse
-from app.scan.xss import scan_xss
+from app.scan.detectors_app.data.sql_injection import scan_sql_injection
+from app.scan.detectors_app.data.sql_injection_js import scan_sql_injection_js
+from app.scan.detectors_app.runtime.archive_extraction import scan_archive_extraction
+from app.scan.detectors_app.runtime.unsafe_deserialization import scan_unsafe_deserialization
+from app.scan.detectors_app.runtime.xxe import scan_unsafe_xml_parse
+from app.scan.detectors_web.injection.command_injection import scan_command_injection
+from app.scan.detectors_web.injection.insecure_randomness import scan_insecure_randomness
+from app.scan.detectors_web.injection.path_traversal import scan_path_traversal
+from app.scan.detectors_web.injection.xss import scan_xss
+from app.scan.detectors_web.transport.llm_browser_client import scan_llm_browser_client
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CORPUS_ROOT = REPO_ROOT / "tests" / "detectors"
@@ -182,7 +182,8 @@ def _py_rename_secretless(body: str) -> str | None:
     only the declaration left dangling uses behind -- a broken program the
     rule is trivially silent on, not a target-filter counterexample)."""
     import re
-    from app.scan.insecure_randomness import _SECRET_WORDS
+
+    from app.scan.detectors_web.injection.insecure_randomness import _SECRET_WORDS
     words = "|".join(_SECRET_WORDS)
     match = re.search(rf"^(\s*)(\w*(?:{words})\w*)\s*=", body, re.MULTILINE | re.IGNORECASE)
     if match is None:
@@ -280,7 +281,8 @@ def _js_rename_secretless(body: str) -> str | None:
     valid and leaves the rule no secret-named target to bind to.
     """
     import re
-    from app.scan.insecure_randomness import _SECRET_WORDS
+
+    from app.scan.detectors_web.injection.insecure_randomness import _SECRET_WORDS
     words = "|".join(_SECRET_WORDS)
     names = re.findall(rf"(?:const|let|var)\s+((?:\w*(?:{words})\w*))\b",
                        body, re.IGNORECASE)

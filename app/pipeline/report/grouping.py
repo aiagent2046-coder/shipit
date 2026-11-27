@@ -33,9 +33,9 @@ an unmeasured calibration is the thing this project distrusts most.
 from __future__ import annotations
 
 from app.pipeline.report.evidence import is_non_production
-from app.scan.rls import RULE_ID as RLS_READ_RULE_ID
-from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
-from app.scan.security_agent import deserialization_observation
+from app.scan.detectors_app.data.rls import RULE_ID as RLS_READ_RULE_ID
+from app.scan.detectors_app.data.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
+from app.scan.reporting.security_agent import deserialization_observation
 
 # Rules whose repeats are one finding about many tables. Deliberately a small
 # explicit set: a rule that fires once per genuinely distinct issue must keep

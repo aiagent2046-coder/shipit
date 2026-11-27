@@ -15,8 +15,8 @@ from app.pipeline import local_cli, local_store
 from app.pipeline.sca import snapshot
 from app.pipeline.sca.refresh import refresh_score_threat_context
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
-from app.scan import kev_catalog
-from app.scan.threat_context import build_threat_context
+from app.scan.supply import kev_catalog
+from app.scan.supply.threat_context import build_threat_context
 from app.services.audit_history import refresh_cached_preview_history
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM
@@ -222,11 +222,11 @@ def test_package_build_copies_checksums_and_relocates_threat_modules(tmp_path):
     raw = (package / 'data/kev-catalog.json').read_bytes()
     assert hashlib.sha256(raw).hexdigest() == info['kev_catalog_sha256']
     assert (package / 'data/kev-catalog.json.sha256').read_text().strip() == info['kev_catalog_sha256']
-    for name in ('scan/kev_catalog.py', 'scan/threat_context.py', 'runtime/threat_context.py'):
+    for name in ('scan/supply/kev_catalog.py', 'scan/supply/threat_context.py', 'runtime/threat_context.py'):
         assert (package / name).is_file()
     script = (
         'import json, sys; sys.path.insert(0, sys.argv[1]); '
-        'from drydock_local.scan.threat_context import build_threat_context; '
+        'from drydock_local.scan.supply.threat_context import build_threat_context; '
         'from drydock_local.runtime.threat_context import threat_context_record; '
         'print(json.dumps(threat_context_record(build_threat_context([]))))'
     )

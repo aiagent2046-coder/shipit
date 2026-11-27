@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.path_traversal import RULE_ID, scan_path_traversal
+from app.scan.detectors_web.injection.path_traversal import RULE_ID, scan_path_traversal
 from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -377,7 +377,7 @@ def test_unresolvable_helper_shapes_stay_silent(source):
 def test_helper_resolution_is_budgeted(monkeypatch):
     """A generated archive cannot turn helper resolution into a scan bomb: past
     the budget, resolution stops and the remaining helpers stay opaque."""
-    from app.scan import path_traversal as detector
+    from app.scan.detectors_web.injection import path_traversal as detector
     monkeypatch.setattr(detector, "_MAX_HELPER_RESOLUTIONS", 1)
     helpers = "\n\n".join(
         f"def helper_{index}(value):\n    return open(value).read()\n" for index in range(3))
@@ -407,8 +407,8 @@ def test_future_local_assignment_does_not_misclassify_an_unbound_builtin_as_a_si
 @pytest.mark.parametrize("operator", ["join", "division"])
 @pytest.mark.parametrize("initial", ["name", "'x'"])
 def test_path_expansion_is_bounded_before_allocation_in_the_real_static_pipeline(monkeypatch, operator, initial):
-    from app.scan import path_traversal as detector
-    from app.scan.outbound_url import _MAX_SLOTS, _MAX_TEMPLATE_BYTES
+    from app.scan.detectors_web.injection import path_traversal as detector
+    from app.scan.detectors_web.injection.outbound_url import _MAX_SLOTS, _MAX_TEMPLATE_BYTES
 
     original = detector._PathState._path_skeleton
     seen = []
@@ -475,7 +475,7 @@ def test_helper_calls_preserve_python_scope_and_argument_binding(helper, body, e
 
 
 def test_helper_return_expansion_obeys_the_file_budget(monkeypatch):
-    from app.scan import path_traversal as detector
+    from app.scan.detectors_web.injection import path_traversal as detector
     monkeypatch.setattr(detector, "_MAX_HELPER_RESOLUTIONS", 1)
     source = HELPER_SOURCE.replace(
         '    return open(get_file_path(name)).read()',

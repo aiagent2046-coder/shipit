@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from app.scan import insecure_randomness
-from app.scan.insecure_randomness import RULE_ID, scan_insecure_randomness
+from app.scan.detectors_web.injection import insecure_randomness
+from app.scan.detectors_web.injection.insecure_randomness import RULE_ID, scan_insecure_randomness
 from app.scan.static import run_static_scan
 from tests.test_rule_coverage import assert_accounting
 

@@ -44,7 +44,7 @@ import zipfile
 
 from app.pipeline import scan_pipeline as pipeline
 from app.scan import static
-from app.scan.error_boundary import BoundaryScan
+from app.scan.detectors_app.runtime.error_boundary import BoundaryScan
 
 # Every scanner run_static_scan feeds into the findings list, by the name it is
 # called by. Sorted, so a diff reads as one added or removed line.
@@ -200,7 +200,7 @@ def test_the_damping_contexts_are_the_ones_this_version_was_stamped_for() -> Non
     """Same argument as the rule ids: a context decides which section of the
     report a finding lands in, so a new one changes the page for unchanged
     bytes."""
-    from app.scan.secrets import NON_PRODUCTION_CONTEXTS
+    from app.scan.core.secrets import NON_PRODUCTION_CONTEXTS
 
     assert tuple(sorted(NON_PRODUCTION_CONTEXTS)) == DAMPING_CONTEXTS, (
         "the damping vocabulary changed. Update DAMPING_CONTEXTS *and* bump "

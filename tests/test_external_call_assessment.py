@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 
-from app.scan import external_call_assessment as e
+from app.scan.claims.assessments import external_call_assessment as e
 
 WRAPPER = """async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
  for (let attempt = 1; attempt <= 2; attempt++) {

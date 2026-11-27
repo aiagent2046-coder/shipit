@@ -3,7 +3,7 @@ import pytest
 
 from app.pipeline.report.html import render_report
 from app.pipeline.report.plain_language import PLAIN, plain_fields, tier
-from app.scan.checks import run_checks  # noqa: F401 (import sanity)
+from app.scan.core.checks import run_checks  # noqa: F401 (import sanity)
 
 
 def _all_static_rule_ids():
@@ -11,7 +11,7 @@ def _all_static_rule_ids():
     from pathlib import Path
 
     ids = set()
-    for path in ("app/scan/secrets.py", "app/scan/checks.py"):
+    for path in ("app/scan/core/secrets.py", "app/scan/core/checks.py"):
         for node in ast.walk(ast.parse(Path(path).read_text())):
             value = None
             # Read actual constructors, including ones with comments before
@@ -42,7 +42,7 @@ def test_the_re_routed_ids_are_in_what_this_guard_checks():
     rule declares -- they are written at the point a match is reclassified,
     far from any SecretRule constructor."""
     ids = _all_static_rule_ids()
-    from app.scan.secrets import RULES
+    from app.scan.core.secrets import RULES
 
     assert {rule.id for rule in RULES} <= ids
     assert not {"not-a-real", "smoke-test"} & ids

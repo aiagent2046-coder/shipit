@@ -6,11 +6,11 @@ from dataclasses import asdict, replace
 
 import pytest
 
-from app.scan.claim_evidence import model_claim_evidence
-from app.scan.claim_narrative import narrative_projection, project_claim_narrative
-from app.scan.external_call_assessment import ExternalCallVerifier
-from app.scan.scoring import ScoredFinding, _score
-from app.scan.source_claim_assessment import SourceClaimVerifier
+from app.scan.claims.assessments.external_call_assessment import ExternalCallVerifier
+from app.scan.claims.assessments.source_claim_assessment import SourceClaimVerifier
+from app.scan.identity.claim_evidence import model_claim_evidence
+from app.scan.reporting.claim_narrative import narrative_projection, project_claim_narrative
+from app.scan.reporting.scoring import ScoredFinding, _score
 from tests.test_external_call_assessment import CALLER as FETCH_CALLER
 from tests.test_external_call_assessment import HELPER as FETCH_HELPER
 from tests.test_external_call_assessment import WRAPPER

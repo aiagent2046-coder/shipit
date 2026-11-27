@@ -10,8 +10,8 @@ import pytest
 from app.foundation.lockfiles import lockfiles
 from app.pipeline.sca import snapshot
 from app.pipeline.scan_pipeline import score_findings
-from app.scan import cve_match
-from app.scan.manifest import sca_manifest_fields
+from app.scan.reporting.manifest import sca_manifest_fields
+from app.scan.supply import cve_match
 
 PRIMARY = "GHSA-2345-2345-2345"
 SECONDARY = "GHSA-3456-3456-3456"

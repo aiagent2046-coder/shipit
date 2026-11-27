@@ -4,7 +4,7 @@ from __future__ import annotations
 from app.pipeline.sca.osv import OsvClient
 from app.pipeline.sca.refresh import inventory_payload, refreshed_findings, refreshed_score
 from app.pipeline.sca.stage import RULE_ID, cve_enabled, loses_cve_evidence, run_sca_stage, sca_enabled
-from app.scan.cve_evidence import normalize_cve_summary
+from app.scan.supply.cve_evidence import normalize_cve_summary
 
 
 def needs_dependency_scan(cached: dict) -> bool:

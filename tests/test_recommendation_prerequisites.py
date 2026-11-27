@@ -7,12 +7,12 @@ import pytest
 
 from app.pipeline.report.evidence import claim_evidence_rows
 from app.pipeline.report.html import render_report
-from app.scan.claim_evidence import model_claim_evidence
-from app.scan.recommendation_contract import require_prerequisites
-from app.scan.recommendations import TIMING_SAFE_EQUAL_KIND, prepare_recommendation
-from app.scan.recommendations import prepare_recommendation as prepare_rls
-from app.scan.rls_recommendations import client_change_prerequisites
-from app.scan.scoring import ScoredFinding
+from app.scan.claims.assessments.recommendations import TIMING_SAFE_EQUAL_KIND, prepare_recommendation
+from app.scan.claims.assessments.recommendations import prepare_recommendation as prepare_rls
+from app.scan.claims.assessments.rls_recommendations import client_change_prerequisites
+from app.scan.identity.claim_evidence import model_claim_evidence
+from app.scan.identity.recommendation_contract import require_prerequisites
+from app.scan.reporting.scoring import ScoredFinding
 from tests.test_llm_scan import VULN_TS, FakeLLM, make_zip, valid_finding
 from tests.test_rls_recommendations import collect, policy
 

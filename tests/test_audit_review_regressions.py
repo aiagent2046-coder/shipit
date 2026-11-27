@@ -9,7 +9,7 @@ from pathlib import Path
 from app.foundation.llm.client import LLMClient, LLMError
 from app.pipeline.report.html import render_report
 from app.pipeline.scan_pipeline import run_scan
-from app.scan.source_facts import collect_source_facts, facts_prompt
+from app.scan.claims.assessments.source_facts import collect_source_facts, facts_prompt
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 SUFFIX_SOURCE = b'''const DOMAIN = 'example.test';

@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import random
 
-from tests.detector_samples import SAMPLES as CREDENTIAL_SAMPLES
-
-from app.scan.scoring import (
+from app.scan.reporting.scoring import (
     CATEGORIES,
     GATED_CATEGORIES,
     SEVERITY_WEIGHT,
@@ -21,6 +19,7 @@ from app.scan.scoring import (
     compute_scores,
 )
 from app.scan.static import run_static_scan
+from tests.detector_samples import SAMPLES as CREDENTIAL_SAMPLES
 
 from .conftest import make_zip
 

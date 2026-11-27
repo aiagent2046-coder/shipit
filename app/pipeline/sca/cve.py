@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app.scan.cve_evidence import (
+from app.scan.supply.cve_evidence import (
     _CWE,
     _ID,
     _MAX_PUBLIC_RECORDS,

@@ -8,8 +8,8 @@ import zipfile
 
 import pytest
 
-from app.scan.sql_injection import scan_sql_injection
-from app.scan.sql_injection_js import scan_sql_injection_js
+from app.scan.detectors_app.data.sql_injection import scan_sql_injection
+from app.scan.detectors_app.data.sql_injection_js import scan_sql_injection_js
 
 
 def scan(source: str, extension: str):

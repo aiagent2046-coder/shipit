@@ -9,11 +9,10 @@ import zlib
 
 import pytest
 
-from app.scan import sql_injection as python_sql
-from app.scan import sql_injection_js as javascript_sql
-from app.scan.rule_coverage import mark_analysis_limit, resume_rule, track_analysis_limits
+from app.scan.core.rule_coverage import mark_analysis_limit, resume_rule, track_analysis_limits
+from app.scan.detectors_app.data import sql_injection as python_sql
+from app.scan.detectors_app.data import sql_injection_js as javascript_sql
 from app.scan.static import run_static_scan
-
 
 CASES = [
     pytest.param(python_sql, python_sql.scan_sql_injection, "py", id="python"),

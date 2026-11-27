@@ -33,7 +33,7 @@ def _git(source: Path, *args: str) -> bytes:
 
 
 def build_snapshot(source: Path) -> bytes:
-    from app.scan.kev_catalog import decode_catalog, encode_catalog, normalize_upstream
+    from app.scan.supply.kev_catalog import decode_catalog, encode_catalog, normalize_upstream
 
     if _git(source, "remote", "get-url", "origin").decode().strip() not in OFFICIAL_REMOTES:
         raise ValueError("origin must be the official CISA KEV repository")

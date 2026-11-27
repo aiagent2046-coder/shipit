@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
 
 TITLE = "Completed invoice still calls notify_operator"
 SOURCE = '''async def report_paid(repo, ref):

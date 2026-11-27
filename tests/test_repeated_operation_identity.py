@@ -1,15 +1,15 @@
 """Bounded replay of two saved Luna paraphrase pairs using synthetic source."""
-from copy import deepcopy
-from dataclasses import asdict, replace
 import io
 import zipfile
+from copy import deepcopy
+from dataclasses import asdict, replace
 
 import pytest
 
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.issue_identity import SourceIssueResolver
-from app.scan.scoring import ScoredFinding
-from app.scan.repeated_operation_identity import valid_repeated_identity
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
+from app.scan.claims.resolvers.repeated_operation_identity import valid_repeated_identity
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding
 
 HOST_SOURCE = """async function identity(req) {
   const baseUrl = req.headers.get('x-forwarded-host')

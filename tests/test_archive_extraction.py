@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.archive_extraction import RULE_ID, scan_archive_extraction
+from app.scan.detectors_app.runtime.archive_extraction import RULE_ID, scan_archive_extraction
 from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

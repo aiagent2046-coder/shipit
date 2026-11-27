@@ -53,7 +53,7 @@ for (const problem of ['corrupt', 'missing']) {
 pyodide.runPython(`
 from pathlib import Path
 import hashlib, json
-from app.scan.kev_catalog import encode_catalog
+from app.scan.supply.kev_catalog import encode_catalog
 _kev_path = Path('/engine/app/data/kev-catalog.json')
 _kev_data = json.loads(_kev_path.read_text())
 del _kev_data['entries']['CVE-2023-4863']

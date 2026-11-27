@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.open_redirect import RULE_ID, scan_open_redirect
+from app.scan.detectors_web.injection.open_redirect import RULE_ID, scan_open_redirect
 from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -130,6 +130,7 @@ def handler(body: str) -> str:
 @pytest.mark.parametrize("expression", ['"/" + next', 'f"/{next}"'])
 def test_one_leading_slash_can_still_redirect_to_a_caller_host(expression):
     from urllib.parse import urlsplit
+
     from starlette.responses import RedirectResponse
 
     # A real framework response demonstrates why this is a positive, without
@@ -148,6 +149,7 @@ def test_one_leading_slash_can_still_redirect_to_a_caller_host(expression):
 ])
 def test_prefix_allowlist_accepts_a_different_host_and_must_not_suppress(target, destination_host):
     from urllib.parse import urlsplit
+
     from starlette.responses import RedirectResponse
 
     # The unsafe prefix guard is scanner input below; the runtime oracle checks

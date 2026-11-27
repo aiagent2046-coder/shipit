@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from app.scan.ownership_claims import MAX_FILE_BYTES, check_source
+from app.scan.claims.resolvers.ownership_claims import MAX_FILE_BYTES, check_source
 
 SOURCE = """import { createClient } from '@supabase/supabase-js';
 export async function POST(req) {
@@ -62,7 +62,7 @@ def test_message_insert_has_bounded_local_guard_counterevidence():
 
 
 def test_legacy_f11_title_checks_local_premise_without_dismissing_database_race_claim():
-    from app.scan.syntax_claims import SyntaxVerifier
+    from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
 
     path = 'app/api/messages/route.ts'
     archive = io.BytesIO()

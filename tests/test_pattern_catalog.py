@@ -11,10 +11,10 @@ from pathlib import Path
 import pytest
 
 from app.runtime.capabilities import CAPABILITIES
-from app.scan import pattern_catalog
-from app.scan.outbound_url import scan_outbound_url
-from app.scan.sql_injection import scan_sql_injection
-from app.scan.unsafe_deserialization import scan_unsafe_deserialization
+from app.scan.core import pattern_catalog
+from app.scan.detectors_app.data.sql_injection import scan_sql_injection
+from app.scan.detectors_app.runtime.unsafe_deserialization import scan_unsafe_deserialization
+from app.scan.detectors_web.injection.outbound_url import scan_outbound_url
 
 ROOT = Path(__file__).resolve().parents[1]
 SCANNERS = {

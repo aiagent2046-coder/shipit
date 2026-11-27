@@ -11,9 +11,9 @@ from app.foundation.llm.client import LLMClient
 from app.pipeline import local_cli, local_store
 from app.pipeline.sca import snapshot
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
-from app.scan import cve_catalog, ghsa_catalog
-from app.scan.binary_evidence import attach_binary_reports
 from app.scan.browser import scan_archive
+from app.scan.supply import cve_catalog, ghsa_catalog
+from app.scan.supply.binary_evidence import attach_binary_reports
 from tests.test_binary_evidence import archive, elf, encoded
 from tests.test_binary_evidence import report as binary_report
 from tests.test_ghsa_pipeline import DATE, GHSA, cve_record, ghsa_record

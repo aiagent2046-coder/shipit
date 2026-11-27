@@ -6,8 +6,8 @@ import zipfile
 
 import pytest
 
-from app.scan.checks import env_file_is_public_configuration, gitignore_covers_env, run_checks
-from app.scan.gitignore import ArchiveGitIgnore
+from app.scan.core.checks import env_file_is_public_configuration, gitignore_covers_env, run_checks
+from app.scan.core.gitignore import ArchiveGitIgnore
 
 
 def scan(files):

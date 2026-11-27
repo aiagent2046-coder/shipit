@@ -6,8 +6,7 @@ import textwrap
 
 import pytest
 
-from app.scan.sql_input_evidence import analyze_query_input
-
+from app.scan.evidence.sql_input_evidence import analyze_query_input
 
 HEADER = 'from fastapi import FastAPI, Request\nimport psycopg\napp = FastAPI()\n'
 SETUP = 'conn = psycopg.connect(dsn)\ncur = conn.cursor()\n'
@@ -257,7 +256,7 @@ def test_independent_supported_routes_and_pure_defaults_can_share_a_module():
 
 
 def supported_route(source, *, limit=50_000):
-    from app.scan.sql_input_evidence import is_supported_fastapi_route
+    from app.scan.evidence.sql_input_evidence import is_supported_fastapi_route
 
     tree = ast.parse(source)
     fn = next(node for node in ast.walk(tree)
@@ -298,7 +297,7 @@ def test_route_helper_obeys_shared_work_budget():
 
 
 def test_route_helper_requires_the_actual_function_node():
-    from app.scan.sql_input_evidence import is_supported_fastapi_route
+    from app.scan.evidence.sql_input_evidence import is_supported_fastapi_route
 
     source = route('return name\n')
     tree = ast.parse(source)

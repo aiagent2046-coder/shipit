@@ -1,12 +1,11 @@
 """Bound evidence work without losing the independent SQL observation."""
 import ast
-from functools import partial
 import io
+from functools import partial
 
-from app.scan import sql_injection
-from app.scan.psycopg_provenance import cursor_provenance
+from app.scan.detectors_app.data import sql_injection
+from app.scan.detectors_app.data.psycopg_provenance import cursor_provenance
 from tests.test_security_agent import archive
-
 
 SOURCE = ('import psycopg\nconn = psycopg.connect(dsn)\ncur = conn.cursor()\n'
           'cur.execute(f"SELECT {user_id}")\n')

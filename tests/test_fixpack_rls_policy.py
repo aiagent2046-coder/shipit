@@ -20,7 +20,7 @@ from app.pipeline.fixpack.rls_policy import (
     PolicyRefusal,
     propose_read_policy,
 )
-from app.scan.sql_schema import parse_schema
+from app.scan.detectors_app.data.sql_schema import parse_schema
 
 # The real shape, reduced to what matters: two tables scoped by `match_id`,
 # one of them already carrying the project's working read policy.

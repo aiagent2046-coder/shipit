@@ -42,7 +42,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.scan.insecure_randomness import _SECRET_WORDS  # noqa: E402
+from app.scan.detectors_web.injection.insecure_randomness import _SECRET_WORDS  # noqa: E402
 
 _PY_SUFFIXES = {".py"}
 _JS_SUFFIXES = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".mts", ".cts"}
@@ -191,7 +191,7 @@ def _parse_error(body: str, suffix: str) -> bool:
             return True
         return False
     if suffix in _JS_SUFFIXES:
-        from app.scan.xss import _parser
+        from app.scan.detectors_web.injection.xss import _parser
         root = _parser(suffix in _TSX_SUFFIXES).parse(body.encode()).root_node
         return root.has_error
     return False

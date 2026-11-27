@@ -3,10 +3,10 @@
 import json
 from pathlib import Path
 
-from app.scan.client_runtime_record import (
+from app.scan.evidence.client_runtime_record import (
     ARCHIVE_SHA256 as ARCHIVE,
 )
-from app.scan.client_runtime_record import (
+from app.scan.evidence.client_runtime_record import (
     SCENARIO_ID,
     validate_client_runtime_evidence,
 )

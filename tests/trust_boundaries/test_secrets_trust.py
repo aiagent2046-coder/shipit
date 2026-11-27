@@ -15,10 +15,9 @@ import dataclasses
 
 import pytest
 
-from tests.detector_samples import SAMPLES
-
-from app.scan.secrets import RULES, scan_secrets
+from app.scan.core.secrets import RULES, scan_secrets
 from app.scan.static import run_static_scan
+from tests.detector_samples import SAMPLES
 
 from .conftest import make_zip
 

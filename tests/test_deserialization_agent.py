@@ -13,11 +13,13 @@ from app.pipeline import local_cli
 from app.pipeline.report.evidence import security_agent_rows
 from app.pipeline.report.html import render_report
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
-from app.scan import evidence_acquisition, security_agent, unsafe_deserialization
-from app.scan.agent_chain import normalize_chain
 from app.scan.browser import ScanSession, scan_archive
-from app.scan.evidence_record import normalize_acquisition
-from app.scan.source_snapshot import SourceSnapshot
+from app.scan.detectors_app.runtime import unsafe_deserialization
+from app.scan.evidence import evidence_acquisition
+from app.scan.evidence.agent_chain import normalize_chain
+from app.scan.evidence.evidence_record import normalize_acquisition
+from app.scan.evidence.source_snapshot import SourceSnapshot
+from app.scan.reporting import security_agent
 from app.scan.static import run_static_scan
 from tests.test_security_agent import archive
 
@@ -243,7 +245,7 @@ def test_absent_or_mismatched_snapshot_cannot_supply_body_facts(snapshot_present
 
 
 def test_collector_exception_cannot_drop_the_static_finding_or_leak_private_text(monkeypatch):
-    from app.scan import deserialization_input_evidence
+    from app.scan.evidence import deserialization_input_evidence
 
     def failed(*args, **kwargs):
         raise ValueError("PRIVATE CUSTOMER PAYLOAD")

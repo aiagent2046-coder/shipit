@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.command_injection import RULE_ID, scan_command_injection
+from app.scan.detectors_web.injection.command_injection import RULE_ID, scan_command_injection
 from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

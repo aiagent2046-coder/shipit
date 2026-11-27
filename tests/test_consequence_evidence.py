@@ -5,9 +5,9 @@ import zipfile
 
 import pytest
 
-from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
-from app.scan.consequence_evidence import ConsequenceVerifier
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
+from app.scan.context.consequence_evidence import ConsequenceVerifier
+from app.scan.identity.claim_evidence import partial_contradicted, syntax_contradicted
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 OAUTH = '''export async function GET(req) {
@@ -471,7 +471,7 @@ def test_fake_model_pipeline_retains_http_finding_and_penalty():
     assert row['verification_status'] == 'unverified'
     from dataclasses import fields
 
-    from app.scan.scoring import ScoredFinding, compute_scores
+    from app.scan.reporting.scoring import ScoredFinding, compute_scores
     allowed = {field.name for field in fields(ScoredFinding)}
     scored = ScoredFinding(**{key: value for key, value in row.items() if key in allowed})
     plain = ScoredFinding(**{key: value for key, value in row.items() if key in allowed and key != 'claim_evidence'})

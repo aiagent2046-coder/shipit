@@ -9,7 +9,7 @@ scan must say so, and callers must not be able to read it as a clean bill
 
 from __future__ import annotations
 
-from app.scan.error_boundary import (
+from app.scan.detectors_app.runtime.error_boundary import (
     COVERAGE_COMPLETE,
     MOUNT_NOT_REACT,
     scan_error_boundary,

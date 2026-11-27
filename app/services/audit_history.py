@@ -14,7 +14,7 @@ from app.pipeline.sca.refresh import refresh_score_threat_context
 from app.pipeline.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, FREE_TIER_MODEL, FREE_TIER_MODEL_BY_KIND, FREE_TIER_RUBRICS
 from app.scan import llm_scan
-from app.scan.cve_match import RULE_ID as SNAPSHOT_RULE_ID
+from app.scan.supply.cve_match import RULE_ID as SNAPSHOT_RULE_ID
 
 
 def _observation_key(finding: dict) -> str:

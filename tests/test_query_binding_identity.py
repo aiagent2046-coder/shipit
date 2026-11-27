@@ -1,20 +1,19 @@
 """A saved table/binding mismatch must group only after source proof, without LLM calls."""
+import io
+import json
+import zipfile
 from collections import Counter
 from copy import deepcopy
 from dataclasses import asdict, replace
 from hashlib import sha256
-import io
-import json
 from pathlib import Path
-import zipfile
 
 import pytest
 
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.issue_identity import SourceIssueResolver
-from app.scan.query_read_identity import valid_query_read_identity
-from app.scan.scoring import ScoredFinding
-
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
+from app.scan.claims.resolvers.query_read_identity import valid_query_read_identity
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding
 
 SOURCE = """async function GET(req) {
   const afterTs = req.after;

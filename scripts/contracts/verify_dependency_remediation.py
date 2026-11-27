@@ -20,8 +20,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from app.scan.cve_match import evaluate_advisory, match_archive  # noqa: E402
-from app.scan.remediation_catalog import remediation_record  # noqa: E402
+from app.scan.supply.cve_match import evaluate_advisory, match_archive  # noqa: E402
+from app.scan.supply.remediation_catalog import remediation_record  # noqa: E402
 
 FIXTURES = ROOT / 'tests/fixtures/dependency-remediation'
 HISTORICAL_CATALOG_SHA256 = '3afd1dfc0ffba54ba0ade1ce89bde17d760816384d4a49aa48d9741474f6a005'

@@ -9,10 +9,10 @@ import pytest
 
 from app.foundation.llm.client import LLMClient
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
-from app.scan.agent_chain import normalize_chain, run_chain
-from app.scan.security_agent import agent_record
+from app.scan.evidence.agent_chain import normalize_chain, run_chain
+from app.scan.evidence.synthetic_record import unavailable_summary
+from app.scan.reporting.security_agent import agent_record
 from app.scan.static import run_static_scan
-from app.scan.synthetic_record import unavailable_summary
 from tests.test_agent_synthetic_runtime import passed_summary
 from tests.test_evidence_acquisition import HTTP_SQL, RUNTIME_GAPS, SOURCE_FACTS
 from tests.test_security_agent import archive, sql_findings
@@ -104,7 +104,7 @@ def test_failed_or_forged_experiment_preserves_research_and_static_findings(summ
 
 
 def test_research_failure_preserves_prior_facts_and_blocks_experiment(monkeypatch):
-    from app.scan import sql_slot_evidence
+    from app.scan.evidence import sql_slot_evidence
 
     def fail(*args, **kwargs):
         raise ValueError("SECRET CUSTOMER SQL")
@@ -203,7 +203,7 @@ def test_failed_worker_cannot_mutate_evidence_received_by_next_worker():
     lambda value: value.update(file="other.py"),
 ])
 def test_worker_cannot_replace_the_observation_or_authorize_a_patch(monkeypatch, mutation):
-    from app.scan import security_agent
+    from app.scan.reporting import security_agent
 
     def corrupt(observation, snapshot, budget):
         mutation(observation)

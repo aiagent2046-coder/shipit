@@ -8,10 +8,10 @@ import zipfile
 
 import pytest
 
-from app.scan import imported_error_context as c
-from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
-from app.scan.scoring import ScoredFinding, compute_scores
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
+from app.scan.context import imported_error_context as c
+from app.scan.identity.claim_evidence import partial_contradicted, syntax_contradicted
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 from tests.test_audit_llm_wiring import make_zip
 from tests.test_llm_scan import FakeLLM
 
@@ -51,8 +51,8 @@ export function Widget() {
 
 @pytest.mark.parametrize('passes', [1, 2])
 def test_scan_retains_cross_file_context_without_rejecting_or_reclassifying_claim(passes):
-    from app.scan.cross_rubric_dedup import _flatten, dedup_cross_rubric
     from app.scan.llm_scan import run_llm_scan
+    from app.scan.reporting.cross_rubric_dedup import _flatten, dedup_cross_rubric
 
     raw = {
         'file': 'src/consumer.tsx', 'line_start': 5, 'line_end': 5,

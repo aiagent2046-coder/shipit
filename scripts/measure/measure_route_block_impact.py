@@ -139,8 +139,8 @@ def shapes(root: str) -> int:
     sys.path.insert(0, root)
     import ast  # noqa: PLC0415
 
-    from app.scan.auth_read import _METHODS  # noqa: PLC0415
-    from app.scan.scope_statements import scope_statements  # noqa: PLC0415
+    from app.scan.core.scope_statements import scope_statements  # noqa: PLC0415
+    from app.scan.detectors_app.data.auth_read import _METHODS  # noqa: PLC0415
 
     files = routes_anywhere = block_imports = 0
     block_route_files: list[tuple[str, str]] = []

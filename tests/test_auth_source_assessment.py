@@ -1,17 +1,18 @@
 """Source ownership/callback negatives: no target execution, model calls or policy assumptions."""
 
-from copy import deepcopy
-from dataclasses import asdict
 import hashlib
 import io
 import zipfile
+from copy import deepcopy
+from dataclasses import asdict
 
 import pytest
 
-from app.scan.auth_source_assessment import AuthSourceVerifier, MAX_CHECKS
-from app.scan.claim_evidence import source_assessments, unsupported_transport
-from app.scan.scoring import ScoredFinding, compute_scores
-from tests.test_ownership_claims import SOURCE as OWNERSHIP, INSERT
+from app.scan.claims.assessments.auth_source_assessment import MAX_CHECKS, AuthSourceVerifier
+from app.scan.identity.claim_evidence import source_assessments, unsupported_transport
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
+from tests.test_ownership_claims import INSERT
+from tests.test_ownership_claims import SOURCE as OWNERSHIP
 
 PATH = "app/api/history/route.ts"
 SERVICE = """import { createClient } from '@supabase/supabase-js';

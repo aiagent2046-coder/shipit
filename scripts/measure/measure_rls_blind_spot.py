@@ -68,14 +68,14 @@ from app.proof.rls.supabase_tables import (  # noqa: E402
     _TYPES_MARKER,
     _TYPES_TABLE,
 )
-from app.scan.rls import (  # noqa: E402
+from app.scan.detectors_app.data.rls import (  # noqa: E402
     _SCHEMA_PATH_HINTS,
     RULE_ID,
     WRITE_RULE_ID,
     read_committed_sql,
     scan_rls,
 )
-from app.scan.sql_schema import parse_schema  # noqa: E402
+from app.scan.detectors_app.data.sql_schema import parse_schema  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 # Tracked, because they are INPUTS: a run cannot be reproduced or disputed

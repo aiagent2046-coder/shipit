@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 
-from app.scan.sarif_format import (  # noqa: F401  (re-exported)
+from app.scan.reporting.sarif_format import (  # noqa: F401  (re-exported)
     DEPENDENCY_RULE_IDS,
     FINGERPRINT_KEY,
     LEVELS,

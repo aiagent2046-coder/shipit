@@ -1,0 +1,194 @@
+"""File accounting for bounded source rules; no source text or paths are exported."""
+
+from __future__ import annotations
+
+import stat
+import zipfile
+from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+from app.scan.core.file_scope import is_dependency_path, is_generated_path
+from app.scan.core.secrets import is_non_production_path
+
+RULE_COVERAGE_KEYS = ("outbound_url", "tls_verification", "unsafe_deserialization", "path_traversal",
+                      "xss", "open_redirect", "insecure_randomness", "unsafe_xml_parse", "command_injection",
+                      "archive_extraction", "sql_injection", "sql_injection_js", "llm_browser_client")
+EXCLUSION_REASONS = ("unsupported_extension", "non_production_path", "dependency_tree", "generated_build",
+                     "symlink", "git_metadata")
+SKIP_REASONS = (
+    "file_size_limit", "file_limit", "finding_limit", "read_error", "decode_error", "parse_error", "ast_limit",
+    "analysis_limit", "unsupported_vue_template", "unsupported_vue_script",
+)
+_COUNTS = ("files_total", "eligible_files", "attempted_files", "analyzed_files", "excluded_files", "skipped_files")
+_ANALYSIS_LIMITS: ContextVar[set[str] | None] = ContextVar("rule_analysis_limits", default=None)
+_RESUME: ContextVar[tuple[dict, int] | None] = ContextVar("rule_resume", default=None)
+
+
+@contextmanager
+def resume_rule(previous: dict, finding_count: int) -> Iterator[None]:
+    """Resume one rule on the same immutable archive, with its original caps."""
+    token = _RESUME.set((previous, finding_count))
+    try:
+        yield
+    finally:
+        _RESUME.reset(token)
+
+
+def remaining_findings(limit: int) -> int:
+    resume = _RESUME.get()
+    return max(0, limit - resume[1]) if resume else limit
+
+
+@contextmanager
+def track_analysis_limits() -> Iterator[set[str]]:
+    """Record bounded-expression gaps for this file without interrupting other traces.
+
+    Context-local state keeps concurrent scans and nested invocations separate;
+    the finally block also resets it after parse or traversal failures.
+    """
+    limits: set[str] = set()
+    token = _ANALYSIS_LIMITS.set(limits)
+    try:
+        yield limits
+    finally:
+        _ANALYSIS_LIMITS.reset(token)
+
+
+def mark_analysis_limit() -> None:
+    limits = _ANALYSIS_LIMITS.get()
+    if limits is not None:
+        limits.add("analysis_limit")
+
+
+def normalize_rule_coverage(value: object) -> dict | None:
+    """Keep only known numeric records; missing or inconsistent counts stay unknown."""
+    if not isinstance(value, dict):
+        return None
+    result = {}
+    for name in RULE_COVERAGE_KEYS:
+        record = value.get(name)
+        if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] != 1:
+            continue
+        if any(type(record.get(key)) is not int or record[key] < 0 for key in _COUNTS):
+            continue
+        clean = {"version": 1, **{key: record[key] for key in _COUNTS}}
+        for key, allowed in (("exclusion_reasons", EXCLUSION_REASONS), ("skip_reasons", SKIP_REASONS)):
+            reasons = record.get(key)
+            if not isinstance(reasons, dict):
+                break
+            if any(type(reasons.get(reason, 0)) is not int or reasons.get(reason, 0) < 0 for reason in allowed):
+                break
+            clean[key] = {reason: reasons[reason] for reason in allowed if reasons.get(reason, 0)}
+        else:
+            if (clean["files_total"] != clean["eligible_files"] + clean["excluded_files"]
+                    or clean["eligible_files"] != clean["analyzed_files"] + clean["skipped_files"]
+                    or not 0 <= clean["analyzed_files"] <= clean["attempted_files"] <= clean["eligible_files"]
+                    or clean["excluded_files"] != sum(clean["exclusion_reasons"].values())
+                    or clean["skipped_files"] != sum(clean["skip_reasons"].values())):
+                continue
+            clean["partial"] = clean["skipped_files"] > 0
+            result[name] = clean
+    return result
+
+
+class RuleCoverage:
+    """Inventory before stopping, then count a completed or skipped outcome for each file.
+
+    Eligible files are the rule's own supported source, including oversized files.
+    Reading/decoding/parsing a file alone does not count it as analyzed. A safe
+    negative prefilter can finish the supported check without parsing that file.
+    """
+
+    def __init__(self, archive: zipfile.ZipFile, *, extensions: tuple[str, ...],
+                 max_file_bytes: int, coverage: dict | None = None, case_sensitive: bool = True,
+                 exclude_symlinks: bool = False, exclude_git_metadata: bool = False):
+        self.coverage = coverage
+        self.files_total = 0
+        self.eligible_files = 0
+        self.attempted_files = 0
+        self.analyzed_files = 0
+        self.exclusions: Counter[str] = Counter()
+        self.skips: Counter[str] = Counter()
+        self.infos: list[zipfile.ZipInfo] = []
+        suffixes = extensions if case_sensitive else tuple(suffix.lower() for suffix in extensions)
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            self.files_total += 1
+            # Preserve each caller's source policy before either analysis budget.
+            # A symbolic link's bytes name its target; they are not source code.
+            if exclude_symlinks and stat.S_ISLNK(info.external_attr >> 16):
+                self.exclusions["symlink"] += 1
+            elif exclude_git_metadata and ".git" in info.filename.replace("\\", "/").split("/")[:-1]:
+                self.exclusions["git_metadata"] += 1
+            elif is_dependency_path(info.filename):
+                self.exclusions["dependency_tree"] += 1
+            elif is_generated_path(info.filename):
+                self.exclusions["generated_build"] += 1
+            elif is_non_production_path(info.filename):
+                self.exclusions["non_production_path"] += 1
+            elif not (info.filename if case_sensitive else info.filename.lower()).endswith(suffixes):
+                self.exclusions["unsupported_extension"] += 1
+            else:
+                self.eligible_files += 1
+                if info.file_size > max_file_bytes:
+                    self.skips["file_size_limit"] += 1
+                else:
+                    self.infos.append(info)
+        self.previous_attempts = 0
+        self.previous_findings = 0
+        resume = _RESUME.get()
+        if resume is not None:
+            previous, self.previous_findings = resume
+            if (not normalize_rule_coverage({RULE_COVERAGE_KEYS[0]: previous})
+                    or previous["files_total"] != self.files_total
+                    or previous["eligible_files"] != self.eligible_files
+                    or previous["exclusion_reasons"] != dict(self.exclusions)
+                    or not previous["skip_reasons"].get("file_limit")):
+                raise ValueError("Invalid rule continuation")
+            self.previous_attempts = self.attempted_files = previous["attempted_files"]
+            self.analyzed_files = previous["analyzed_files"]
+            self.skips = Counter({k: v for k, v in previous["skip_reasons"].items() if k != "file_limit"})
+            self.infos = self.infos[self.previous_attempts:]
+
+    def files(self, findings: list, *, max_files: int, max_findings: int) -> Iterator[zipfile.ZipInfo]:
+        for index, info in enumerate(self.infos):
+            if len(findings) + self.previous_findings >= max_findings:
+                self.skip("finding_limit", len(self.infos) - index)
+                return
+            if self.attempted_files - self.previous_attempts >= max_files:
+                self.skip("file_limit", len(self.infos) - index)
+                return
+            self.attempted_files += 1
+            yield info
+
+    def analyzed(self) -> None:
+        self.analyzed_files += 1
+
+    def skip(self, reason: str, count: int = 1) -> None:
+        if reason not in SKIP_REASONS:
+            raise ValueError("Unknown rule coverage reason")
+        self.skips[reason] += count
+
+    def finish(self) -> None:
+        record = {
+            "version": 1,
+            "files_total": self.files_total,
+            "eligible_files": self.eligible_files,
+            "attempted_files": self.attempted_files,
+            "analyzed_files": self.analyzed_files,
+            "excluded_files": sum(self.exclusions.values()),
+            "skipped_files": sum(self.skips.values()),
+            "exclusion_reasons": dict(self.exclusions),
+            "skip_reasons": dict(self.skips),
+            "partial": bool(self.skips),
+        }
+        # A missing outcome is a producer bug, never evidence of a clean file.
+        normalized = normalize_rule_coverage({RULE_COVERAGE_KEYS[0]: record})
+        if not normalized:
+            raise ValueError("Inconsistent rule coverage accounting")
+        if self.coverage is not None:
+            self.coverage.clear()
+            self.coverage.update(normalized[RULE_COVERAGE_KEYS[0]])

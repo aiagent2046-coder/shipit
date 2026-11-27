@@ -14,7 +14,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.scan.rls import scan_rls
+from app.scan.detectors_app.data.rls import scan_rls
 
 
 def _zip(sql: str) -> io.BytesIO:

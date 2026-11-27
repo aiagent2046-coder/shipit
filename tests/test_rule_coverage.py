@@ -2,11 +2,11 @@
 
 import pytest
 
-from app.scan.outbound_url import scan_outbound_url
-from app.scan.path_traversal import scan_path_traversal
-from app.scan.rule_coverage import mark_analysis_limit, track_analysis_limits
-from app.scan.tls_verification import scan_tls_verification
-from app.scan.unsafe_deserialization import scan_unsafe_deserialization
+from app.scan.core.rule_coverage import mark_analysis_limit, track_analysis_limits
+from app.scan.detectors_app.runtime.unsafe_deserialization import scan_unsafe_deserialization
+from app.scan.detectors_web.injection.outbound_url import scan_outbound_url
+from app.scan.detectors_web.injection.path_traversal import scan_path_traversal
+from app.scan.detectors_web.transport.tls_verification import scan_tls_verification
 from tests.test_dependency_scan_budget import CASES, archive
 
 

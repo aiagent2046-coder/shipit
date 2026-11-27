@@ -11,9 +11,9 @@ import pytest
 from app.pipeline import local_cli
 from app.pipeline.report.evidence import RULE_COVERAGE_LABELS, manifest_rows, non_model_status_notices
 from app.pipeline.report.html import render_report
-from app.scan import sql_injection, sql_injection_js
 from app.scan.browser import ScanSession, scan_archive
-from app.scan.manifest import scan_manifest
+from app.scan.detectors_app.data import sql_injection, sql_injection_js
+from app.scan.reporting.manifest import scan_manifest
 
 RULE_ID = "sql-injection-string-built-query"
 PYTHON_QUERY = 'cursor.execute("SELECT * FROM users WHERE id = " + user_id)\n'

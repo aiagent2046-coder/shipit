@@ -9,7 +9,7 @@ the import one hop).
 
 from __future__ import annotations
 
-from app.scan.service_role import scan_service_role
+from app.scan.detectors_app.data.service_role import scan_service_role
 
 from .conftest import NEXTJS_PACKAGE, make_zip
 

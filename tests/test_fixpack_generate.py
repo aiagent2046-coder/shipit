@@ -26,7 +26,7 @@ from app.pipeline.fixpack.generate import (
     render_pr_body,
     render_pr_title,
 )
-from app.scan.secrets import scan_secrets
+from app.scan.core.secrets import scan_secrets
 
 # Distinctive, obviously-fake secrets so absence assertions are unambiguous.
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"          # matches aws-access-key-id
@@ -558,7 +558,7 @@ def test_the_filter_reuses_the_scanner_vocabulary():
     contexts in #125 while this filter still compared against one string
     literal, and that divergence IS the bug. A second hand-maintained copy of
     the list would diverge again."""
-    from app.scan import secrets as scanner
+    from app.scan.core import secrets as scanner
 
     for context in scanner.NON_PRODUCTION_CONTEXTS:
         zip_bytes = make_zip({"config.py": f'API_KEY = "{AWS_KEY}"\n'})
@@ -1144,7 +1144,7 @@ def test_runtime_indirect_shell_parameter_does_not_generate_a_fix():
 
 @pytest.mark.parametrize("paths", [("config.toml", "config.py"), ("config.py", "config.toml")])
 def test_partial_group_with_unsupported_occurrence_is_not_offered_for_sale(paths):
-    from app.scan.collapse import collapse_repeats
+    from app.scan.identity.collapse import collapse_repeats
 
     value = "review-" + "synthetic-credential-123"
     source = f'api_key = "{value}"\n'

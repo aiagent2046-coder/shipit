@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 from app.pipeline.report.html import _finding_row
-from app.scan import review_counterevidence as review
-from app.scan.claim_evidence import model_claim_evidence, narrative_review_checks
-from app.scan.claim_narrative import narrative_projection, project_claim_narrative
+from app.scan.claims.assessments import review_counterevidence as review
+from app.scan.identity.claim_evidence import model_claim_evidence, narrative_review_checks
 from app.scan.llm_scan import run_llm_scan
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.reporting.claim_narrative import narrative_projection, project_claim_narrative
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 from tests.test_python_sql_identity import SOURCES, Responses, archive, observations
 
 CORS = '''function createApp({ extensionId = process.env.SCOUT_EXTENSION_ID || "" } = {}) {

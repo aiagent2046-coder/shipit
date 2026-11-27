@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from app.scan.xss import _declarations, _nodes, _parser, _sink
-from app.scan.xss_context import describe_html_inputs
+from app.scan.detectors_web.injection.xss import _declarations, _nodes, _parser, _sink
+from app.scan.detectors_web.injection.xss_context import describe_html_inputs
 
 
 def describe(source):

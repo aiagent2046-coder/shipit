@@ -7,7 +7,7 @@ import pytest
 from app.pipeline.report.grouping import group_for_display, related_finding_groups
 from app.pipeline.report.html import render_report
 from app.pipeline.report.sarif import build_sarif
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 
 def finding(line: int, confidence: float = .8) -> dict:

@@ -1,7 +1,7 @@
 """Offline coverage and coordinate contracts for context compaction."""
 import re
 
-from app.scan.prompt_context import (
+from app.scan.context.prompt_context import (
     PromptExcerpt,
     imported_production_files,
     numbered_lines,
@@ -10,7 +10,6 @@ from app.scan.prompt_context import (
     source_excerpt,
     ts_excerpt,
 )
-
 
 KEYWORDS = re.compile(r"auth|password|session|jwt|token", re.I)
 

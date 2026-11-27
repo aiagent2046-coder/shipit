@@ -2,9 +2,9 @@ import base64
 import hashlib
 import json
 
-from app.scan import binary_evidence as binary
-from app.scan.forensic_chain import run_forensic_investigation
-from app.scan.obfuscation_delta import analyze_js_obfuscation
+from app.scan.supply import binary_evidence as binary
+from app.scan.supply.forensic_chain import run_forensic_investigation
+from app.scan.supply.obfuscation_delta import analyze_js_obfuscation
 from tests.test_binary_evidence import archive, elf
 
 
@@ -245,7 +245,7 @@ def test_hunt_exploit_dna_extracts_invariant_fingerprint_offline():
 
 
 def test_ffi_matcher_resolves_posix_lib_prefix_and_cpython_wheel_abi_names():
-    from app.scan.forensic_chain import _match_ffi_to_artifact
+    from app.scan.supply.forensic_chain import _match_ffi_to_artifact
 
     artifacts = [
         "native/libhook.so",

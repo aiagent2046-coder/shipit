@@ -1,4 +1,4 @@
-from app.scan.collapse import collapse_repeats
+from app.scan.identity.collapse import collapse_repeats
 
 
 def _f(rule_id, file, sev="low", conf=0.3, masked=""):

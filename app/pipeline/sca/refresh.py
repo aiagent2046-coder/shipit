@@ -44,13 +44,13 @@ from app.pipeline.sca.stage import (
     loses_cve_evidence,
     query_dependencies,
 )
-from app.scan.check_failure_scoring import failed_check_categories
-from app.scan.checks import CheckFinding
+from app.scan.core.checks import CheckFinding
 from app.scan.llm_scan import RUBRICS
-from app.scan.manifest import SCA_LIMITATIONS, sca_limitations, sca_manifest_fields
-from app.scan.project_checks import dependency_checks
-from app.scan.scoring import score_findings
-from app.scan.threat_context import build_threat_context, context_is_current
+from app.scan.reporting.check_failure_scoring import failed_check_categories
+from app.scan.reporting.manifest import SCA_LIMITATIONS, sca_limitations, sca_manifest_fields
+from app.scan.reporting.project_checks import dependency_checks
+from app.scan.reporting.scoring import score_findings
+from app.scan.supply.threat_context import build_threat_context, context_is_current
 
 INVENTORY_VERSION = 1
 

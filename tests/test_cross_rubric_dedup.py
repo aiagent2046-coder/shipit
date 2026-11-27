@@ -3,13 +3,13 @@ issue at the same (file, line); we keep one, note the other, and never
 double-count it in the score."""
 
 
-from app.scan.cross_rubric_dedup import (
-    dedup_cross_rubric,
-    _title_ratio,
-    _TITLE_SIMILARITY_THRESHOLD,
+from app.scan.reporting.cross_rubric_dedup import (
     _NEARBY_LINE_WINDOW,
+    _TITLE_SIMILARITY_THRESHOLD,
+    _title_ratio,
+    dedup_cross_rubric,
 )
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 
 def _llm(rubric, sev, conf=0.9, file="src/api/route.ts", line=42, expl="",
@@ -315,7 +315,7 @@ def test_pre_grouped_inputs_are_flat_idempotent_and_keep_origin_statuses():
 
 
 def test_legacy_representative_change_leaves_no_joinable_representatives():
-    from app.scan.cross_rubric_dedup import _same_issue
+    from app.scan.reporting.cross_rubric_dedup import _same_issue
     # Old first-anchor grouping produced [line 13, line 16], which merged on
     # a second pass. The strongest representative must anchor from the outset.
     out = dedup_cross_rubric([

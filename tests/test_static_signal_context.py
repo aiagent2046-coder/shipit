@@ -7,10 +7,10 @@ from dataclasses import asdict
 from app.pipeline.report.evidence import claim_evidence_rows, finding_counts, source_severity_counts
 from app.pipeline.report.html import render_report
 from app.pipeline.report.plain_language import plain_fields
-from app.scan.checks import run_checks
-from app.scan.claim_evidence import static_claim_evidence
-from app.scan.scoring import ScoredFinding, compute_scores
-from app.scan.secrets import scan_secrets
+from app.scan.core.checks import run_checks
+from app.scan.core.secrets import scan_secrets
+from app.scan.identity.claim_evidence import static_claim_evidence
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 
 def archive(files):

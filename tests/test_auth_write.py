@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.auth_write import RULE_ID, scan_auth_write
+from app.scan.detectors_app.data.auth_write import RULE_ID, scan_auth_write
 from app.scan.static import run_static_scan
 
 GUARDED = '''from fastapi import APIRouter, Depends

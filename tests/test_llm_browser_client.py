@@ -1,12 +1,12 @@
 """Unit and corpus-mutation tests for app/scan/llm_browser_client.py."""
 
 import io
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 import pytest
 
-from app.scan.llm_browser_client import RULE_ID, scan_llm_browser_client
+from app.scan.detectors_web.transport.llm_browser_client import RULE_ID, scan_llm_browser_client
 from app.scan.static import run_static_scan
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

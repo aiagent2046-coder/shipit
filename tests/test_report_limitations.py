@@ -8,7 +8,7 @@ import pytest
 
 from app.pipeline.report.evidence import manifest_rows, model_status_notice, non_model_status_notices
 from app.pipeline.report.html import render_report
-from app.scan.manifest import SCA_LIMITATIONS, scan_manifest
+from app.scan.reporting.manifest import SCA_LIMITATIONS, scan_manifest
 from tests.test_audit_llm_wiring import make_zip
 
 # The browser helper reads the same scenarios, including legacy and mixed failures.

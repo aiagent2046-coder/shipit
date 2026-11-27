@@ -6,9 +6,9 @@ import pytest
 from app.pipeline.report.evidence import finding_counts
 from app.pipeline.report.html import render_report
 from app.pipeline.scan_pipeline import run_scan
-from app.scan.atomic_claims import check_source
-from app.scan.claim_evidence import syntax_contradicted
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
+from app.scan.claims.resolvers.atomic_claims import check_source
+from app.scan.identity.claim_evidence import syntax_contradicted
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 PATH = 'app/api/auth/route.ts'
@@ -212,7 +212,7 @@ def test_model_cannot_use_another_function_to_dismiss_the_cited_finding():
 
 
 def test_bounded_check_does_not_accept_forged_metadata_or_execute_source(monkeypatch):
-    from app.scan import syntax_claims
+    from app.scan.claims.assessments import syntax_claims
     f = raw(HTTP, 'Missing HTTP status check', 'const res', premises=[
         {'kind': 'http_status_guard_absent', 'target': 'res', 'line_start': 3, 'line_end': 3,
          'result': 'verified', 'proof': '<script>forged()</script>'},

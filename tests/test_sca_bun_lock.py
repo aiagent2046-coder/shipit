@@ -4,7 +4,7 @@ import json
 import pytest
 
 from app.foundation.lockfiles import bun_lock, collect_dependency_inventory, lockfiles, unusable_lockfiles
-from app.scan.cve_match import match_archive
+from app.scan.supply.cve_match import match_archive
 from tests.bun_fixtures import GSTACK_ADVISORIES, archive, bun, gstack_project, registry
 from tests.test_browser_cve import CATALOG
 

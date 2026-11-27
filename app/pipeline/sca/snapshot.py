@@ -7,10 +7,10 @@ from pathlib import Path
 
 from app.foundation.lockfiles import normalize_pypi
 from app.pipeline.local_store import MAX_CATALOG_BYTES, decode_catalog
-from app.scan.cve_evidence import empty_cve_summary
-from app.scan.cve_match import RULE_ID, match_archive
-from app.scan.remediation_catalog import CATALOG_VERSION as REMEDIATION_CATALOG_VERSION
-from app.scan.threat_context import context_is_current
+from app.scan.supply.cve_evidence import empty_cve_summary
+from app.scan.supply.cve_match import RULE_ID, match_archive
+from app.scan.supply.remediation_catalog import CATALOG_VERSION as REMEDIATION_CATALOG_VERSION
+from app.scan.supply.threat_context import context_is_current
 
 CATALOG_PATH = Path(__file__).resolve().parents[2] / "data/cve-catalog.json"
 CHECKSUM_PATH = CATALOG_PATH.with_suffix(".json.sha256")

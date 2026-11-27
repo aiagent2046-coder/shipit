@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.scan.sql_schema import parse_schema as fix_parse
+from app.scan.detectors_app.data.sql_schema import parse_schema as fix_parse
 from scripts.measure.measure_supabase_rls_yield import parse_schema as measure_parse
 
 CASES = {

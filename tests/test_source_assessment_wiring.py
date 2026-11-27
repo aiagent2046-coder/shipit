@@ -9,9 +9,9 @@ import pytest
 from app.pipeline.report.evidence import claim_evidence_rows, finding_counts, source_severity_counts
 from app.pipeline.report.html import _finding_row, render_report
 from app.pipeline.scan_pipeline import run_scan
-from app.scan.claim_evidence import partial_contradicted, unsupported_transport
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.identity.claim_evidence import partial_contradicted, unsupported_transport
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 

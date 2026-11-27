@@ -5,8 +5,8 @@ import zipfile
 
 import pytest
 
-from app.scan.issue_identity import SourceIssueResolver
-from app.scan.source_claim_assessment import FACT_KIND, SourceClaimVerifier
+from app.scan.claims.assessments.source_claim_assessment import FACT_KIND, SourceClaimVerifier
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
 from scripts.eval.luna_pilot_cases import supplemental_cases
 
 

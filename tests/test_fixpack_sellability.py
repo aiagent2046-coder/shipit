@@ -37,7 +37,7 @@ from app.pipeline.fixpack.generate import (
     has_auto_fixable_findings,
     mark_unfixable_findings,
 )
-from app.scan.collapse import collapse_repeats
+from app.scan.identity.collapse import collapse_repeats
 from app.scan.static import run_static_scan
 
 

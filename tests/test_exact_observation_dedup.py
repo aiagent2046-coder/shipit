@@ -18,9 +18,9 @@ from pathlib import Path
 import pytest
 
 from app.foundation.llm.client import LLMClient, LLMUsage
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.llm_scan import run_llm_scan
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "exact_observation_repeats.json"
 

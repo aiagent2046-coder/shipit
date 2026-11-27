@@ -11,10 +11,11 @@ from app.foundation.llm.client import LLMClient
 from app.pipeline import local_cli
 from app.pipeline.report.evidence import security_agent_rows
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
-from app.scan import evidence_acquisition, security_agent
-from app.scan.agent_chain import normalize_chain
 from app.scan.browser import scan_archive
-from app.scan.evidence_record import normalize_acquisition
+from app.scan.evidence import evidence_acquisition
+from app.scan.evidence.agent_chain import normalize_chain
+from app.scan.evidence.evidence_record import normalize_acquisition
+from app.scan.reporting import security_agent
 from tests.test_security_agent import archive
 
 FILE_LOADERS = '''import pickle
@@ -146,7 +147,7 @@ def test_shared_budget_exhaustion_cannot_claim_complete_file_evidence(monkeypatc
 
 
 def test_collector_failure_preserves_detection_without_exposing_exception_text(monkeypatch):
-    from app.scan import deserialization_file_evidence
+    from app.scan.evidence import deserialization_file_evidence
 
     def failed(*args, **kwargs):
         raise ValueError("PRIVATE CUSTOMER VALUE")

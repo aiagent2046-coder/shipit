@@ -12,8 +12,8 @@ from app.pipeline.report.html import render_report
 from app.pipeline.report.plain_language import plain_fields
 from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.browser import scan_archive
-from app.scan.cve_match import match_archive
-from app.scan.remediation_catalog import remediation_record
+from app.scan.supply.cve_match import match_archive
+from app.scan.supply.remediation_catalog import remediation_record
 from tests.test_browser_cve import CATALOG, project
 from tests.test_remediation_catalog import SOURCES, advisory
 

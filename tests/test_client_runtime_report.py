@@ -5,8 +5,8 @@ import pytest
 
 from app.pipeline.report.evidence import security_agent_rows
 from app.pipeline.report.html import render_report
-from app.scan.client_runtime_chain import attach_client_runtime
-from app.scan.client_runtime_record import ARCHIVE_SHA256
+from app.scan.evidence.client_runtime_chain import attach_client_runtime
+from app.scan.evidence.client_runtime_record import ARCHIVE_SHA256
 from tests.test_client_runtime_record import runtime_evidence
 
 

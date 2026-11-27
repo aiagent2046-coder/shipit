@@ -29,7 +29,7 @@ import zipfile
 
 import pytest
 
-from app.scan.ci_deploy_source import (
+from app.scan.detectors_app.runtime.ci_deploy_source import (
     RULE_ID,
     deployed_repositories,
     scan_ci_deploy_source,
@@ -224,7 +224,7 @@ def test_comment_backslash_does_not_consume_the_next_clone():
 
 
 def test_single_quoted_literal_is_not_joined_as_a_shell_continuation():
-    from app.scan.ci_deploy_source import _join_shell_continuations
+    from app.scan.detectors_app.runtime.ci_deploy_source import _join_shell_continuations
 
     source = "printf 'line one\\\nline two'"
     assert _join_shell_continuations(source) == source

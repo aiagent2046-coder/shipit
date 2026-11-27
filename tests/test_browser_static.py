@@ -49,7 +49,7 @@ def isolated_scan(*, javascript=False):
                             'supabase.from("profiles");\\n')
         result = scan_archive(data.getvalue())
         if JAVASCRIPT:
-            from app.scan.table_names import read_named_tables
+            from app.scan.detectors_app.data.table_names import read_named_tables
             tables = read_named_tables(io.BytesIO(data.getvalue()))
             result["named_tables"] = sorted(tables.from_code)
             result["has_dynamic_from"] = tables.has_dynamic_from
@@ -212,7 +212,7 @@ def test_browser_rejects_duplicate_paths():
 def test_optional_imports_preserve_real_callable_identity():
     pytest.importorskip("tree_sitter_typescript")
     from app.scan import static
-    from app.scan.sql_injection_js import scan_sql_injection_js
+    from app.scan.detectors_app.data.sql_injection_js import scan_sql_injection_js
     assert static.scan_sql_injection_js is scan_sql_injection_js
 
 

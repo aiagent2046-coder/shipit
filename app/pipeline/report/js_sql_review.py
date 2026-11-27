@@ -1,5 +1,5 @@
 """Plain text presentation of bounded JavaScript SQL source evidence."""
-from app.scan.js_sql_review import normalize_review
+from app.scan.detectors_app.data.js_sql_review import normalize_review
 
 
 def js_sql_review_rows(value: object, source: object) -> list[tuple[str, str]]:

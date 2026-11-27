@@ -1,8 +1,8 @@
 """Regression proof: literal dictionaries never blanket-suppress mutable input."""
 import pytest
 
-from app.scan.xss import _nodes, _parser
-from app.scan.xss_literal_loop import build_literal_loop_bindings, literal_loop_binding
+from app.scan.detectors_web.injection.xss import _nodes, _parser
+from app.scan.detectors_web.injection.xss_literal_loop import build_literal_loop_bindings, literal_loop_binding
 
 
 def proved(source, target="title"):

@@ -1,20 +1,23 @@
 """Group one validated source correction, never the originals' different claims."""
+import json
 from copy import deepcopy
 from dataclasses import asdict, replace
-import json
 from pathlib import Path
 
 import pytest
 
-from app.scan.claim_narrative import narrative_projection
-from app.scan.fact_projection_grouping import (
-    CONSEQUENCES, MECHANISM, SCOPE, group_fact_projections, validated_fact_group,
-)
 from app.scan.llm_scan import run_llm_scan
-from app.scan.scoring import ScoredFinding
+from app.scan.reporting.claim_narrative import narrative_projection
+from app.scan.reporting.fact_projection_grouping import (
+    CONSEQUENCES,
+    MECHANISM,
+    SCOPE,
+    group_fact_projections,
+    validated_fact_group,
+)
+from app.scan.reporting.scoring import ScoredFinding
 from tests.test_audit_llm_wiring import FakeLLM
 from tests.test_source_claim_assessment import CALLER, HELPER, archive
-
 
 PAIR = Path(__file__).parent / "fixtures/fact_projection_d8ae8860.json"
 

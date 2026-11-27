@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.auth_read import RULE_ID, scan_auth_read
+from app.scan.detectors_app.data.auth_read import RULE_ID, scan_auth_read
 from app.scan.static import run_static_scan
 
 PREFIX = '''from fastapi import APIRouter, Depends

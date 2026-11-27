@@ -1,18 +1,18 @@
 """Oct 3 production report replay and source-bound selectors; no model calls."""
 
+import json
 from copy import deepcopy
 from dataclasses import asdict
-import json
 from pathlib import Path
 
 import pytest
 
-from app.scan.atomic_claims import KINDS, update_where_proof
-from app.scan.claim_narrative import narrative_projection
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.issue_identity import SourceIssueResolver
+from app.scan.claims.resolvers.atomic_claims import KINDS, update_where_proof
+from app.scan.claims.resolvers.issue_identity import SourceIssueResolver
 from app.scan.llm_scan import run_llm_scan
-from app.scan.scoring import compute_scores
+from app.scan.reporting.claim_narrative import narrative_projection
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import compute_scores
 from tests.test_python_sql_identity import SOURCES, Responses, archive, observations
 
 

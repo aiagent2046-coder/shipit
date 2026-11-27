@@ -13,7 +13,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.scan.rls import RULE_ID, WRITE_RULE_ID, private_shape, scan_rls
+from app.scan.detectors_app.data.rls import RULE_ID, WRITE_RULE_ID, private_shape, scan_rls
 from app.scan.static import run_static_scan
 
 

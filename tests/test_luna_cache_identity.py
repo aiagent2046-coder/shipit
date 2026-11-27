@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.scan.model_identity import configured_model_engine_version
+from app.scan.identity.model_identity import configured_model_engine_version
 from app.scan.version import AUDIT_ENGINE_VERSION
 
 PROVIDER_ENV = (

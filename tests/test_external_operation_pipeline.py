@@ -7,10 +7,10 @@ import pytest
 
 from app.pipeline.report.html import _finding_row
 from app.pipeline.scan_pipeline import run_scan
-from app.scan.claim_evidence import narrative_review_checks
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.external_operation_identity import compatible_external_claims, valid_external_identity
-from app.scan.scoring import ScoredFinding, compute_scores
+from app.scan.identity.claim_evidence import narrative_review_checks
+from app.scan.identity.external_operation_identity import compatible_external_claims, valid_external_identity
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 from tests.test_external_call_assessment import CLASSIFIED, POLL
 from tests.test_external_operation_identity import item

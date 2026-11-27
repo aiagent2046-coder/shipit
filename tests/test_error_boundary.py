@@ -19,7 +19,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.scan.error_boundary import (
+from app.scan.detectors_app.runtime.error_boundary import (
     COVERAGE_COMPLETE,
     COVERAGE_EXHAUSTED,
     MOUNT_NO,
@@ -307,7 +307,7 @@ def test_an_exhausted_budget_produces_no_finding(monkeypatch):
     No finding, because we have no claim -- we stopped reading before we could
     have one. Not a finding with a caveat: a finding IS a claim.
     """
-    monkeypatch.setattr("app.scan.error_boundary._MAX_SOURCE_FILES", 20)
+    monkeypatch.setattr("app.scan.detectors_app.runtime.error_boundary._MAX_SOURCE_FILES", 20)
     scan = scan_error_boundary(_zip(_monorepo_with_a_real_boundary(200)))
 
     assert scan.findings == []
@@ -319,7 +319,7 @@ def test_an_exhausted_budget_produces_no_finding(monkeypatch):
 def test_the_byte_budget_also_stops_it(monkeypatch):
     """Two bounds, because a repository can be a few enormous files or many
     small ones and either shape can outrun the reader."""
-    monkeypatch.setattr("app.scan.error_boundary._MAX_TOTAL_BYTES", 500)
+    monkeypatch.setattr("app.scan.detectors_app.runtime.error_boundary._MAX_TOTAL_BYTES", 500)
     files = dict(ROUTED_NEXT)
     for i in range(40):
         files[f"src/big{i}.tsx"] = "// " + ("x" * 400)
@@ -335,7 +335,7 @@ def test_a_boundary_found_before_the_budget_runs_out_is_still_conclusive(
     """Silence is conclusive the moment a boundary is seen: nothing later in
     the walk could unsee it. Only ABSENCE needs the whole pass, which is the
     asymmetry `coverage` exists to record."""
-    monkeypatch.setattr("app.scan.error_boundary._MAX_SOURCE_FILES", 5)
+    monkeypatch.setattr("app.scan.detectors_app.runtime.error_boundary._MAX_SOURCE_FILES", 5)
     files = {
         **ROUTED_SPA,
         "src/AAA_boundary.tsx": "class B{componentDidCatch(){}}",
@@ -617,7 +617,7 @@ def test_the_reading_budget_is_shared_across_workspace_packages(monkeypatch):
     """Per-package budgets would let a six-application monorepo cost six times
     a single app's worth of reading for one audit. The allowance is what we are
     willing to spend on a REPOSITORY."""
-    monkeypatch.setattr("app.scan.error_boundary._MAX_SOURCE_FILES", 6)
+    monkeypatch.setattr("app.scan.detectors_app.runtime.error_boundary._MAX_SOURCE_FILES", 6)
     files = {"package.json": '{"private":true,"workspaces":["apps/*"]}'}
     for app in ("a", "b", "c"):
         files[f"apps/{app}/package.json"] = (

@@ -8,10 +8,10 @@ import pytest
 
 from app.pipeline.report.evidence import finding_counts, source_severity_counts
 from app.pipeline.report.html import render_report
-from app.scan.claim_evidence import syntax_contradicted
-from app.scan.cross_rubric_dedup import dedup_cross_rubric
-from app.scan.scoring import ScoredFinding, compute_scores
-from app.scan.syntax_claims import MAX_CHECKS, MAX_FILE_BYTES, SyntaxVerifier
+from app.scan.claims.assessments.syntax_claims import MAX_CHECKS, MAX_FILE_BYTES, SyntaxVerifier
+from app.scan.identity.claim_evidence import syntax_contradicted
+from app.scan.reporting.cross_rubric_dedup import dedup_cross_rubric
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 

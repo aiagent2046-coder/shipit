@@ -1,15 +1,18 @@
 """Saved file provenance cannot become HTTP, trust or cross-source evidence."""
 import ast
-from copy import deepcopy
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
-from app.scan.evidence_record import acquisition_rows, normalize_acquisition, normalize_deserialization_observation
-from app.scan.source_snapshot import source_span
-
+from app.scan.evidence.evidence_record import (
+    acquisition_rows,
+    normalize_acquisition,
+    normalize_deserialization_observation,
+)
+from app.scan.evidence.source_snapshot import source_span
 
 FILE_PICKLE = '''import pickle
 def read_checkpoint(path):

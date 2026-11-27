@@ -8,11 +8,11 @@ from copy import deepcopy
 
 import pytest
 
-from app.scan import scoped_ui_claim_assessment as c
-from app.scan.atomic_claims import requests
-from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
-from app.scan.scoring import ScoredFinding, compute_scores
-from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.claims.assessments import scoped_ui_claim_assessment as c
+from app.scan.claims.assessments.syntax_claims import SyntaxVerifier
+from app.scan.claims.resolvers.atomic_claims import requests
+from app.scan.identity.claim_evidence import partial_contradicted, syntax_contradicted
+from app.scan.reporting.scoring import ScoredFinding, compute_scores
 
 PATH = "src/Page.tsx"
 HTTP = """import {useState} from 'react';

@@ -8,9 +8,9 @@ import httpx
 from app.foundation.llm.client import LLMClient, Provider
 from app.pipeline.report.evidence import manifest_rows
 from app.scan import llm_scan
-from app.scan.manifest import scan_manifest
-from app.scan.prompt_context import PromptExcerpt
-from app.scan.secrets import is_non_production_path
+from app.scan.context.prompt_context import PromptExcerpt
+from app.scan.core.secrets import is_non_production_path
+from app.scan.reporting.manifest import scan_manifest
 
 
 def archive(files):

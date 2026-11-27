@@ -6,8 +6,8 @@ on:
       - 'scripts/binary/inspect_binary_ghidra.py'
       - 'scripts/binary/ghidra/**'
       - 'tests/test_ghidra_evidence.py'
-      - 'app/scan/binary_evidence.py'
-      - 'app/scan/project_checks.py'
+      - 'app/scan/supply/binary_evidence.py'
+      - 'app/scan/reporting/project_checks.py'
       - 'scripts/binary/attach_binary_evidence.py'
       - 'tests/test_binary_evidence.py'
       - 'tests/test_project_checks.py'
@@ -19,8 +19,8 @@ on:
       - 'scripts/binary/inspect_binary_ghidra.py'
       - 'scripts/binary/ghidra/**'
       - 'tests/test_ghidra_evidence.py'
-      - 'app/scan/binary_evidence.py'
-      - 'app/scan/project_checks.py'
+      - 'app/scan/supply/binary_evidence.py'
+      - 'app/scan/reporting/project_checks.py'
       - 'scripts/binary/attach_binary_evidence.py'
       - 'tests/test_binary_evidence.py'
       - 'tests/test_project_checks.py'
@@ -87,8 +87,8 @@ jobs:
           import json
           import zipfile
           from pathlib import Path
-          from app.scan.binary_evidence import attach_binary_reports
-          from app.scan.project_checks import project_checks
+          from app.scan.supply.binary_evidence import attach_binary_reports
+          from app.scan.reporting.project_checks import project_checks
           buffer = io.BytesIO()
           with zipfile.ZipFile(buffer, 'w') as archive:
               archive.writestr('bin/sample', Path('artifacts/static_sample.elf').read_bytes())

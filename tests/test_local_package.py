@@ -15,14 +15,14 @@ def test_relocation_preserves_evidence_strings_urls_and_unicode_positions():
     source = '''"""from app.scan is evidence, not an import."""
 label = "кириллица"; from app.scan.version import AUDIT_ENGINE_VERSION
 from app.scan import static as stage
-fn = optional_native_function("app.scan.cookie_flags", "scan_cookie_flags")
+fn = optional_native_function("app.scan.detectors_web.transport.cookie_flags", "scan_cookie_flags")
 url = "https://raw.githubusercontent.com/aiagent2046-coder/shipit/main/app/data/cve-catalog.json"
 '''
     result = builder.relocate(source)
     tree = ast.parse(result)
     assert [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)] == [
         'drydock_local.scan.version', 'drydock_local.scan']
-    assert 'optional_native_function("drydock_local.scan.cookie_flags"' in result
+    assert 'optional_native_function("drydock_local.scan.detectors_web.transport.cookie_flags"' in result
     assert '"""from app.scan is evidence, not an import."""' in result
     assert '/main/app/data/cve-catalog.json' in result
     assert source.count('\n') == result.count('\n')
@@ -57,8 +57,9 @@ def test_new_dynamic_imports_cannot_escape_relocation():
 def test_real_closure_and_runtime_lock_are_complete():
     files = builder.source_files(ROOT)
     names = {p.relative_to(ROOT).as_posix() for p in files}
-    assert {'app/pipeline/local_cli.py', 'app/pipeline/local_store.py', 'app/scan/cookie_flags.py',
-            'app/scan/recommendations.py',
+    assert {'app/pipeline/local_cli.py', 'app/pipeline/local_store.py',
+            'app/scan/detectors_web/transport/cookie_flags.py',
+            'app/scan/claims/assessments/recommendations.py',
             'app/foundation/lockfiles/resolved_locks.py',
             'app/foundation/lockfiles/bun_lock.py',
             'app/runtime/snapshot_record.py'} <= names
