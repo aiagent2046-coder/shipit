@@ -1,29 +1,21 @@
-"""Wide-directory and long-file architecture limits with a ratchet allow list.
+"""Strict zero-debt wide-directory and long-file architecture limits.
 
-Ports the two counting lints of the deslop-please method (thresholds are the
-method's, rationale in its source): long-file -- a Python file over 2000
-lines; wide-directory -- a directory holding more than 15 members (regular
-files plus subdirectories that hold at least one file). Scope is the Python
-codebase (app/, scripts/, tests/). tests/detectors/** and tests/fixtures/**
-are detector corpora -- deliberate data trees that grow with every new
-detector -- so they are excluded from wide-directory; long-file still
-applies to any Python file there.
+Enforces the two structural size limits of the deslop-please method across the
+Python codebase (app/, scripts/, tests/) with zero exemptions:
+- long-file: a Python file over 2000 lines;
+- wide-directory: a directory holding more than 15 members (regular files plus
+  subdirectories that hold at least one file).
+
+tests/detectors/** and tests/fixtures/** are detector corpora -- deliberate data
+trees that grow with every new detector -- so they are excluded from
+wide-directory; long-file still applies to any Python file there.
 
 Usage:
-    python scripts/check_architecture_lints.py                 # fail on NEW debt
-    python scripts/check_architecture_lints.py --update-allow  # rewrite the baseline
-
-The allow list (.architecture-lint-allow.json at the repository root)
-suppresses known debt by path; anything NEW fails the check. Stale entries
-(a file that shrank below the limit, a directory that narrowed) also fail,
-so the list cannot rot behind refactors. A suppressed path may still grow
-without complaint -- the ratchet tracks where the debt is, not how big it
-has become.
+    python scripts/check_architecture_lints.py
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -32,7 +24,7 @@ MOST_MEMBERS = 15
 MOST_LINES = 2000
 SCOPE = ("app", "scripts", "tests")
 WIDE_EXCLUDED_PREFIXES = ("tests/detectors", "tests/fixtures")
-ALLOW_FILE = ".architecture-lint-allow.json"
+FORBIDDEN_ALLOW_FILE = ".architecture-lint-allow.json"
 
 
 def _count_members(directory: Path) -> int:
@@ -78,59 +70,47 @@ def measure(root: Path) -> dict[str, dict[str, int]]:
                 if not name.endswith(".py"):
                     continue
                 rel = Path(directory, name).relative_to(root).as_posix()
-                lines = sum(1 for _ in open(Path(directory, name), encoding="utf-8",
-                                            errors="replace"))
+                with open(Path(directory, name), encoding="utf-8",
+                          errors="replace") as handle:
+                    lines = sum(1 for _ in handle)
                 if lines > MOST_LINES:
                     long_files[rel] = lines
     return {"long_file": long_files, "wide_directory": wide_directories}
 
 
 def check(current: dict[str, dict[str, int]],
-          allowed: dict[str, dict[str, int]]) -> list[str]:
-    """Return one message per problem: new debt, or a stale allow entry."""
-    problems = []
+          root: Path | None = None) -> list[str]:
+    """Return one message per structural limit violation (zero-debt policy)."""
+    problems: list[str] = []
+    if root is not None and (root / FORBIDDEN_ALLOW_FILE).exists():
+        problems.append(
+            f"FORBIDDEN allow-file: {FORBIDDEN_ALLOW_FILE} exists -- "
+            f"architecture size limits enforce strict zero debt; delete it")
     for lint in ("long_file", "wide_directory"):
+        unit = f"lines > {MOST_LINES}" if lint == "long_file" else f"members > {MOST_MEMBERS}"
         for path in sorted(current[lint]):
-            if path not in allowed.get(lint, {}):
-                problems.append(
-                    f"NEW {lint.replace('_', '-')}: {path} "
-                    f"({current[lint][path]} {'lines' if lint == 'long_file' else 'members'}) "
-                    f"-- refit under the limit or record it with --update-allow")
-        for path in sorted(allowed.get(lint, {})):
-            if path not in current[lint]:
-                problems.append(
-                    f"STALE {lint.replace('_', '-')}: {path} is in the allow list "
-                    f"but no longer over the limit -- remove it with --update-allow")
+            count = current[lint][path]
+            noun = "lines" if lint == "long_file" else "members"
+            problems.append(
+                f"{lint.replace('_', '-')}: {path} ({count} {noun}; limit is "
+                f"<= {MOST_LINES if lint == 'long_file' else MOST_MEMBERS}, "
+                f"found {unit}) -- split or narrow without allow-list exemptions")
     return problems
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path,
                         default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--update-allow", action="store_true",
-                        help="rewrite the allow list with the current measurements")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     root = args.root.resolve()
     current = measure(root)
-    allow_path = root / ALLOW_FILE
-    if args.update_allow:
-        allow_path.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n",
-                              encoding="utf-8")
-        recorded = sum(len(v) for v in current.values())
-        print(f"architecture-lints UPDATED ({recorded} allowed entries recorded)")
-        return 0
-    try:
-        allowed = json.loads(allow_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        allowed = {"long_file": {}, "wide_directory": {}}
-    problems = check(current, allowed)
+    problems = check(current, root=root)
     for problem in problems:
         print(problem)
     if problems:
         return 1
-    recorded = sum(len(v) for v in allowed.values())
-    print(f"architecture-lints KEPT ({recorded} allowed)")
+    print("architecture-lints KEPT (strict zero-debt)")
     return 0
 
 

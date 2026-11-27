@@ -9,7 +9,7 @@ root_packages =
 #
 # Baseline (2026-11-25): the 30 cycle edges measured on main are listed in
 # ignore_imports below, so the CI gate fails on NEW cycles only. This is the
-# `--update-allow` ratchet pattern: known debt is tracked, new debt fails.
+# Strict zero-debt contract: every sibling package graph stays acyclic.
 # Baseline is EMPTY: all 30 measured edges are untangled from first
 # principles (fix phase complete -- see the refactor commits). The gate is
 # fully live: any new sibling cycle fails the build.
