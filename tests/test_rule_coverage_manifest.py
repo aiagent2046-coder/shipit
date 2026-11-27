@@ -7,12 +7,12 @@ import zipfile
 
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.report.html import render_report
 from app.report.sarif import build_sarif
 from app.scan.manifest import scan_manifest
-from app.scan_pipeline import run_scan
 from app.scan.rule_coverage import RULE_COVERAGE_KEYS, normalize_rule_coverage
+from app.scan_pipeline import run_scan
 
 
 def archive(files):

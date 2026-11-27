@@ -7,7 +7,6 @@ phase.
 """
 from __future__ import annotations
 
-
 # The three values `score["basis"]` can take, named because they are a pricing
 # boundary and not only a diagnostic. BASIS_STATIC_ONLY used to mean "something
 # went wrong or the budget ran out", and still does -- it is what a preview

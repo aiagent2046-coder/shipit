@@ -5,7 +5,7 @@ import zipfile
 
 import httpx
 
-from app.llm.client import LLMClient, Provider
+from app.foundation.llm.client import LLMClient, Provider
 from app.report.evidence import manifest_rows
 from app.scan import llm_scan
 from app.scan.manifest import scan_manifest

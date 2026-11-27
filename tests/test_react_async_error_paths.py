@@ -11,7 +11,6 @@ from app.scan.source_facts import facts_prompt
 from app.scan.syntax_claims import SyntaxVerifier
 from tests.test_react_async_context import archive, check, component, scan
 
-
 WORKSTYLE = '''setBusy(true);
 try {
   const resp = await fetch('/private-url');
@@ -239,7 +238,7 @@ def test_html_preserves_free_original_and_excludes_only_contradicted_absence():
 
 
 def test_model_output_is_checked_against_precollected_facts_without_extra_calls():
-    from app.llm.client import LLMClient, LLMUsage, Provider
+    from app.foundation.llm.client import LLMClient, LLMUsage, Provider
     from app.scan.llm_scan import run_llm_scan
     from app.scan.source_facts import collect_source_facts
     source = component(WORKSTYLE)

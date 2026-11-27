@@ -1,29 +1,29 @@
 """Public KEV updates refresh receipts, not project findings or paid analysis."""
-from copy import deepcopy
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import socket
 import subprocess
 import sys
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app import local_cli, local_store
 from app.audit_history import refresh_cached_preview_history
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.sca import snapshot
 from app.sca.refresh import refresh_score_threat_context
 from app.scan import kev_catalog
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.threat_context import build_threat_context
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM
 from tests.test_audit_preview_history import Repo, row
 from tests.test_local_package import builder
-from tests.test_project_checks import catalog as advisory_catalog, files, project  # noqa: F401
-
+from tests.test_project_checks import catalog as advisory_catalog  # noqa: F401
+from tests.test_project_checks import files, project
 
 pytestmark = pytest.mark.usefixtures("advisory_catalog")
 

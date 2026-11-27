@@ -248,9 +248,9 @@ from pathlib import Path
 # server, whose venv is a built release with neither.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.ingest.github_fetch import fetch_repo_zip as github_fetch_repo_zip  # noqa: E402
-from app.llm import pricing  # noqa: E402
-from app.llm.client import LLMClient  # noqa: E402
+from app.foundation.ingest.github_fetch import fetch_repo_zip as github_fetch_repo_zip  # noqa: E402
+from app.foundation.llm import pricing  # noqa: E402
+from app.foundation.llm.client import LLMClient  # noqa: E402
 from app.scan.llm_scan import (  # noqa: E402
     MAX_FILE_CHARS,
     MAX_TOTAL_CHARS,

@@ -15,22 +15,22 @@ import re
 import uuid
 
 import httpx
+from fastapi.testclient import TestClient
 
-from app.accounts import api_key_prefix
 from app.billing import deliver_key_once, telegram_stars
+from app.foundation.accounts import api_key_prefix
 from app.main import (
     app,
     get_account_repo,
     get_billing_transport,
     get_payment_repo,
 )
-from fastapi.testclient import TestClient
 from tests.conftest import (
-    enable_monitoring,
     FakeAccountRepo,
     FakeCompletionCasMixin,
     FakeKeyDeliveryMixin,
     FakeProGrantMixin,
+    enable_monitoring,
 )
 
 client = TestClient(app)
@@ -1216,7 +1216,7 @@ async def test_that_charge_pages_the_operator(monkeypatch):
         seen.append((text, kwargs))
         return True
 
-    monkeypatch.setattr("app.alerts.notify_operator", fake_notify)
+    monkeypatch.setattr("app.notify.alerts.notify_operator", fake_notify)
 
     accounts = FakeAccountRepo()
     payments, calls = FakePaymentRepo(account_repo=accounts), []
@@ -1238,7 +1238,7 @@ async def test_the_alert_cannot_cost_the_payer_their_key(monkeypatch):
     async def exploding_notify(text, **kwargs):
         raise RuntimeError("alert channel down")
 
-    monkeypatch.setattr("app.alerts.notify_operator", exploding_notify)
+    monkeypatch.setattr("app.notify.alerts.notify_operator", exploding_notify)
 
     accounts = FakeAccountRepo()
     payments, calls = FakePaymentRepo(account_repo=accounts), []

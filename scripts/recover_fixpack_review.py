@@ -143,7 +143,7 @@ def fetch_pr(owner: str, repo: str, number: int) -> dict:
 
 
 def fetch_source_zip(owner: str, repo: str, revision: str, *, transport=None) -> bytes:
-    from app.ingest.validators import MAX_ARCHIVE_BYTES
+    from app.foundation.ingest.validators import MAX_ARCHIVE_BYTES
 
     guards.full_revision(revision)
     return _public_bytes(f"{GITHUB_API}/repos/{owner}/{repo}/zipball/{revision}",
@@ -262,7 +262,7 @@ def save_private_result(directory: Path, job_id: str, result: dict) -> Path:
 async def recover_review(request: ReviewRequest, *, apply: bool, directory: Path, store,
                          runner, llm_client, audit_repo, llm_usage_repo, repo_fetcher,
                          engine: str, pr_loader=fetch_pr, downloader=fetch_source_zip) -> dict:
-    from app.ingest.validators import validate_zip
+    from app.foundation.ingest.validators import validate_zip
     from app.scan_pipeline import content_digest
 
     job, payment = store.snapshot(request)
@@ -357,8 +357,8 @@ def configure_private_log(path: Path):
 
 async def run_on_production(request: ReviewRequest, apply: bool, directory: Path, dsn: str) -> dict:
     from app.db import AuditRepository, LlmUsageRepository, close_pool
-    from app.ingest.github_fetch import fetch_repo_zip
-    from app.llm.client import LLMClient
+    from app.foundation.ingest.github_fetch import fetch_repo_zip
+    from app.foundation.llm.client import LLMClient
     from app.main import run_repo_audit
     from app.runtime.log_context import log_context
     from app.scan_pipeline import AUDIT_ENGINE_VERSION

@@ -30,17 +30,17 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from app.scan.checks import CheckFinding
-from app.scan.cve_evidence import empty_cve_summary, normalize_cve_summary
-from app.sca.cve import CveClient
-from app.lockfiles import (
+from app.foundation.lockfiles import (
     Dependency,
     collect_dependency_inventory,
     occurrence_evidence,
     occurrence_summary,
     unusable_lockfiles,
 )
+from app.sca.cve import CveClient
 from app.sca.osv import OsvClient, OsvUnavailable
+from app.scan.checks import CheckFinding
+from app.scan.cve_evidence import empty_cve_summary, normalize_cve_summary
 
 # One rule id for the whole stage: the reader's action is the same for every
 # advisory -- find out whether this dependency is used and upgrade it -- and a

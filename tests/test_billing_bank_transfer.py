@@ -246,7 +246,7 @@ def _configure_alerts(monkeypatch, chat_id=ADMIN_CHAT_ID):
         monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_ID", chat_id)
     # notify_operator throttles per dedupe key in a module global that
     # outlives a test, so every test that asserts on a notification clears it.
-    import app.alerts as alerts_mod
+    import app.notify.alerts as alerts_mod
     alerts_mod._last_sent.clear()
 
 

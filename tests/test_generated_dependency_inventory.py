@@ -3,7 +3,7 @@ import io
 import json
 import zipfile
 
-from app.lockfiles import (
+from app.foundation.lockfiles import (
     MAX_EXCLUDED_MANIFESTS,
     MAX_LOCKFILES,
     collect_dependency_inventory,

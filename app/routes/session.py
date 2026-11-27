@@ -19,15 +19,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
 
-from app.accounts import (
+from app.db import AccountRepository, FixpackJobRepository
+from app.deploypack.github_app import app_auth_ok
+from app.foundation.accounts import (
     account_for_key,
     clear_api_key_cookie,
     entitlements_dict,
     entitlements_for_tier,
     set_api_key_cookie,
 )
-from app.db import AccountRepository, FixpackJobRepository
-from app.deploypack.github_app import app_auth_ok
 from app.routes._shared import _bind_account, _json_object_body
 from app.routes.dependencies import (
     get_account_repo,

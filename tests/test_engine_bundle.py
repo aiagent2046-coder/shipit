@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD_MJS = ROOT / "browser" / "scripts" / "build.mjs"
 # Mirrors the excluded set in build.mjs: orchestration and LLM never ship.
 EXCLUDED_SCAN_MODULES = {"pipeline.py", "llm_scan.py"}
-RUNTIME_ENTRIES: tuple[str, ...] = ("app/scan/browser.py", "app/ingest/validators.py")
-FORBIDDEN_PREFIXES = ("app/llm/",)
+RUNTIME_ENTRIES: tuple[str, ...] = ("app/scan/browser.py", "app/foundation/ingest/validators.py")
+FORBIDDEN_PREFIXES = ("app/foundation/llm/",)
 FORBIDDEN_PATHS = {"app/scan_pipeline.py", "app/scan/llm_scan.py", "app/scan/pipeline.py"}
 
 

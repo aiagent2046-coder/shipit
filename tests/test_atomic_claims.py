@@ -3,12 +3,12 @@ import json
 
 import pytest
 
+from app.report.evidence import finding_counts
+from app.report.html import render_report
 from app.scan.atomic_claims import check_source
 from app.scan.claim_evidence import syntax_contradicted
-from app.scan_pipeline import run_scan
 from app.scan.syntax_claims import SyntaxVerifier
-from app.report.html import render_report
-from app.report.evidence import finding_counts
+from app.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 PATH = 'app/api/auth/route.ts'
@@ -228,7 +228,7 @@ def test_bounded_check_does_not_accept_forged_metadata_or_execute_source(monkeyp
 
 @pytest.mark.parametrize('prefix', ['', 'export-root/'])
 def test_static_service_role_recommendations_keep_each_routes_policy_prerequisites(prefix):
-    from app.llm.client import LLMClient
+    from app.foundation.llm.client import LLMClient
     from tests.test_scan_service_role import ROUTE
     files = {
         prefix + 'app/api/messages/route.ts': ROUTE,

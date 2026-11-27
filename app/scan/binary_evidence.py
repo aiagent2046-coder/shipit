@@ -8,14 +8,14 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-from pathlib import PurePosixPath
 import re
 import stat
 import struct
 import zipfile
 import zlib
+from pathlib import PurePosixPath
 
-from app.ingest.validators import validate_zip
+from app.foundation.ingest.validators import validate_zip
 from app.scan.file_scope import BINARY_EVIDENCE_PATH
 
 try:

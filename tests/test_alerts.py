@@ -13,7 +13,7 @@ import json
 
 import httpx
 
-from app import alerts
+from app.notify import alerts
 
 
 def _transport(calls: list) -> httpx.MockTransport:

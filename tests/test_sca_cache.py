@@ -1,11 +1,11 @@
 """Dependency entitlement must not be lost when the code analysis is cached."""
-from copy import deepcopy
 import io
+from copy import deepcopy
 from unittest.mock import AsyncMock
 
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.main import app, get_audit_repo, run_repo_audit
 from app.sca.cache import complete_cached_dependencies, needs_dependency_scan
 from app.sca.stage import RULE_ID
@@ -13,10 +13,9 @@ from app.scan_pipeline import content_digest, run_scan
 from app.worker import main as worker
 from tests.conftest import run_audit_job
 from tests.test_audit_determinism import _post, force_pro_account
-from tests.test_audit_preview_history import Repo, row, RAW, SNAPSHOT
-from tests.test_sca_wiring import fake_client, repo_with_lockfile
+from tests.test_audit_preview_history import RAW, SNAPSHOT, Repo, row
 from tests.test_sca_stage import make_zip
-
+from tests.test_sca_wiring import fake_client, repo_with_lockfile
 
 INVENTORY = {"version": 1, "asked_at": "2026-09-10T00:00:00+00:00", "found": 1,
              "dependencies": [{"ecosystem": "npm", "name": "private-package",

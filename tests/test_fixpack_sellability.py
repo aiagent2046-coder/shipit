@@ -189,7 +189,7 @@ def test_the_scan_pipeline_stamps_what_it_stores() -> None:
     been unchanged: the gate reads what run_scan stored, so an unstamped
     audit sells exactly like before.
     """
-    from app.llm.client import LLMClient
+    from app.foundation.llm.client import LLMClient
     from app.scan_pipeline import run_scan
 
     scan = run_scan(make_zip(UNFIXABLE), LLMClient(providers=[]))
@@ -201,7 +201,7 @@ def test_the_scan_pipeline_stamps_what_it_stores() -> None:
 
 
 def test_the_scan_pipeline_leaves_a_sellable_audit_sellable() -> None:
-    from app.llm.client import LLMClient
+    from app.foundation.llm.client import LLMClient
     from app.scan_pipeline import run_scan
 
     scan = run_scan(make_zip(FIXABLE), LLMClient(providers=[]))

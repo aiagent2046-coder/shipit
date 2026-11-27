@@ -13,10 +13,9 @@ import zipfile
 
 import pytest
 
-from tests.detector_samples import SAMPLES
-
-from app.ingest.validators import ArchiveValidationError, validate_zip
+from app.foundation.ingest.validators import ArchiveValidationError, validate_zip
 from app.scan.static import run_static_scan
+from tests.detector_samples import SAMPLES
 
 from .conftest import make_zip
 

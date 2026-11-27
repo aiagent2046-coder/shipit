@@ -6,7 +6,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.report.evidence import non_model_status_notices
 from app.report.html import render_report
 from app.report.sarif import build_sarif

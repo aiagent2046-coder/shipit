@@ -8,31 +8,34 @@ caller can still see what happened via the `llm` field ("failed: ...").
 
 from __future__ import annotations
 
-from decimal import Decimal
 import hashlib
 import io
 import logging
 import os
 import re
 import zipfile
+from decimal import Decimal
 
-from app.llm.client import LLMClient, LLMError
 from app.fixpack.generate import mark_unfixable_findings
-from app.scan.collapse import collapse_repeats
-from app.scan.manifest import scan_manifest
-from app.audit_basis import (  # noqa: F401  (re-exported)
-    BASIS_FULL, BASIS_PARTIAL, BASIS_PREVIEW, BASIS_STATIC_ONLY,
+from app.foundation.audit_basis import (  # noqa: F401  (re-exported)
+    BASIS_FULL,
+    BASIS_PARTIAL,
+    BASIS_PREVIEW,
+    BASIS_STATIC_ONLY,
     basis_for_account,
 )
+from app.foundation.llm.client import LLMClient, LLMError
+from app.sca.osv import OsvClient
+from app.sca.snapshot import run_snapshot_stage
+from app.sca.stage import run_sca_stage
+from app.scan.check_failure_scoring import failed_check_categories
+from app.scan.collapse import collapse_repeats
 from app.scan.llm_scan import RUBRICS, LLMScanStats, run_llm_scan
+from app.scan.manifest import scan_manifest
+from app.scan.model_identity import configured_model_engine_version
 from app.scan.scoring import _SCORED_FIELDS, score_findings  # noqa: F401  (re-exported)
 from app.scan.static import run_static_scan
-from app.scan.model_identity import configured_model_engine_version
 from app.scan.version import AUDIT_ENGINE_VERSION
-from app.scan.check_failure_scoring import failed_check_categories
-from app.sca.osv import OsvClient
-from app.sca.stage import run_sca_stage
-from app.sca.snapshot import run_snapshot_stage
 
 AUDIT_ENGINE_VERSION = configured_model_engine_version(AUDIT_ENGINE_VERSION)
 

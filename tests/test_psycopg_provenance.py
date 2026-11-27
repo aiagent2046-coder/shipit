@@ -1,8 +1,8 @@
 """Source provenance must narrow one prerequisite without upgrading the verdict."""
 import ast
-from copy import deepcopy
 import io
 import json
+from copy import deepcopy
 
 import pytest
 
@@ -161,7 +161,8 @@ def test_historical_trace_stays_readable_without_acquiring_new_proof():
 def test_online_preview_and_browser_exports_share_the_driver_decision(monkeypatch):
     import socket
     import subprocess
-    from app.llm.client import LLMClient
+
+    from app.foundation.llm.client import LLMClient
     from app.scan.browser import scan_archive
     from app.scan_pipeline import BASIS_PREVIEW, run_scan
 

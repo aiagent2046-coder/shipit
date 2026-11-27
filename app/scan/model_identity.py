@@ -3,7 +3,7 @@
 import hashlib
 import json
 
-from app.llm.client import LUNA_MODELS, providers_from_env
+from app.foundation.llm.client import LUNA_MODELS, providers_from_env
 
 
 def configured_model_engine_version(base_version: str) -> str:

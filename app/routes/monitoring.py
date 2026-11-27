@@ -6,7 +6,6 @@ import sys
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app import alerts, monitor
 from app.billing import telegram_stars
 from app.db import (
     AuditRepository,
@@ -17,10 +16,12 @@ from app.db import (
     SubscriptionRepository,
     monitoring_processor_lock,
 )
-from app.ingest.github_fetch import RepoFetchError
-from app.llm.client import LLMClient
-from app.monitor import repo_url_from_full_name
-from app.monitor.diff import new_high_severity_findings
+from app.foundation import monitor
+from app.foundation.ingest.github_fetch import RepoFetchError
+from app.foundation.llm.client import LLMClient
+from app.foundation.monitor import repo_url_from_full_name
+from app.foundation.monitor.diff import new_high_severity_findings
+from app.notify import alerts
 from app.routes._shared import _require_bearer_token
 from app.routes.dependencies import (
     get_audit_repo,

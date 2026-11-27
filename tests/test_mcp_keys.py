@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.accounts import KEY_PREFIX_LEN
+from app.foundation.accounts import KEY_PREFIX_LEN
 from app.mcp.keys import (
     MCP_KEY_PREFIX,
     generate_mcp_key,
@@ -70,7 +70,7 @@ def test_the_prefix_reveals_a_key_and_not_its_body():
 def test_hashing_is_the_accounts_hashing(monkeypatch):
     """Borrowed, not rewritten. A second copy of key hashing is how two
     credentials in one system start disagreeing about what a valid key is."""
-    from app.accounts import hash_api_key
+    from app.foundation.accounts import hash_api_key
 
     key = generate_mcp_key()
     assert hash_mcp_key(key) == hash_api_key(key)

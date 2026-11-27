@@ -20,13 +20,11 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.llm import pricing
-from app.llm.client import (LLMClient, LLMError, LLMUsage, Provider,
-                             supports_sampling_params)
+from app.foundation.llm import pricing
+from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider, supports_sampling_params
 from app.main import app, get_audit_repo
 from app.scan_pipeline import PAID_AUDIT_PASSES
-from tests.conftest import (drain_audit_queue, force_pro_account,
-                           run_audit_job)
+from tests.conftest import drain_audit_queue, force_pro_account, run_audit_job
 
 # Only a paying account reaches the provider: the free tier is static-only.
 _ACCOUNT_ID = "33333333-3333-3333-3333-333333333333"
@@ -312,7 +310,7 @@ def test_a_model_without_sampling_params_gets_no_temperature():
     paid basis. Asserted on both wire formats because both carried the
     parameter, and a fix to one is a 400 on the other.
     """
-    from app.llm.client import LLMClient, Provider
+    from app.foundation.llm.client import LLMClient, Provider
 
     old = Provider(kind="anthropic", base_url="x", api_key="k",
                    model="claude-sonnet-4-6")
@@ -338,7 +336,7 @@ def test_thinking_is_disabled_only_where_it_would_otherwise_switch_on():
     that wire format, and sending an unknown key is the provider's error to
     raise.
     """
-    from app.llm.client import LLMClient, Provider
+    from app.foundation.llm.client import LLMClient, Provider
 
     old = Provider(kind="anthropic", base_url="x", api_key="k",
                    model="claude-sonnet-4-6")
@@ -360,8 +358,7 @@ def test_every_priced_model_is_classified_for_sampling_support():
     that someone made the call deliberately for Claude 5 names, where the
     default (send temperature) is the failing one.
     """
-    from app.llm.client import (MODELS_WITH_SAMPLING_PARAMS,
-                                MODELS_WITHOUT_SAMPLING_PARAMS)
+    from app.foundation.llm.client import MODELS_WITH_SAMPLING_PARAMS, MODELS_WITHOUT_SAMPLING_PARAMS
 
     # This started as `if "-5" in name`, meaning "a Claude 5 model". It is not:
     # that substring also matches "claude-haiku-4-5", which takes temperature

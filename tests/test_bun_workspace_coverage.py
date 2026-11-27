@@ -4,11 +4,10 @@ import json
 import pytest
 
 from app import local_cli
-from app.lockfiles import bun_lock, lockfiles
+from app.foundation.lockfiles import bun_lock, lockfiles
 from app.scan import cve_match
 from tests.bun_fixtures import archive, bun, registry
 from tests.test_cve_match import catalog
-
 
 WORKSPACE = "packages/web/package.json"
 

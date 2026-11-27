@@ -7,8 +7,8 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from app.llm.accounting import provider_usage_summary
-from app.llm.client import LLMClient, Provider
+from app.foundation.llm.accounting import provider_usage_summary
+from app.foundation.llm.client import LLMClient, Provider
 from app.main import _record_llm_usage
 from app.scan.llm_scan import run_llm_scan
 from app.scan_pipeline import run_scan
@@ -101,7 +101,7 @@ async def test_passes_and_syntax_status_are_recorded_without_publishing_billing(
 
 
 async def test_timeout_attempts_are_unknown_even_after_retry_succeeds(monkeypatch):
-    monkeypatch.setattr("app.llm.client.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("app.foundation.llm.client.time.sleep", lambda seconds: None)
     count = 0
 
     def handle(request):

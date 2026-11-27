@@ -11,8 +11,8 @@ from tests.test_binary_evidence import archive, elf, encoded, report
 
 @pytest.mark.parametrize('location', ['root', 'wrapper', 'root-with-directory'])
 def test_attached_envelope_preserves_wrapped_project_root_and_source_verdict(location):
-    from app.ingest.stack_detect import Stack, detect_stack
-    from app.scan.checks import archive_root, _strip_root
+    from app.foundation.ingest.stack_detect import Stack, detect_stack
+    from app.scan.checks import _strip_root, archive_root
     from app.scan.error_boundary import _norm
     from app.scan.static import run_static_scan
 

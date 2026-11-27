@@ -47,8 +47,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import scripts.env_file as env_file  # noqa: E402
-from app.llm.client import LLMClient  # noqa: E402
-from app.llm.pricing import PRICE_TABLE, cost_usd  # noqa: E402
+from app.foundation.llm.client import LLMClient  # noqa: E402
+from app.foundation.llm.pricing import PRICE_TABLE, cost_usd  # noqa: E402
 from app.scan_pipeline import run_scan  # noqa: E402
 
 # The sample from scripts/batch_audit.py, imported rather than copied: it was

@@ -19,13 +19,12 @@ import pathlib
 import jsonschema
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.report.plain_language import PLAIN
-from app.report.sarif import (FINGERPRINT_KEY, LEVELS, SARIF_VERSION, build_sarif,
-                              fingerprint, render_sarif)
+from app.report.sarif import FINGERPRINT_KEY, LEVELS, SARIF_VERSION, build_sarif, fingerprint, render_sarif
 from app.sca.osv import OsvClient
 from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
-from tests.test_sca_stage import FakeTransport, LODASH_ADVISORY, make_zip
+from tests.test_sca_stage import LODASH_ADVISORY, FakeTransport, make_zip
 
 SCHEMA_PATH = pathlib.Path(__file__).parent / "fixtures" / "sarif-schema-2.1.0.json"
 

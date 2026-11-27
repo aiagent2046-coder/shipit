@@ -5,14 +5,13 @@ import hashlib
 import io
 import zipfile
 
+from app.foundation.lockfiles import OSV_ECOSYSTEM
+from app.scan.check_failures import normalize_check_failures
+from app.scan.cve_evidence import normalize_cve_summary
+from app.scan.project_checks import project_checks
 from app.scan.rejection_diagnostics import acceptance_summary, diagnostics_manifest
 from app.scan.rule_coverage import normalize_rule_coverage
 from app.scan.security_agent import agent_record
-from app.scan.check_failures import normalize_check_failures
-from app.scan.project_checks import project_checks
-from app.scan.cve_evidence import normalize_cve_summary
-from app.lockfiles import OSV_ECOSYSTEM
-
 
 SCA_LIMITATIONS = frozenset({
     "dependency_check_not_run", "dependency_database_unavailable",

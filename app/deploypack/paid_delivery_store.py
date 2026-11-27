@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 
 from app import db
-from app.fixpack_funding import funding_key
+from app.foundation.fixpack_funding import funding_key
 
 
 def _owns_funding(row: dict) -> bool:

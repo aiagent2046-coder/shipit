@@ -1,15 +1,15 @@
 """Project-bound evidence imports never execute binaries or infer vulnerabilities."""
-from copy import deepcopy
 import hashlib
 import io
 import json
-from pathlib import Path
 import struct
 import zipfile
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
-from app.ingest.validators import ArchiveValidationError
+from app.foundation.ingest.validators import ArchiveValidationError
 from app.scan import binary_evidence as binary
 
 

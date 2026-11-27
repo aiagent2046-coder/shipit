@@ -28,22 +28,28 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from app.scan.checks import CheckFinding
-from app.lockfiles import (
+from app.foundation.audit_basis import BASIS_STATIC_ONLY
+from app.foundation.lockfiles import (
     MAX_LOCKFILES,
     Dependency,
     DependencyOccurrence,
     collect_dependency_inventory,
 )
-from app.sca.stage import (RULE_ID, SCA_FRESHNESS_TTL_DAYS, findings_for,
-                           freshness, query_dependencies, loses_cve_evidence)
 from app.sca.osv import OsvClient
-from app.audit_basis import BASIS_STATIC_ONLY
-from app.scan.llm_scan import RUBRICS
-from app.scan.scoring import score_findings
+from app.sca.stage import (
+    RULE_ID,
+    SCA_FRESHNESS_TTL_DAYS,
+    findings_for,
+    freshness,
+    loses_cve_evidence,
+    query_dependencies,
+)
 from app.scan.check_failure_scoring import failed_check_categories
+from app.scan.checks import CheckFinding
+from app.scan.llm_scan import RUBRICS
 from app.scan.manifest import SCA_LIMITATIONS, sca_limitations, sca_manifest_fields
 from app.scan.project_checks import dependency_checks
+from app.scan.scoring import score_findings
 from app.scan.threat_context import build_threat_context, context_is_current
 
 INVENTORY_VERSION = 1

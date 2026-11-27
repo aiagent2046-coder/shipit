@@ -21,7 +21,7 @@ from app.deploypack.pipeline import (
     run_deploy_pack,
 )
 from app.deploypack.sandbox import SandboxResult
-from app.ingest.stack_detect import Stack
+from app.foundation.ingest.stack_detect import Stack
 
 FASTAPI_ZIP = {
     "requirements.txt": b"fastapi\nuvicorn\n",

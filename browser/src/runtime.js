@@ -62,7 +62,7 @@ export function scanBytes(pyodide, archive, threatAsOf = null) {
   try {
     return JSON.parse(pyodide.runPython(`
 import json
-from app.ingest.validators import ArchiveValidationError
+from app.foundation.ingest.validators import ArchiveValidationError
 def _browser_scan():
     try:
         return json.dumps(scan_archive(bytes(_archive_bytes.to_py()), _dependency_catalog, threat_as_of=_threat_as_of))
@@ -83,7 +83,7 @@ export function startSession(pyodide, archive, threatAsOf = null) {
     return JSON.parse(pyodide.runPython(`
 import json
 from app.scan.browser import ScanSession
-from app.ingest.validators import ArchiveValidationError
+from app.foundation.ingest.validators import ArchiveValidationError
 def _start_session():
     global _scan_session
     _scan_session = None

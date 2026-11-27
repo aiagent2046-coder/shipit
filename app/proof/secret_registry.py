@@ -64,7 +64,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal, Pattern
 
-from app.accounts import pepper_is_configured, require_pepper
+from app.foundation.accounts import pepper_is_configured, require_pepper
 from app.scan.secrets import _is_demo_jwt, _jwt_severity
 
 Tier = Literal["A", "B", "C"]

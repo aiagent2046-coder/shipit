@@ -4,19 +4,17 @@ History is not current evidence and never changes scores or fix eligibility.
 Matching is deliberately exact: changed wording is not a verified resolution.
 """
 
-from copy import deepcopy
-import json
 import asyncio
+import json
+from copy import deepcopy
 
-from app.llm.accounting import estimate_stats_cost
-from app.scan import llm_scan
-from app.scan_pipeline import FREE_TIER_MODEL, FREE_TIER_MODEL_BY_KIND, FREE_TIER_RUBRICS
-
-from app.scan_pipeline import BASIS_PREVIEW
 from app.db import DatabaseNotConfigured
-from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
-from app.scan.cve_match import RULE_ID as SNAPSHOT_RULE_ID
+from app.foundation.llm.accounting import estimate_stats_cost
 from app.sca.refresh import refresh_score_threat_context
+from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
+from app.scan import llm_scan
+from app.scan.cve_match import RULE_ID as SNAPSHOT_RULE_ID
+from app.scan_pipeline import BASIS_PREVIEW, FREE_TIER_MODEL, FREE_TIER_MODEL_BY_KIND, FREE_TIER_RUBRICS
 
 
 def _observation_key(finding: dict) -> str:

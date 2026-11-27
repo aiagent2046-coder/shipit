@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from app.db import AuditRepository, RlsLiveCheckRepository
-from app.ingest.validators import (
+from app.foundation.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
     validate_zip,

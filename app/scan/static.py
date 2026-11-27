@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from typing import BinaryIO
 
-from app.ingest.validators import validate_zip
+from app.foundation.ingest.validators import validate_zip
 from app.runtime.capabilities import CHECKS_RUN, EXCLUSIONS_NOTE, HTTP_SUCCESS_SCOPE_PREFIX, SCOPE
 from app.runtime.finding_text import plain_fields
 from app.scan.archive_extraction import scan_archive_extraction

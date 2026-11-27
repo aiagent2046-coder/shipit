@@ -27,7 +27,7 @@ import io
 import json
 import zipfile
 
-from app.llm.client import LLMClient, LLMUsage, Provider
+from app.foundation.llm.client import LLMClient, LLMUsage, Provider
 from app.report.html import render_report
 from app.scan_pipeline import run_scan
 

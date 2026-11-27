@@ -24,9 +24,9 @@ import uuid
 import psycopg
 import pytest
 
-from app.ingest.github_fetch import RepoFetchError
-from app.ingest.validators import ArchiveValidationError
-from app.llm.client import LLMError
+from app.foundation.ingest.github_fetch import RepoFetchError
+from app.foundation.ingest.validators import ArchiveValidationError
+from app.foundation.llm.client import LLMError
 from app.worker import main as worker
 
 

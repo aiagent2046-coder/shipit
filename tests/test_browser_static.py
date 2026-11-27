@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.ingest.validators import ArchiveValidationError
+from app.foundation.ingest.validators import ArchiveValidationError
 from app.runtime.capabilities import CHECKS_RUN
 from app.scan.browser import scan_archive
 from app.scan.static import run_static_scan
@@ -38,7 +38,7 @@ def isolated_scan(*, javascript=False):
                     raise AssertionError("browser imported a remote stage")
         sys.meta_path.insert(0, NoNative())
         from app.scan.browser import scan_archive
-        from app.ingest.validators import ArchiveValidationError
+        from app.foundation.ingest.validators import ArchiveValidationError
         data = io.BytesIO()
         with zipfile.ZipFile(data, "w") as zf:
             zf.writestr("config.py", 'api_key = ' + repr('sk_' + 'live_' + 'a' * 24) + '\\n')

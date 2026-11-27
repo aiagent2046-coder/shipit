@@ -13,7 +13,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from app.accounts import (
+from app.foundation.accounts import (
     API_KEY_COOKIE,
     API_KEY_PEPPER_ENV,
     CSRF_HEADER,

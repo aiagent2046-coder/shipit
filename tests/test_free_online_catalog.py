@@ -19,27 +19,29 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.llm.client import LLMClient, LLMError
+from app import scan_pipeline as pipeline
+from app.foundation.llm.client import LLMClient, LLMError
 from app.local_cli import inspect_project
 from app.main import app, get_audit_repo
 from app.report.sarif import build_sarif
 from app.sca.cache import needs_dependency_scan
-from app import scan_pipeline as pipeline
 from app.scan.browser import scan_archive
 from app.scan.cve_match import match_archive
 from app.scan_pipeline import AUDIT_ENGINE_VERSION, BASIS_FULL, BASIS_PREVIEW, run_scan
+from tests.bun_fixtures import (
+    FAST_URI_ADVISORIES,
+    GSTACK_ADVISORIES,
+    bun_deep_path_project,
+    bun_workspace_project,
+    gstack_project,
+)
 from tests.conftest import run_audit_job
-from tests.test_audit_llm_wiring import FakeLLM
 from tests.test_audit_determinism import _post, force_pro_account
+from tests.test_audit_llm_wiring import FakeLLM
 from tests.test_audit_preview_history import Repo
 from tests.test_browser_cve import CATALOG, project
 from tests.test_sca_stage import make_zip
 from tests.test_sca_wiring import fake_client, repo_with_lockfile
-from tests.bun_fixtures import (
-    FAST_URI_ADVISORIES, GSTACK_ADVISORIES, bun_deep_path_project,
-    bun_workspace_project, gstack_project,
-)
-
 
 ROOT = Path(__file__).resolve().parents[1]
 RULE_ID = "dependency-cve-match"

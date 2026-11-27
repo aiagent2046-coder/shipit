@@ -7,21 +7,20 @@ archive and canned model responses.
 """
 from __future__ import annotations
 
+import io
+import json
+import zipfile
 from collections import Counter
 from copy import deepcopy
 from dataclasses import asdict, replace
-import io
-import json
 from pathlib import Path
-import zipfile
 
 import pytest
 
-from app.llm.client import LLMClient, LLMUsage
+from app.foundation.llm.client import LLMClient, LLMUsage
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.llm_scan import run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
-
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "exact_observation_repeats.json"
 

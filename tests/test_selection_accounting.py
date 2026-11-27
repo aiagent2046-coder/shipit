@@ -2,7 +2,7 @@
 import io
 import zipfile
 
-from app.llm.client import LLMClient, LLMError, LLMUsage
+from app.foundation.llm.client import LLMClient, LLMError, LLMUsage
 from app.scan import llm_scan
 from app.scan.manifest import scan_manifest
 

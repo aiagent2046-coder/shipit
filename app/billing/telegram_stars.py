@@ -535,7 +535,7 @@ def _is_operator(user_id: Any) -> bool:
     configured, so allow all" -- would turn any deployment that merely forgot
     one env var into a stranger-operated Confirm button handing out pro
     access, which is the single worst failure this module can have."""
-    from app.alerts import admin_chat_id_from_env
+    from app.notify.alerts import admin_chat_id_from_env
 
     expected = admin_chat_id_from_env()
     if not expected or user_id is None:
@@ -773,7 +773,7 @@ async def _alert_charge_on_a_withdrawn_rail(
     "notify_operator swallows everything" is true today is exactly the kind of
     fact a caller on this path must not depend on another module keeping.
     """
-    from app.alerts import notify_operator
+    from app.notify.alerts import notify_operator
 
     charge = sp.get("telegram_payment_charge_id") or "unknown"
     try:

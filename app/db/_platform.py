@@ -5,7 +5,6 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from app.accounts import api_key_prefix, generate_api_key, hash_api_key
 from app.db._core import (
     DatabaseNotConfigured,
     _resolve_get_pool,
@@ -13,6 +12,7 @@ from app.db._core import (
     _row_to_mcp_key,
     _uuid_or_none,
 )
+from app.foundation.accounts import api_key_prefix, generate_api_key, hash_api_key
 
 
 class AccountRepository:

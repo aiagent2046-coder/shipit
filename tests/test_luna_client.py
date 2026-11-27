@@ -6,7 +6,7 @@ from dataclasses import replace
 import httpx
 import pytest
 
-from app.llm.client import (
+from app.foundation.llm.client import (
     LLMClient,
     LLMError,
     Provider,
@@ -14,7 +14,6 @@ from app.llm.client import (
     providers_from_env,
     supports_sampling_params,
 )
-
 
 LUNA = Provider("openai_compat", "https://api.aitunnel.ru/v1", "test-key",
                 "gpt-6-luna")

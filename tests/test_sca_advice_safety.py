@@ -1,5 +1,5 @@
 """Advice must not turn advisory boundaries into unverified upgrade guarantees."""
-from app.lockfiles import Dependency
+from app.foundation.lockfiles import Dependency
 from app.sca.stage import _advisories, build_finding
 
 

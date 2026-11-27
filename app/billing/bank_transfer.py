@@ -577,7 +577,7 @@ async def mark_awaiting_confirmation(
     suppressing a repeat press of the same invoice -- and none of those are
     errors the payer should see.
     """
-    from app.alerts import notify_operator
+    from app.notify.alerts import notify_operator
 
     row = await get_invoice(payment_repo, reference)
     if row is None:

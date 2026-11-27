@@ -121,8 +121,8 @@ async def test_enqueue_creates_queued_job(real_db):
 async def test_enqueue_with_account_id_round_trips(real_db):
     """account_id is a real FK to accounts(id) and crosses the Python/uuid
     boundary in both directions."""
-    from app.accounts import generate_api_key
     from app.db import AccountRepository
+    from app.foundation.accounts import generate_api_key
 
     account = await AccountRepository().create(api_key=generate_api_key(), tier="pro")
     repo = AuditJobRepository()
@@ -194,8 +194,8 @@ async def test_enqueue_refuses_live_key_for_different_request(real_db, overrides
 
 
 async def test_enqueue_refuses_other_account_on_same_live_key(real_db):
-    from app.accounts import generate_api_key
     from app.db import AccountRepository
+    from app.foundation.accounts import generate_api_key
 
     account = await AccountRepository().create(api_key=generate_api_key(), tier="pro")
     repo = AuditJobRepository()

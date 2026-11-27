@@ -3,22 +3,21 @@
 Original narratives, minimized source, remapped coordinates; no LLM requests.
 Grouping must never claim that injection or attacker control was verified.
 """
-from copy import deepcopy
-from dataclasses import asdict, replace
 import io
 import json
-from pathlib import Path
 import zipfile
+from copy import deepcopy
+from dataclasses import asdict, replace
+from pathlib import Path
 
 import pytest
 
-from app.llm.client import LLMClient, LLMUsage
+from app.foundation.llm.client import LLMClient, LLMUsage
 from app.scan import python_sql_identity as sql
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.issue_identity import SourceIssueResolver
 from app.scan.llm_scan import _iter_code_files, run_llm_scan
 from app.scan.scoring import ScoredFinding, compute_scores
-
 
 SOURCES = {
     "migrate.py": '''async def migrate(db):

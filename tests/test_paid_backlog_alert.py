@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import app.alerts as alerts
+import app.notify.alerts as alerts
 from app.main import (
     PAID_BACKLOG_ALERT_SECONDS,
     _alert_paid_backlog_stale,

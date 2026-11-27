@@ -7,15 +7,14 @@ from __future__ import annotations
 
 import io
 import json
-from pathlib import Path
 import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 import pytest
 
-from app.lockfiles import lockfiles, resolved_locks
-
+from app.foundation.lockfiles import lockfiles, resolved_locks
 
 PNPM = """lockfileVersion: '9.0'
 importers: {}
@@ -167,7 +166,7 @@ import io
 import json
 import sys
 import zipfile
-from app.lockfiles import collect_dependency_inventory
+from app.foundation.lockfiles import collect_dependency_inventory
 
 path = sys.argv[1]
 if path == "package-lock.json":

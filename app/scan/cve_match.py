@@ -9,21 +9,31 @@ Only standard-library imports are used so this module runs inside Pyodide.
 from __future__ import annotations
 
 import io
-from itertools import islice
 import re
 import tomllib
 import zipfile
 import zlib
+from itertools import islice
 
-from app.lockfiles import (
-    collect_dependency_inventory, dependency_exclusion_reason, normalize_pypi,
-    occurrence_evidence, occurrence_summary,
+from app.foundation.lockfiles import (
+    collect_dependency_inventory,
+    dependency_exclusion_reason,
+    normalize_pypi,
+    occurrence_evidence,
+    occurrence_summary,
 )
 from app.scan.advisory_evaluation import (  # evaluation core lives below
-    GHSA_REPOSITORY, SOURCE_REPOSITORY, _CVE_ID, _GHSA_ID, _STATUSES,
-    _entry_identity, _valid_source, evaluate_advisory,
+    _CVE_ID,
+    _GHSA_ID,
+    _STATUSES,
+    GHSA_REPOSITORY,
+    SOURCE_REPOSITORY,
+    _entry_identity,
+    _valid_source,
+    evaluate_advisory,
 )
-from app.scan.kev_feed import KEV_REPOSITORY, SOURCE_NAME as KEV_SOURCE
+from app.scan.kev_feed import KEV_REPOSITORY
+from app.scan.kev_feed import SOURCE_NAME as KEV_SOURCE
 from app.scan.remediation_catalog import UpgradeBudget, plan_dependency_upgrade, remediation_hint
 
 RULE_ID = "dependency-cve-match"

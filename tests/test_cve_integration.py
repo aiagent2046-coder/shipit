@@ -1,13 +1,13 @@
 """Official CVE context survives reports, outages and cached dependency refreshes."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import httpx
 import pytest
 
-from app.llm.client import LLMClient
-from app.report.cve import cve_rows, cve_notices
+from app.foundation.llm.client import LLMClient
+from app.report.cve import cve_notices, cve_rows
 from app.report.evidence import manifest_rows, non_model_status_notices
 from app.report.html import render_report
 from app.report.sarif import build_sarif
@@ -16,10 +16,10 @@ from app.sca.cve import CveClient
 from app.sca.osv import OsvClient
 from app.sca.refresh import refresh_stale_dependency_audits
 from app.sca.stage import run_sca_stage, sca_client_for
-from app.scan_pipeline import run_scan, AUDIT_ENGINE_VERSION
+from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
 from tests.test_cve_client import FIRST, published
-from tests.test_sca_stage import FakeTransport, LODASH_ADVISORY, one_advisory, repo_with
-from tests.test_sca_refresh import StoredRepo, stored_row, NOW
+from tests.test_sca_refresh import NOW, StoredRepo, stored_row
+from tests.test_sca_stage import LODASH_ADVISORY, FakeTransport, one_advisory, repo_with
 
 
 def client(status=200, *, rejected=False, max_records=20):

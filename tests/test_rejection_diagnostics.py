@@ -1,23 +1,27 @@
 """Admission failures stay inspectable without retaining rejected source text."""
-from copy import deepcopy
-from dataclasses import asdict
 import hashlib
 import io
 import json
 import zipfile
+from copy import deepcopy
+from dataclasses import asdict
 
 import pytest
 
-from app.llm.client import LLMClient, LLMUsage
+from app.foundation.llm.client import LLMClient, LLMUsage
 from app.report.evidence import model_acceptance_notice
 from app.report.html import render_report
 from app.scan.llm_scan import SYSTEM_PROMPT, build_prompt, run_llm_scan, verify_finding
 from app.scan.manifest import scan_manifest
 from app.scan.rejection_diagnostics import (
-    MAX_DIAGNOSTIC_QUOTE_CHARS, MAX_DIAGNOSTIC_SOURCE_CHARS, MAX_DIAGNOSTIC_WINDOW_CHARS,
-    MAX_REJECTION_ITEMS, acceptance_summary, diagnostics_manifest, rejected_item,
+    MAX_DIAGNOSTIC_QUOTE_CHARS,
+    MAX_DIAGNOSTIC_SOURCE_CHARS,
+    MAX_DIAGNOSTIC_WINDOW_CHARS,
+    MAX_REJECTION_ITEMS,
+    acceptance_summary,
+    diagnostics_manifest,
+    rejected_item,
 )
-
 
 SOURCE = "export async function login() {\n  return await fetch('/session');\n}\n"
 GOOD = dict(file="auth.ts", line_start=2, line_end=2, evidence="return await fetch",

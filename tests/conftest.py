@@ -31,7 +31,7 @@ import pytest
 
 import app.audit_spool as spool_mod
 import app.db as db_mod
-from app.accounts import TIER_PRO, api_key_prefix, generate_api_key
+from app.foundation.accounts import TIER_PRO, api_key_prefix, generate_api_key
 from app.main import app, get_audit_job_repo, get_rate_limiter
 from app.runtime.ratelimit import RateLimiter
 
@@ -394,7 +394,7 @@ class FakeCompletionCasMixin:
 
     async def get_completed_fixpack_for_job(self, job_id):
         # Fake jobs are funded in invoice creation order in checkout fixtures.
-        from app.fixpack_funding import funding_key
+        from app.foundation.fixpack_funding import funding_key
         row = next((r for r in self.rows.values()
                     if r.get("fixpack_job_id") == job_id and r.get("status") == "completed"), None)
         return {**row, "funding_key": funding_key(row["provider"], row["external_ref"])} if row else None
@@ -609,7 +609,7 @@ def enable_monitoring(monkeypatch):
     (The module that made the point has since been deleted with the PayPal
     checkout; the lesson it taught is why this fixture is shaped this way.)
     """
-    monkeypatch.setattr("app.monitor.MONITORING_FOR_SALE", True)
+    monkeypatch.setattr("app.foundation.monitor.MONITORING_FOR_SALE", True)
 
 
 def force_pro_account(monkeypatch, account_id="11111111-1111-1111-1111-111111111111"):
@@ -627,5 +627,5 @@ def force_pro_account(monkeypatch, account_id="11111111-1111-1111-1111-111111111
     async def _resolve(request, account_repo):
         return {"id": account_id, "tier": "pro"}
 
-    monkeypatch.setattr("app.accounts.resolve_account", _resolve)
+    monkeypatch.setattr("app.foundation.accounts.resolve_account", _resolve)
     return account_id

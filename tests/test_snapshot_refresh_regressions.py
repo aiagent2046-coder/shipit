@@ -1,19 +1,17 @@
 """A new snapshot retires only the advisory evidence it actually reassessed."""
-from copy import deepcopy
 import hashlib
 import io
 import json
 import zipfile
+from copy import deepcopy
 
 import pytest
 
-from app.lockfiles import lockfiles
-
+from app.foundation.lockfiles import lockfiles
 from app.sca import snapshot
 from app.scan import cve_match
 from app.scan.manifest import sca_manifest_fields
 from app.scan_pipeline import score_findings
-
 
 PRIMARY = "GHSA-2345-2345-2345"
 SECONDARY = "GHSA-3456-3456-3456"

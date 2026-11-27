@@ -12,19 +12,18 @@ import io
 import json
 import logging
 import zipfile
-from decimal import Decimal
 from contextlib import asynccontextmanager
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
 from app.deploypack import github_app
-from app import alerts as alerts_mod
-from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import DeliveryError, PullRequestResult
 from app.deploypack.delivery_auth import DeliveryAuthorizationError
-from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
+from app.fixpack.semantic_check import minimal_check as local_minimal_check
+from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.main import (
     app,
     get_audit_repo,
@@ -34,6 +33,7 @@ from app.main import (
     get_pr_opener,
     get_repo_fetcher,
 )
+from app.notify import alerts as alerts_mod
 
 client = TestClient(app)
 

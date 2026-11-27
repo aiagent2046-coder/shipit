@@ -1,11 +1,11 @@
 """A replay rejects different evidence and cannot fall back to a live provider."""
-from copy import deepcopy
 import hashlib
+from copy import deepcopy
 
 import httpx
 import pytest
 
-from app.llm.client import LLMUsage
+from app.foundation.llm.client import LLMUsage
 from app.scan_pipeline import run_scan
 from scripts import replay_saved_trial as r
 from tests.test_audit_llm_wiring import FakeLLM, make_zip

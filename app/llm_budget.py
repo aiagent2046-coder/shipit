@@ -9,8 +9,8 @@ from __future__ import annotations
 import os
 from decimal import Decimal
 
-from app import alerts
 from app.db import LlmUsageRepository
+from app.notify import alerts
 
 DEFAULT_DAILY_SPEND_CAP_USD = Decimal(
     os.environ.get("DEFAULT_DAILY_SPEND_CAP_USD", "20.00"))

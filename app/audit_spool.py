@@ -27,7 +27,7 @@ import time
 import uuid
 from pathlib import Path
 
-from app.ingest.validators import MAX_ARCHIVE_BYTES
+from app.foundation.ingest.validators import MAX_ARCHIVE_BYTES
 
 logger = logging.getLogger(__name__)
 

@@ -8,17 +8,17 @@ No credentials, environment file, provider client or OSV client are loaded.
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
-from decimal import Decimal
 import hashlib
 import json
+from contextlib import ExitStack
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
-from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
+from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan.llm_scan import RUBRICS
-from app.scan_pipeline import run_scan
 from app.scan.version import AUDIT_ENGINE_VERSION
+from app.scan_pipeline import run_scan
 
 
 def canonical_sha256(value: object) -> str:

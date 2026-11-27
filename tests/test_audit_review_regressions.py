@@ -6,12 +6,11 @@ import copy
 import json
 from pathlib import Path
 
-from app.llm.client import LLMClient, LLMError
+from app.foundation.llm.client import LLMClient, LLMError
 from app.report.html import render_report
-from app.scan_pipeline import run_scan
 from app.scan.source_facts import collect_source_facts, facts_prompt
+from app.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
-
 
 SUFFIX_SOURCE = b'''const DOMAIN = 'example.test';
 export function allowed(email) { // token validation

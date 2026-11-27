@@ -1,24 +1,23 @@
 """Preview retention across paid scans, cache hits and report rendering."""
 
-from copy import deepcopy
 import io
 import json
-from unittest.mock import AsyncMock
 import uuid
+from copy import deepcopy
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.audit_history import refresh_cached_preview_history, score_with_preview_history
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.main import app, get_audit_repo, run_repo_audit
 from app.report.html import render_report
-from app.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
 from app.sca.snapshot import run_snapshot_stage
+from app.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
 from app.worker import main as worker
 from tests.conftest import run_audit_job
 from tests.test_audit_determinism import _post, force_pro_account
-from tests.test_audit_llm_wiring import make_zip, NEXT_PKG
-
+from tests.test_audit_llm_wiring import NEXT_PKG, make_zip
 
 STATIC = {"rule_id": "no-dockerfile", "title": "No Dockerfile", "severity": "low",
           "confidence": 0.8, "source": "static", "category": "Deploy"}
@@ -290,6 +289,7 @@ async def test_full_free_snapshot_reuses_original_model_and_scope():
 @pytest.mark.parametrize('reason', ['provider', 'budget'])
 async def test_baseline_keeps_deterministic_checks_when_model_cannot_run(reason):
     from types import SimpleNamespace
+
     from app.audit_history import ensure_paid_baseline
     scan = {'score': row('static+llm', [])['score_json'], 'findings': [],
             'llm_usage': {'calls': 1, 'model': 'claude-sonnet-4.6',
@@ -311,6 +311,7 @@ async def test_baseline_keeps_deterministic_checks_when_model_cannot_run(reason)
 async def test_partial_free_stage_keeps_findings_and_records_usage_before_paid_persistence():
     from types import SimpleNamespace
     from unittest.mock import Mock
+
     from app.audit_history import ensure_paid_baseline
     preview = {'score': row('static+partial', [PREVIEW])['score_json'], 'findings': [PREVIEW],
                'llm_usage': {'calls': 1}, 'llm': {'failure': 'provider'}}

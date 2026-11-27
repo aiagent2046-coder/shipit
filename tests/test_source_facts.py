@@ -2,12 +2,11 @@
 import json
 from pathlib import Path
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.scan import source_facts
 from app.scan.llm_scan import build_prompt, fit_to_window
 from app.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
-
 
 HELPER = b"import hmac as hm\ndef _secret_equals(a, b):\n    return hm.compare_digest(a, b)\n"
 
@@ -113,7 +112,7 @@ def test_real_shared_helper_is_located_without_importing_it():
 
 
 def test_react_async_facts_survive_free_paid_and_unavailable_model_paths():
-    from app.llm.client import LLMError
+    from app.foundation.llm.client import LLMError
     from tests.test_react_async_context import component
 
     data = make_zip({'src/Page.tsx': component('setBusy(true); await request(); setBusy(false);').encode()}).getvalue()

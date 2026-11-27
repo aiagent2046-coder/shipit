@@ -15,9 +15,14 @@ import zipfile
 
 import pytest
 
-from app.lockfiles import (MAX_DEPENDENCIES, MAX_LOCKFILES,
-                               collect_dependencies, collect_dependency_inventory,
-                               normalize_pypi, unusable_lockfiles)
+from app.foundation.lockfiles import (
+    MAX_DEPENDENCIES,
+    MAX_LOCKFILES,
+    collect_dependencies,
+    collect_dependency_inventory,
+    normalize_pypi,
+    unusable_lockfiles,
+)
 
 
 def make_zip(entries: dict[str, str]) -> bytes:

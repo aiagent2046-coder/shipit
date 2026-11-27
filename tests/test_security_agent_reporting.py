@@ -1,13 +1,13 @@
 """Saved HTML exposes bounded review decisions without inventing provenance."""
+import json
+import socket
 from copy import deepcopy
 from html import escape
-import json
 from pathlib import Path
-import socket
 
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.report.evidence import claim_evidence_rows, manifest_rows, security_agent_rows
 from app.report.html import render_report
 from app.scan import security_agent

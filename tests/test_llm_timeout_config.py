@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from app import scan_pipeline as pipeline_mod
-from app.llm import client as client_mod
-from app.llm.client import LLMClient, Provider
+from app.foundation.llm import client as client_mod
+from app.foundation.llm.client import LLMClient, Provider
 
 
 def _import_client(timeout: str | None) -> subprocess.CompletedProcess[str]:
@@ -23,7 +23,7 @@ def _import_client(timeout: str | None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             sys.executable, "-c",
-            "import json; from app.llm.client import TIMEOUT; "
+            "import json; from app.foundation.llm.client import TIMEOUT; "
             "print(json.dumps({'read': TIMEOUT.read, 'connect': TIMEOUT.connect}))",
         ],
         cwd=Path(__file__).resolve().parents[1],
