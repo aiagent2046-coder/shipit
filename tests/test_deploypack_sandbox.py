@@ -4,8 +4,8 @@ app/deploypack/sandbox.py for why the real docker path is untested."""
 
 import subprocess
 
-import app.deploypack.sandbox as sandbox
-from app.deploypack.sandbox import verify_deploy_pack
+import app.services.deploypack.sandbox as sandbox
+from app.services.deploypack.sandbox import verify_deploy_pack
 
 
 class FakeRunner:

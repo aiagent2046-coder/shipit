@@ -127,7 +127,7 @@ def test_the_estimate_and_the_harness_agree_on_how_many_passes(compare) -> None:
     """
     import inspect
 
-    from app.scan_pipeline import run_scan
+    from app.pipeline.scan_pipeline import run_scan
 
     assert inspect.signature(run_scan).parameters["llm_passes"].default == 1, (
         "run_scan's default pass count changed. Either pass llm_passes=1 "

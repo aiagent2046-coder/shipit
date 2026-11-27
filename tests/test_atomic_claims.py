@@ -3,12 +3,12 @@ import json
 
 import pytest
 
-from app.report.evidence import finding_counts
-from app.report.html import render_report
+from app.pipeline.report.evidence import finding_counts
+from app.pipeline.report.html import render_report
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.atomic_claims import check_source
 from app.scan.claim_evidence import syntax_contradicted
 from app.scan.syntax_claims import SyntaxVerifier
-from app.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 PATH = 'app/api/auth/route.ts'

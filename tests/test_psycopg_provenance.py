@@ -6,7 +6,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.report.evidence import claim_evidence_rows, security_agent_rows
+from app.pipeline.report.evidence import claim_evidence_rows, security_agent_rows
 from app.scan.psycopg_provenance import cursor_provenance
 from app.scan.security_agent import sql_observation
 from app.scan.sql_injection import scan_sql_injection
@@ -163,8 +163,8 @@ def test_online_preview_and_browser_exports_share_the_driver_decision(monkeypatc
     import subprocess
 
     from app.foundation.llm.client import LLMClient
+    from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
     from app.scan.browser import scan_archive
-    from app.scan_pipeline import BASIS_PREVIEW, run_scan
 
     def forbidden(*args, **kwargs):
         raise AssertionError('Static provenance must not use a network, subprocess or model')

@@ -25,7 +25,7 @@ than clamps so ordering survives.
 
 from __future__ import annotations
 
-from app.report.html import render_report
+from app.pipeline.report.html import render_report
 from app.scan.ci_deploy_source import RULE_ID as CI_DEPLOY_RULE_ID
 from app.scan.scoring import GATED_MAX, ScoredFinding, compute_scores
 

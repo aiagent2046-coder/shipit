@@ -441,7 +441,7 @@ def test_the_match_spans_the_whole_connection_string():
     not valid code. _verify_scrubbed passes that, because the password really
     is gone, so nothing downstream would have caught it.
     """
-    from app.fixpack.generate import _apply_secret_fix
+    from app.pipeline.fixpack.generate import _apply_secret_fix
     from app.scan.secrets import iter_secret_matches
 
     dsn = _dsn("postgresql", "svc", "zQ8vT2mKp", "db.prod.example.com",

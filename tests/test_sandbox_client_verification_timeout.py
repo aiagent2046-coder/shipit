@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import httpx
 
-import app.sandbox_client as sandbox_client
-from app.fixpack.verification import (
+import app.pipeline.sandbox_client as sandbox_client
+from app.pipeline.fixpack.verification import (
     VerificationProfile,
     VerificationStep,
 )

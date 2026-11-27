@@ -23,7 +23,7 @@ scanner produces, and ask the report layer what it would print.
 import io
 import zipfile
 
-from app.report.plain_language import PLAIN, plain_fields
+from app.pipeline.report.plain_language import PLAIN, plain_fields
 from app.scan.secrets import scan_secrets
 
 # Not in _DSN_DEV_PASSWORDS, and shaped like something a person chose.

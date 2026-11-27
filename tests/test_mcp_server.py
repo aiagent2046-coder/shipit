@@ -22,11 +22,11 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-import app.audit_workflow as audit_mod
 import app.main as main_mod
-from app.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
-from app.mcp.server import MAX_FINDINGS_RETURNED, TOOLS
-from app.mcp.untrusted import FENCE_CLOSE, FENCE_OPEN
+import app.orchestration.audit_workflow as audit_mod
+from app.orchestration.mcp.keys import generate_mcp_key, hash_mcp_key, mcp_key_prefix
+from app.orchestration.mcp.server import MAX_FINDINGS_RETURNED, TOOLS
+from app.orchestration.mcp.untrusted import FENCE_CLOSE, FENCE_OPEN
 from app.routes.dependencies import (
     get_account_repo,
     get_audit_job_repo,

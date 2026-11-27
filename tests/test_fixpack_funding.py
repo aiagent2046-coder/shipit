@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.billing import grant_fixpack
 from app.foundation.fixpack_funding import funding_key
 from app.notify.messages import funding_review_message
+from app.services.billing import grant_fixpack
 
 
 @pytest.mark.parametrize("inserted", [True, False])
@@ -76,7 +76,7 @@ def test_review_message_never_claims_a_job_or_refund_was_issued():
 
 
 async def test_customer_notification_does_not_promise_work_for_second_payment():
-    from app.billing.bank_transfer import _tell_the_payer
+    from app.services.billing.bank_transfer import _tell_the_payer
 
     notify = AsyncMock()
     await _tell_the_payer(

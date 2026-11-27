@@ -5,11 +5,11 @@ from copy import deepcopy
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.evidence import manifest_rows
-from app.sca.osv import OsvClient
-from app.sca.refresh import inventory_payload, refresh_stale_dependency_audits, refreshed_score
-from app.sca.stage import run_sca_stage
-from app.scan_pipeline import run_scan
+from app.pipeline.report.evidence import manifest_rows
+from app.pipeline.sca.osv import OsvClient
+from app.pipeline.sca.refresh import inventory_payload, refresh_stale_dependency_audits, refreshed_score
+from app.pipeline.sca.stage import run_sca_stage
+from app.pipeline.scan_pipeline import run_scan
 from tests.test_sca_refresh import NOW, StoredRepo, stored_row
 from tests.test_sca_stage import LODASH_ADVISORY, FakeTransport, make_zip, repo_with
 

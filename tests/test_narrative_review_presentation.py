@@ -4,8 +4,8 @@ from dataclasses import asdict, replace
 
 import pytest
 
-from app.report.evidence import claim_evidence_rows, evidence_label
-from app.report.html import _finding_row, _free_baseline
+from app.pipeline.report.evidence import claim_evidence_rows, evidence_label
+from app.pipeline.report.html import _finding_row, _free_baseline
 from app.scan.claim_evidence import narrative_review_checks, partial_contradicted
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import compute_scores

@@ -1,8 +1,8 @@
 """Readers see the scope and title disagreement of a grouped hypothesis."""
 from copy import deepcopy
 
-from app.report.evidence import claim_evidence_rows
-from app.report.html import render_report
+from app.pipeline.report.evidence import claim_evidence_rows
+from app.pipeline.report.html import render_report
 
 
 def finding():

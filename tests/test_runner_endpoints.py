@@ -17,8 +17,8 @@ from fastapi.testclient import TestClient
 
 import app.runner.auth as auth
 import app.runner.main as runner_main
-from app.deploypack.sandbox import SandboxResult
-from app.fixpack.semantic_check import RunResult
+from app.pipeline.fixpack.semantic_check import RunResult
+from app.services.deploypack.sandbox import SandboxResult
 
 client = TestClient(runner_main.app)
 
@@ -229,7 +229,7 @@ def test_minimal_check_rebuilds_plan_from_json_body(monkeypatch):
 def test_run_verification_rebuilds_profile_and_passes_zip(
     monkeypatch,
 ):
-    from app.fixpack.verification import (
+    from app.pipeline.fixpack.verification import (
         VerificationStage,
     )
 

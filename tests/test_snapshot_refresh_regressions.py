@@ -8,10 +8,10 @@ from copy import deepcopy
 import pytest
 
 from app.foundation.lockfiles import lockfiles
-from app.sca import snapshot
+from app.pipeline.sca import snapshot
+from app.pipeline.scan_pipeline import score_findings
 from app.scan import cve_match
 from app.scan.manifest import sca_manifest_fields
-from app.scan_pipeline import score_findings
 
 PRIMARY = "GHSA-2345-2345-2345"
 SECONDARY = "GHSA-3456-3456-3456"

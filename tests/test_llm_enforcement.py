@@ -48,8 +48,7 @@ from app.main import (
     get_subscription_repo,
 )
 from app.notify import alerts
-from app.scan.llm_scan import JOB_COST_CAP_USD, run_llm_scan
-from app.scan_pipeline import (
+from app.pipeline.scan_pipeline import (
     AUDIT_ENGINE_VERSION,
     BASIS_FULL,
     BASIS_PREVIEW,
@@ -58,6 +57,7 @@ from app.scan_pipeline import (
     basis_for_account,
     content_digest,
 )
+from app.scan.llm_scan import JOB_COST_CAP_USD, run_llm_scan
 from tests.conftest import drain_audit_queue
 
 client = TestClient(app)
@@ -660,7 +660,6 @@ def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
     """
     from app.foundation.llm.client import DEFAULT_MODEL
     from app.foundation.llm.pricing import cost_usd
-    from app.scan.llm_scan import MAX_TOTAL_CHARS, RUBRIC_MAX_TOKENS, RUBRICS
 
     # The intended depth times a deliberate 2x safety factor. Since
     # 2026-08-18 a paid audit really does run PAID_AUDIT_PASSES=2 (the
@@ -671,7 +670,8 @@ def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
     # traffic. The formula's 4-chars-per-token also undershoots the measured
     # 2.85, so the real guardband is thinner than it looks here -- the
     # measured two-pass cost is ~$7.86 against the 13.00 cap.
-    from app.scan_pipeline import PAID_AUDIT_PASSES
+    from app.pipeline.scan_pipeline import PAID_AUDIT_PASSES
+    from app.scan.llm_scan import MAX_TOTAL_CHARS, RUBRIC_MAX_TOKENS, RUBRICS
     passes = PAID_AUDIT_PASSES * 2
     calls = len(RUBRICS) * passes
     # ~4 characters per token is the standard rough conversion; the point is

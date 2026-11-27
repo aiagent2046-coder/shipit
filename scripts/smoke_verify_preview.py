@@ -31,9 +31,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.deploypack.pipeline import run_deploy_pack  # noqa: E402
-from app.deploypack.preview import PreviewRegistry  # noqa: E402
 from app.foundation.ingest.stack_detect import detect_stack  # noqa: E402
+from app.services.deploypack.pipeline import run_deploy_pack  # noqa: E402
+from app.services.deploypack.preview import PreviewRegistry  # noqa: E402
 
 
 def zip_dir(root: Path) -> bytes:

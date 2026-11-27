@@ -1,16 +1,15 @@
 """Stage-specific notices must not turn a skipped SCA query into a model outage."""
+import json
 from copy import deepcopy
 from html import escape
-import json
 from pathlib import Path
 
 import pytest
 
-from app.report.evidence import manifest_rows, model_status_notice, non_model_status_notices
-from app.report.html import render_report
+from app.pipeline.report.evidence import manifest_rows, model_status_notice, non_model_status_notices
+from app.pipeline.report.html import render_report
 from app.scan.manifest import SCA_LIMITATIONS, scan_manifest
 from tests.test_audit_llm_wiring import make_zip
-
 
 # The browser helper reads the same scenarios, including legacy and mixed failures.
 CASES = json.loads((Path(__file__).parents[1] / "web/src/lib/fixtures/report_limitation_cases.json").read_text())

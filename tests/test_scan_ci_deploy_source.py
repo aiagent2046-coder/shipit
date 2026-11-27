@@ -248,7 +248,7 @@ def test_the_fix_pack_declines_it_by_name() -> None:
     """Not "advisory, nothing to rewrite" — there is plenty to rewrite, one
     URL. We decline because which repository is the source of truth is not
     stated in either of them, and guessing redirects somebody's production."""
-    from app.fixpack.generate import build_fixpack_plan
+    from app.pipeline.fixpack.generate import build_fixpack_plan
 
     findings = [{"rule_id": RULE_ID, "severity": "high", "category": "Deploy",
                  "title": "Your CI builds this repository and deploys a different one",

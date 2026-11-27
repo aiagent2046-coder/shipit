@@ -1,15 +1,17 @@
 """Synthetic advice contracts: no target execution or provider requests."""
+import json
 from copy import deepcopy
 from dataclasses import asdict, replace
 from html import escape
-import json
 
 import pytest
 
-from app.report.evidence import claim_evidence_rows
-from app.report.html import render_report
+from app.pipeline.report.evidence import claim_evidence_rows
+from app.pipeline.report.html import render_report
 from app.scan.paid_operation_recommendations import (
-    FOLLOWUPS_KIND, PAID_OPERATION_KIND, RETRY_BUDGET_KIND,
+    FOLLOWUPS_KIND,
+    PAID_OPERATION_KIND,
+    RETRY_BUDGET_KIND,
 )
 from app.scan.recommendations import TIMING_SAFE_EQUAL_KIND, prepare_recommendation
 from app.scan.scoring import ScoredFinding
@@ -224,7 +226,7 @@ def test_original_and_provenance_are_rendered_as_superseded_without_mutating_rep
 
 def test_model_pipeline_does_not_trust_forged_check_or_add_another_model_call():
     from app.scan.llm_scan import run_llm_scan
-    from tests.test_llm_scan import FakeLLM, VULN_TS, make_zip, valid_finding
+    from tests.test_llm_scan import VULN_TS, FakeLLM, make_zip, valid_finding
 
     advice = "Use a unique partial index to prevent duplicate Claude calls."
     raw = valid_finding(title="Concurrent Claude calls", fix_hint=advice,

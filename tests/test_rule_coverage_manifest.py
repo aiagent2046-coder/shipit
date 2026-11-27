@@ -8,11 +8,11 @@ import zipfile
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.html import render_report
-from app.report.sarif import build_sarif
+from app.pipeline.report.html import render_report
+from app.pipeline.report.sarif import build_sarif
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.manifest import scan_manifest
 from app.scan.rule_coverage import RULE_COVERAGE_KEYS, normalize_rule_coverage
-from app.scan_pipeline import run_scan
 
 
 def archive(files):

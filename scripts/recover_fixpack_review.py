@@ -263,7 +263,7 @@ async def recover_review(request: ReviewRequest, *, apply: bool, directory: Path
                          runner, llm_client, audit_repo, llm_usage_repo, repo_fetcher,
                          engine: str, pr_loader=fetch_pr, downloader=fetch_source_zip) -> dict:
     from app.foundation.ingest.validators import validate_zip
-    from app.scan_pipeline import content_digest
+    from app.pipeline.scan_pipeline import content_digest
 
     job, payment = store.snapshot(request)
     owner, repo, number = validate_order(job, payment, request)
@@ -360,8 +360,8 @@ async def run_on_production(request: ReviewRequest, apply: bool, directory: Path
     from app.foundation.ingest.github_fetch import fetch_repo_zip
     from app.foundation.llm.client import LLMClient
     from app.main import run_repo_audit
+    from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION
     from app.runtime.log_context import log_context
-    from app.scan_pipeline import AUDIT_ENGINE_VERSION
 
     try:
         with log_context(job_id=request.job_id, audit_id=request.audit_id, trace_id=request.job_id):

@@ -5,8 +5,8 @@ import zipfile
 
 import pytest
 
-from app.scan.consequence_evidence import ConsequenceVerifier
 from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
+from app.scan.consequence_evidence import ConsequenceVerifier
 from app.scan.syntax_claims import SyntaxVerifier
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
@@ -454,8 +454,8 @@ def test_syntax_integration_does_not_add_a_contradiction_or_source_excerpts(sour
 
 
 def test_fake_model_pipeline_retains_http_finding_and_penalty():
-    from app.scan_pipeline import run_scan
-    from app.report.html import render_report
+    from app.pipeline.report.html import render_report
+    from app.pipeline.scan_pipeline import run_scan
     finding = discarded(file='components/Commit.tsx')
     finding.update(severity='high', category='Frontend', confidence=0.9,
                    evidence="await fetch('/api/commit', {method:'POST'});", fix_hint='Check HTTP success.')
@@ -470,6 +470,7 @@ def test_fake_model_pipeline_retains_http_finding_and_penalty():
     assert row['severity'] == 'high'
     assert row['verification_status'] == 'unverified'
     from dataclasses import fields
+
     from app.scan.scoring import ScoredFinding, compute_scores
     allowed = {field.name for field in fields(ScoredFinding)}
     scored = ScoredFinding(**{key: value for key, value in row.items() if key in allowed})

@@ -1,12 +1,12 @@
 """End-to-end v4 review regressions with synthetic source and fixed responses."""
 import copy
+import json
 from dataclasses import fields
 from html import escape
-import json
 
-from app.report.html import _finding_row, render_report
+from app.pipeline.report.html import _finding_row, render_report
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
-from app.scan_pipeline import run_scan
 from app.scan.scoring import ScoredFinding, compute_scores
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 from tests.test_http_success import component

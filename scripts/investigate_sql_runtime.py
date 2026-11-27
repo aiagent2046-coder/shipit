@@ -16,8 +16,8 @@ sys.path.insert(0, str(ROOT))
 
 from app.foundation.ingest.validators import MAX_ARCHIVE_BYTES, ArchiveValidationError  # noqa: E402
 from app.foundation.llm.client import LLMClient  # noqa: E402
+from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan  # noqa: E402
 from app.proof.sql.sql_runtime_executor import SyntheticSqlExecutor  # noqa: E402
-from app.scan_pipeline import BASIS_PREVIEW, run_scan  # noqa: E402
 
 
 def main(argv=None):

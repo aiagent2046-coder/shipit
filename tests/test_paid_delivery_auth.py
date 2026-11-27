@@ -5,13 +5,13 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from cryptography.fernet import Fernet
 import pytest
+from cryptography.fernet import Fernet
 
 import app.main as main
-from app.deploypack import paid_delivery_auth as auth
-from app.deploypack.delivery import PullRequestResult
-from app.deploypack.delivery_auth import DeliveryAuthorizationError
+from app.services.deploypack import paid_delivery_auth as auth
+from app.services.deploypack.delivery import PullRequestResult
+from app.services.deploypack.delivery_auth import DeliveryAuthorizationError
 from tests.test_fixpack_process_endpoint import _review_job_setup, _review_zip
 
 BINDING = dict(provider="bank_transfer", external_ref="fixture-reference",

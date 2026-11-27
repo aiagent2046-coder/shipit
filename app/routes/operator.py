@@ -29,10 +29,9 @@ from app.db import (
     LlmUsageRepository,
     PaymentRepository,
 )
-from app.deploypack.preview import PreviewRegistry
-from app.fixpack.merit import UNDETERMINED, Reason, Verdict, assess
 from app.foundation.learning.external_cve import external_cve_status
 from app.notify import messages
+from app.pipeline.fixpack.merit import UNDETERMINED, Reason, Verdict, assess
 from app.routes._shared import (
     _json_object_body,
     _require_bearer_token,
@@ -48,6 +47,7 @@ from app.routes.dependencies import (
     get_preview_reconciler,
     get_preview_registry,
 )
+from app.services.deploypack.preview import PreviewRegistry
 
 logger = logging.getLogger(__name__)
 

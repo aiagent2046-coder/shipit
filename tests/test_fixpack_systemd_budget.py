@@ -3,8 +3,7 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-import app.sandbox_client as sandbox_client
-
+import app.pipeline.sandbox_client as sandbox_client
 
 UNIT_PATH = Path(
     "deploy/systemd/shipit-fixpack.service"

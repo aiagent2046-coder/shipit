@@ -6,7 +6,6 @@ import sys
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.billing import telegram_stars
 from app.db import (
     AuditRepository,
     LlmUsageRepository,
@@ -22,6 +21,7 @@ from app.foundation.llm.client import LLMClient
 from app.foundation.monitor import repo_url_from_full_name
 from app.foundation.monitor.diff import new_high_severity_findings
 from app.notify import alerts
+from app.pipeline.scan_pipeline import BASIS_FULL
 from app.routes._shared import _require_bearer_token
 from app.routes.dependencies import (
     get_audit_repo,
@@ -34,7 +34,7 @@ from app.routes.dependencies import (
     get_subscription_repo,
 )
 from app.runtime.log_context import set_log_context
-from app.scan_pipeline import BASIS_FULL
+from app.services.billing import telegram_stars
 
 logger = logging.getLogger("app.main")
 router = APIRouter()

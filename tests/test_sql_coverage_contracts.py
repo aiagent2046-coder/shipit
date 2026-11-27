@@ -1,20 +1,19 @@
 """SQL coverage survives product boundaries without erasing independent findings."""
 
-from html import escape
 import io
 import json
 import stat
 import zipfile
+from html import escape
 
 import pytest
 
-from app import local_cli
-from app.report.evidence import RULE_COVERAGE_LABELS, manifest_rows, non_model_status_notices
-from app.report.html import render_report
+from app.pipeline import local_cli
+from app.pipeline.report.evidence import RULE_COVERAGE_LABELS, manifest_rows, non_model_status_notices
+from app.pipeline.report.html import render_report
 from app.scan import sql_injection, sql_injection_js
 from app.scan.browser import ScanSession, scan_archive
 from app.scan.manifest import scan_manifest
-
 
 RULE_ID = "sql-injection-string-built-query"
 PYTHON_QUERY = 'cursor.execute("SELECT * FROM users WHERE id = " + user_id)\n'

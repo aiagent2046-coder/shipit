@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.audit_history import refresh_cached_preview_history, score_with_preview_history
 from app.foundation.llm.client import LLMClient
 from app.main import app, get_audit_repo, run_repo_audit
-from app.report.html import render_report
-from app.sca.snapshot import run_snapshot_stage
-from app.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
+from app.pipeline.report.html import render_report
+from app.pipeline.sca.snapshot import run_snapshot_stage
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
+from app.services.audit_history import refresh_cached_preview_history, score_with_preview_history
 from app.worker import main as worker
 from tests.conftest import run_audit_job
 from tests.test_audit_determinism import _post, force_pro_account
@@ -290,7 +290,7 @@ async def test_full_free_snapshot_reuses_original_model_and_scope():
 async def test_baseline_keeps_deterministic_checks_when_model_cannot_run(reason):
     from types import SimpleNamespace
 
-    from app.audit_history import ensure_paid_baseline
+    from app.services.audit_history import ensure_paid_baseline
     scan = {'score': row('static+llm', [])['score_json'], 'findings': [],
             'llm_usage': {'calls': 1, 'model': 'claude-sonnet-4.6',
                           'input_tokens': 100_000_000 if reason == 'budget' else 0, 'output_tokens': 0}}
@@ -312,7 +312,7 @@ async def test_partial_free_stage_keeps_findings_and_records_usage_before_paid_p
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from app.audit_history import ensure_paid_baseline
+    from app.services.audit_history import ensure_paid_baseline
     preview = {'score': row('static+partial', [PREVIEW])['score_json'], 'findings': [PREVIEW],
                'llm_usage': {'calls': 1}, 'llm': {'failure': 'provider'}}
     record = AsyncMock()

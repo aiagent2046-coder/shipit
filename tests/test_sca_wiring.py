@@ -14,10 +14,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.evidence import manifest_rows
-from app.sca.osv import OsvClient
-from app.sca.stage import RULE_ID, SCA_ENABLED_ENV, freshness, sca_client_for
-from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
+from app.pipeline.report.evidence import manifest_rows
+from app.pipeline.sca.osv import OsvClient
+from app.pipeline.sca.stage import RULE_ID, SCA_ENABLED_ENV, freshness, sca_client_for
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
 from tests.test_sca_stage import LODASH_ADVISORY, FakeTransport, make_zip
 
 

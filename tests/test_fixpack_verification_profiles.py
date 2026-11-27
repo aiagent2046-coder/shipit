@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from app.fixpack.verification import (
+from app.pipeline.fixpack.verification import (
     VerificationReport,
     VerificationStage,
     detect_verification_profile,

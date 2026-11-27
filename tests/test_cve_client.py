@@ -1,11 +1,11 @@
 """CVE enrichment must remain bounded and never manufacture database evidence."""
-from copy import deepcopy
 import json
+from copy import deepcopy
 
 import httpx
 import pytest
 
-from app.sca.cve import CveClient, empty_cve_summary, normalize_cve_summary
+from app.pipeline.sca.cve import CveClient, empty_cve_summary, normalize_cve_summary
 
 FIRST = "CVE-2021-23337"
 SECOND = "CVE-2024-7033"
@@ -232,7 +232,7 @@ def test_invalid_response_bodies_are_unavailable(body):
 
 def test_wall_clock_budget_is_checked_between_stream_chunks(monkeypatch):
     clock = [0.0]
-    monkeypatch.setattr("app.sca.cve.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("app.pipeline.sca.cve.time.monotonic", lambda: clock[0])
     seen = []
 
     def chunks():
@@ -252,7 +252,7 @@ def test_wall_clock_budget_is_checked_between_stream_chunks(monkeypatch):
 
 def test_request_timeout_is_capped_by_remaining_total_budget(monkeypatch):
     clock = [0.0]
-    monkeypatch.setattr("app.sca.cve.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("app.pipeline.sca.cve.time.monotonic", lambda: clock[0])
     timeouts = []
 
     def handler(request):

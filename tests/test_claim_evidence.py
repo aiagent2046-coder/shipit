@@ -4,10 +4,10 @@ import json
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.evidence import claim_evidence_rows
-from app.report.html import render_report
+from app.pipeline.report.evidence import claim_evidence_rows
+from app.pipeline.report.html import render_report
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
-from app.scan_pipeline import run_scan
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 

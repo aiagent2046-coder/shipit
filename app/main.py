@@ -30,16 +30,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from app import sandbox_client
+from app.pipeline import sandbox_client
 
 from app.notify import alerts
 from app.foundation.accounts import (
     CSRF_HEADER,
     validate_api_key_pepper_configured,
 )
-from app.audit_history import ensure_paid_baseline, refresh_cached_preview_history
-from app.audit_workflow import _AuditForm, _elapsed_ms, create_audit
-from app.billing import telegram_stars
+from app.services.audit_history import ensure_paid_baseline, refresh_cached_preview_history
+from app.orchestration.audit_workflow import _AuditForm, _elapsed_ms, create_audit
+from app.services.billing import telegram_stars
 from app.db import (
     AuditRepository,
     FixOutcomeRepository,
@@ -51,26 +51,26 @@ from app.db import (
     fixpack_processor_lock,
 )
 from app.db import monitoring_processor_lock as monitoring_processor_lock
-from app.deploypack import github_app
-from app.deploypack.delivery import DeliveryError, render_pr_body
-from app.deploypack.delivery_auth import (
+from app.services.deploypack import github_app
+from app.services.deploypack.delivery import DeliveryError, render_pr_body
+from app.services.deploypack.delivery_auth import (
     DeliveryAuthorizationError,
     authorize_repository_delivery,
     validate_delivery_token,
 )
-from app.deploypack.generate import UnsupportedForDeployPack
-from app.deploypack.paid_delivery_auth import get_paid_delivery_store, paid_delivery_token
-from app.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
-from app.deploypack.preview import PreviewRegistry
-from app.fixpack.gate import run_semantic_check
-from app.fixpack.generate import (
+from app.services.deploypack.generate import UnsupportedForDeployPack
+from app.services.deploypack.paid_delivery_auth import get_paid_delivery_store, paid_delivery_token
+from app.services.deploypack.pipeline import WorkspaceTooLarge, run_deploy_pack
+from app.services.deploypack.preview import PreviewRegistry
+from app.pipeline.fixpack.gate import run_semantic_check
+from app.pipeline.fixpack.generate import (
     build_fixpack_plan,
     has_auto_fixable_findings,
 )
-from app.fixpack.generate import (
+from app.pipeline.fixpack.generate import (
     render_pr_body as render_fixpack_pr_body,
 )
-from app.fixpack.generate import (
+from app.pipeline.fixpack.generate import (
     render_pr_title as render_fixpack_pr_title,
 )
 from app.foundation.ingest.stack_detect import detect_stack
@@ -80,14 +80,14 @@ from app.foundation.ingest.validators import (
     validate_zip,
 )
 from app.foundation.llm.client import LLMClient
-from app.llm_budget import (  # noqa: F401  (re-exported for the test suite)
+from app.services.llm_budget import (  # noqa: F401  (re-exported for the test suite)
     _ANON_SPEND_ALERT_FRACTION,
     DEFAULT_DAILY_SPEND_CAP_USD,
     _anon_daily_cap_exceeded,
 )
 from app.runtime.log_context import log_context, set_log_context
 from app.runtime.logging_config import configure_logging, environment_from_env
-from app.ops_endpoints import router as ops_router
+from app.services.ops_endpoints import router as ops_router
 from app.proof import (
     decide_proof_gate,
     render_proof_markdown,
@@ -110,10 +110,10 @@ from app.routes.rls_check import router as rls_check_router
 from app.routes.session import router as session_router
 from app.routes.storefront import router as storefront_router
 from app.routes.yookassa import router as yookassa_router
-from app.sandbox_client import SandboxRunnerUnavailable
-from app.sca.refresh import inventory_payload
-from app.sca.snapshot import baseline_is_current
-from app.scan_pipeline import (
+from app.pipeline.sandbox_client import SandboxRunnerUnavailable
+from app.pipeline.sca.refresh import inventory_payload
+from app.pipeline.sca.snapshot import baseline_is_current
+from app.pipeline.scan_pipeline import (
     AUDIT_ENGINE_VERSION,
     BASIS_FULL,
     LLM_FAILURE_BILLING,
@@ -121,7 +121,7 @@ from app.scan_pipeline import (
     llm_failure_kind,
     run_scan,
 )
-from app.service_flags import (  # noqa: F401  (re-exported for the test suite)
+from app.services.service_flags import (  # noqa: F401  (re-exported for the test suite)
     _emergency_stop_active,
     _llm_paid_ops_enabled,
     _reset_service_flag_cache,
@@ -307,7 +307,7 @@ from app.runtime.github_repo import (  # noqa: E402
     _VALID_OWNER_REPO_SEGMENT,
     _parse_github_repo_url,
 )
-from app.mcp.server import router as mcp_router  # noqa: E402
+from app.orchestration.mcp.server import router as mcp_router  # noqa: E402
 from app.routes._shared import (  # noqa: E402
     _client_key,
     _require_bearer_token,

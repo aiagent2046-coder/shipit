@@ -21,7 +21,7 @@ wait. One alert for both trains the reader to ignore the one that matters.
 from __future__ import annotations
 
 import app.main as main_mod
-from app.scan_pipeline import (
+from app.pipeline.scan_pipeline import (
     LLM_FAILURE_BILLING,
     LLM_FAILURE_PROVIDER,
     llm_failure_kind,

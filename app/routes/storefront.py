@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.billing import bank_transfer, yookassa
 from app.notify import telegram
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION
 from app.runtime.capabilities import manifest
-from app.scan_pipeline import AUDIT_ENGINE_VERSION
+from app.services.billing import bank_transfer, yookassa
 
 router = APIRouter()
 

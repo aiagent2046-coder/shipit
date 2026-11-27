@@ -1,17 +1,16 @@
 """Next steps must preserve evidence limits and links to the current report."""
+import json
 from copy import deepcopy
 from html import escape
 from html.parser import HTMLParser
-import json
 from pathlib import Path
 
 import pytest
 
-from app.report.html import render_report
-from app.report.owner_report import build_owner_report, owner_report_context
-from app.report.owner_roadmap import build_owner_roadmap
-from app.report.sarif import build_sarif
-
+from app.pipeline.report.html import render_report
+from app.pipeline.report.owner_report import build_owner_report, owner_report_context
+from app.pipeline.report.owner_roadmap import build_owner_roadmap
+from app.pipeline.report.sarif import build_sarif
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CASES = json.loads((FIXTURES / "owner-roadmap.json").read_text())
@@ -191,7 +190,7 @@ def test_html_escapes_dependency_paths_in_action_details():
         'requirements.txt': ['unresolved'], '': 'unresolved', ' \t': 'unresolved'}}}, 'partial', []),
 ])
 def test_dependency_scope_uses_explicit_facts_and_types(context, status, unresolved):
-    from app.report.owner_report import dependency_coverage_gap
+    from app.pipeline.report.owner_report import dependency_coverage_gap
 
     before = deepcopy(context)
     expected = {'status': status, 'unresolved_manifests': unresolved} if status else None

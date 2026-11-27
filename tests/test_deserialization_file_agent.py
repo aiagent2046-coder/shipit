@@ -7,14 +7,14 @@ from copy import deepcopy
 
 import pytest
 
-from app import local_cli
 from app.foundation.llm.client import LLMClient
-from app.report.evidence import security_agent_rows
+from app.pipeline import local_cli
+from app.pipeline.report.evidence import security_agent_rows
+from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan import evidence_acquisition, security_agent
 from app.scan.agent_chain import normalize_chain
 from app.scan.browser import scan_archive
 from app.scan.evidence_record import normalize_acquisition
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_security_agent import archive
 
 FILE_LOADERS = '''import pickle

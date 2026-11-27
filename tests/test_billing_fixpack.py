@@ -26,16 +26,16 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.billing import telegram_stars
 from app.db import STALE_LEASE_DETAIL_PREFIX
 from app.main import (
     app,
-    get_audit_repo,
     get_account_repo,
+    get_audit_repo,
     get_billing_transport,
     get_fixpack_repo,
     get_payment_repo,
 )
+from app.services.billing import telegram_stars
 from tests.conftest import (
     FakeAccountRepo,
     FakeCompletionCasMixin,

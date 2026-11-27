@@ -7,12 +7,12 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from app.billing import bank_transfer, yookassa
-from app.deploypack import paid_delivery_auth
-from app.deploypack.delivery_auth import DeliveryAuthorizationError
-from app.deploypack.paid_delivery_auth import open_paid_grant
 from app.main import app, get_audit_repo, get_fixpack_repo, get_payment_repo
 from app.routes import billing as paid_delivery
+from app.services.billing import bank_transfer, yookassa
+from app.services.deploypack import paid_delivery_auth
+from app.services.deploypack.delivery_auth import DeliveryAuthorizationError
+from app.services.deploypack.paid_delivery_auth import open_paid_grant
 
 AUDIT_ID = "11111111-1111-4111-8111-111111111111"
 AUDIT_TOKEN = "a" * 32

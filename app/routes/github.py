@@ -28,8 +28,6 @@ from app.db import (
     MonitoringRunRepository,
     SubscriptionRepository,
 )
-from app.deploypack import github_app
-from app.deploypack.github_app import GitHubAppError
 from app.foundation import monitor
 from app.foundation.monitor import normalize_repo_full_name
 from app.routes._shared import _secret_equals
@@ -39,6 +37,8 @@ from app.routes.dependencies import (
     get_subscription_repo,
 )
 from app.runtime.github_repo import _VALID_OWNER_REPO_SEGMENT
+from app.services.deploypack import github_app
+from app.services.deploypack.github_app import GitHubAppError
 
 router = APIRouter()
 

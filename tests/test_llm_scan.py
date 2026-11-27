@@ -15,9 +15,10 @@ import zipfile
 import httpx
 import pytest
 
-from app import scan_pipeline as pipeline_mod
 from app.foundation.llm import client as client_mod
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
+from app.pipeline import scan_pipeline as pipeline_mod
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION
 from app.scan import (
     atomic_claims,
     auth_source_assessment,
@@ -74,7 +75,6 @@ from app.scan.llm_scan import (
 )
 from app.scan.scoring import CATEGORIES
 from app.scan.secrets import damp_for_non_production_path
-from app.scan_pipeline import AUDIT_ENGINE_VERSION
 
 # sha256 of everything that decides what the model is shown -- the prompts,
 # and the file selection that fills them. First 16 hex characters. Paired with
@@ -1900,7 +1900,7 @@ def test_run_scan_at_preview_depth_does_not_credit_unrun_rubrics():
     test against compute_scores keeps passing, because each one hands the
     argument in by hand. This one makes run_scan derive it.
     """
-    from app.scan_pipeline import BASIS_PREVIEW, run_scan
+    from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
 
     raw = make_zip({
         "package.json": b'{"dependencies":{"next":"14"}}',
@@ -1930,7 +1930,7 @@ def test_run_scan_at_preview_depth_does_not_credit_unrun_rubrics():
 def test_run_scan_at_full_depth_still_credits_every_category():
     """The control: a paid audit runs every rubric and nothing is unexamined.
     Without this, "exclude everything" would pass the test above."""
-    from app.scan_pipeline import run_scan
+    from app.pipeline.scan_pipeline import run_scan
 
     raw = make_zip({
         "package.json": b'{"dependencies":{"next":"14"}}',

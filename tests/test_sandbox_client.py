@@ -14,9 +14,9 @@ import zipfile
 import httpx
 import pytest
 
-import app.sandbox_client as sc
-from app.fixpack.generate import FixpackPlan
-from app.fixpack.semantic_check import TestRunner as SuiteRunner
+import app.pipeline.sandbox_client as sc
+from app.pipeline.fixpack.generate import FixpackPlan
+from app.pipeline.fixpack.semantic_check import TestRunner as SuiteRunner
 
 
 def _install(monkeypatch, handler):
@@ -488,7 +488,7 @@ def test_runner_healthy_uses_short_timeout(monkeypatch):
 def test_run_verification_profile_marshals_profile_and_stages(
     monkeypatch,
 ):
-    from app.fixpack.verification import (
+    from app.pipeline.fixpack.verification import (
         VerificationProfile,
         VerificationStep,
     )
@@ -585,7 +585,7 @@ def test_run_verification_profile_marshals_profile_and_stages(
 def test_run_verification_profile_returns_unavailable_on_outage(
     monkeypatch,
 ):
-    from app.fixpack.verification import (
+    from app.pipeline.fixpack.verification import (
         VerificationProfile,
         VerificationStep,
     )
@@ -643,7 +643,7 @@ def test_run_verification_profile_returns_unavailable_on_outage(
 def test_run_verification_profile_rejects_malformed_response(
     monkeypatch,
 ):
-    from app.fixpack.verification import (
+    from app.pipeline.fixpack.verification import (
         VerificationProfile,
         VerificationStep,
     )

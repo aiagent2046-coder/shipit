@@ -20,7 +20,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from starlette.concurrency import run_in_threadpool
 
 from app.db import AccountRepository, FixpackJobRepository
-from app.deploypack.github_app import app_auth_ok
 from app.foundation.accounts import (
     account_for_key,
     clear_api_key_cookie,
@@ -35,6 +34,7 @@ from app.routes.dependencies import (
     get_rate_limiter,
 )
 from app.runtime.ratelimit import RateLimiter
+from app.services.deploypack.github_app import app_auth_ok
 
 router = APIRouter()
 

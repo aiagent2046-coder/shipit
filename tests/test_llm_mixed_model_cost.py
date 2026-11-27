@@ -68,7 +68,7 @@ async def test_persisted_usd_uses_each_model_and_keeps_unknown_failed_charge():
 
 @pytest.mark.asyncio
 async def test_paid_preview_budget_subtracts_both_models(monkeypatch):
-    from app import audit_history
+    from app.services import audit_history
     _, stats = mixed_scan()
     monkeypatch.setattr(audit_history, "score_with_preview_history", AsyncMock(return_value={}))
     monkeypatch.setattr(audit_history, "baseline_is_current", lambda score: False)

@@ -12,8 +12,8 @@ Loaded by path because the filename is hyphenated and not importable.
 
 from __future__ import annotations
 
-import importlib.util
 import base64
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -482,8 +482,8 @@ def test_payment_rail_requires_delivery_key_from_file(
 def test_delivery_key_preflight_matches_runtime(
     tmp_path, monkeypatch, capsys, key,
 ):
-    from app.deploypack.paid_delivery_auth import _cipher
-    from app.deploypack.delivery_auth import DeliveryAuthorizationError
+    from app.services.deploypack.delivery_auth import DeliveryAuthorizationError
+    from app.services.deploypack.paid_delivery_auth import _cipher
 
     monkeypatch.setenv("FIXPACK_DELIVERY_ENCRYPTION_KEY", key)
     try:
@@ -762,6 +762,7 @@ def test_invalid_cost_cap_fails_preflight_and_runtime(value, tmp_path, monkeypat
 @pytest.mark.parametrize("value", ["0.001", "13.00", "1e2", " 2.5 "])
 def test_positive_cost_cap_passes_preflight_and_runtime(value, tmp_path, monkeypatch):
     from decimal import Decimal
+
     from app.scan.llm_scan import parse_job_cost_cap
 
     assert _run(tmp_path, monkeypatch, {**COMPLETE_ENV, "JOB_COST_CAP_USD": value}) == 0

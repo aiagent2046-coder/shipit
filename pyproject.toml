@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-drydock-local = "app.local_cli:main"
+drydock-local = "app.pipeline.local_cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=9.2.0", "pytest-asyncio>=1.4.1.post1", "ruff>=0.17.4", "jsonschema[format-nongpl]>=4.21", "hypothesis>=6.170.14"]

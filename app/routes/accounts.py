@@ -30,7 +30,7 @@ from app.routes.dependencies import (
     get_service_flags_repo,
 )
 from app.runtime.ratelimit import RateLimiter
-from app.service_flags import _reset_service_flag_cache
+from app.services.service_flags import _reset_service_flag_cache
 
 router = APIRouter()
 

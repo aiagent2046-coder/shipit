@@ -5,17 +5,17 @@ import json
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.evidence import (
+from app.pipeline.report.evidence import (
     coverage_rows,
     finding_counts,
     manifest_rows,
     model_status_notice,
     source_severity_counts,
 )
-from app.report.html import render_report
-from app.report.plain_language import plain_fields
+from app.pipeline.report.html import render_report
+from app.pipeline.report.plain_language import plain_fields
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
 from app.scan.manifest import scan_manifest
-from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
 from tests.test_audit_llm_wiring import AUTH_ZIP, FakeLLM, make_zip
 
 
@@ -84,7 +84,7 @@ def test_fixture_counts_and_old_credential_claims_cannot_inflate_the_headline():
 
 
 def test_display_grouping_preserves_source_and_example_counts():
-    from app.report.grouping import group_for_display
+    from app.pipeline.report.grouping import group_for_display
     from app.scan.rls import RULE_ID
     common = {"rule_id": RULE_ID, "severity": "medium", "category": "Security", "title": "RLS"}
     findings = [{**common, "file": "schema/a.sql"}, {**common, "file": "schema/b.sql"},
@@ -95,7 +95,7 @@ def test_display_grouping_preserves_source_and_example_counts():
 
 
 def test_mixed_severity_display_group_retains_the_original_source_summary():
-    from app.report.grouping import group_for_display
+    from app.pipeline.report.grouping import group_for_display
     from app.scan.rls import RULE_ID
     common = {"rule_id": RULE_ID, "category": "Security", "title": "RLS", "file": "schema.sql"}
     findings = [{**common, "severity": "high"}, {**common, "severity": "medium"},
@@ -132,7 +132,7 @@ def test_successful_preview_and_full_reviews_have_no_failure_notice():
 
 @pytest.mark.parametrize("flag", ["cost_cap_exceeded", "input_truncated"])
 def test_limited_model_review_cannot_be_cached_as_full(monkeypatch, flag):
-    from app import scan_pipeline as pipeline
+    from app.pipeline import scan_pipeline as pipeline
     from app.scan.llm_scan import LLMScanStats
 
     def limited(*args, **kwargs):

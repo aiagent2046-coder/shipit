@@ -2,8 +2,8 @@ import ast
 import json
 from pathlib import Path
 
-from app.scan.premise_context import finding_context, transaction_templates, update_predicates
 from app.scan.function_context import collect_function_context
+from app.scan.premise_context import finding_context, transaction_templates, update_predicates
 from app.scan.source_facts import collect_source_facts, facts_prompt
 from tests.test_operation_context import archive
 
@@ -64,8 +64,8 @@ def test_transaction_template_observed_without_claiming_runner_execution():
 
 def test_expanded_actual_repository_prompt_retains_payment_predicates():
     db_paths = sorted(p.as_posix() for p in Path('app/db').glob('*.py'))
-    paths = [*db_paths, 'app/billing/__init__.py', 'app/main.py', 'app/billing/bank_transfer.py',
-             'app/llm_budget.py', 'scripts/migration_manager.py']
+    paths = [*db_paths, 'app/services/billing/__init__.py', 'app/main.py', 'app/services/billing/bank_transfer.py',
+             'app/services/llm_budget.py', 'scripts/migration_manager.py']
     facts = collect_source_facts(archive({p: Path(p).read_text() for p in paths}))
     prompt = facts_prompt(facts)
     assert len(prompt) <= 16000
@@ -77,6 +77,6 @@ def test_payment_claim_does_not_inherit_unrelated_migration_transaction():
     source = Path('scripts/migration_manager.py').read_text()
     facts = collect_source_facts(archive({'scripts/migration_manager.py': source}))
     claim = {'title': 'Migration 0025 permits retry but grant lacks a transaction',
-             'file': 'app/billing/__init__.py', 'line_start': 253, 'line_end': 320}
+             'file': 'app/services/billing/__init__.py', 'line_start': 253, 'line_end': 320}
     assert finding_context(claim, facts) == []
     assert finding_context({'title': claim['title']}, facts) == []

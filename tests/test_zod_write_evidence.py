@@ -3,11 +3,11 @@ import json
 
 import pytest
 
-from app.scan.zod_write_evidence import KIND, ZodWriteVerifier
-from app.scan.syntax_claims import SyntaxVerifier
+from app.pipeline.report.html import render_report
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.claim_evidence import partial_contradicted, syntax_contradicted
-from app.scan_pipeline import run_scan
-from app.report.html import render_report
+from app.scan.syntax_claims import SyntaxVerifier
+from app.scan.zod_write_evidence import KIND, ZodWriteVerifier
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 SOURCE = '''import {z} from 'zod';

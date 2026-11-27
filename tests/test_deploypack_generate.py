@@ -6,13 +6,13 @@ import zipfile
 import pytest
 import yaml
 
-from app.deploypack.generate import (
+from app.foundation.ingest.stack_detect import Stack
+from app.services.deploypack.generate import (
     UnsupportedForDeployPack,
     extract_repo,
     generate_deploy_pack,
     read_all_files,
 )
-from app.foundation.ingest.stack_detect import Stack
 
 
 def make_zip(entries: dict[str, bytes]) -> io.BytesIO:

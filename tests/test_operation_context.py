@@ -1,15 +1,15 @@
 """Operation context is reproducible navigation evidence, never a verdict."""
 import io
 import json
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 import pytest
 
+from app.pipeline.report.evidence import manifest_rows
+from app.pipeline.report.html import render_report
 from app.scan import operation_context as context
 from app.scan.source_facts import collect_source_facts, facts_prompt
-from app.report.evidence import manifest_rows
-from app.report.html import render_report
 
 
 def archive(files):

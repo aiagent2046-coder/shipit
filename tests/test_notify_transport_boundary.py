@@ -39,7 +39,7 @@ def _imported_modules(path: pathlib.Path) -> set[str]:
             names.update(a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             names.add(node.module)
-            # `from app.billing import telegram_stars` -- the package is in
+            # `from app.services.billing import telegram_stars` -- the package is in
             # `module`, the thing imported is in `names`, and only the pair
             # spells out what was reached for.
             names.update(f"{node.module}.{a.name}" for a in node.names)
@@ -56,7 +56,7 @@ def _sources(package: str) -> list[pathlib.Path]:
 
 @pytest.mark.parametrize("path", _sources("app.notify"), ids=lambda p: p.name)
 def test_a_transport_does_not_know_what_a_payment_is(path: pathlib.Path) -> None:
-    reached = {n for n in _imported_modules(path) if n.startswith("app.billing")}
+    reached = {n for n in _imported_modules(path) if n.startswith("app.services.billing")}
     assert not reached, (
         f"{path.name} imports {sorted(reached)}. A notification channel that "
         "imports a payment provider cannot survive that provider being removed "
@@ -69,7 +69,7 @@ def test_the_operator_alert_channel_does_not_go_through_billing() -> None:
     called from the Fix Pack failure path and the 5xx handler: a payment
     provider must not be in that import chain."""
     reached = {n for n in _imported_modules(ROOT / "app" / "notify" / "alerts.py")
-               if n.startswith("app.billing")}
+               if n.startswith("app.services.billing")}
     assert not reached, f"app/alerts.py imports {sorted(reached)}"
 
 

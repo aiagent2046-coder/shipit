@@ -10,15 +10,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import local_cli
 from app.foundation.llm.client import LLMClient
-from app.report.evidence import claim_evidence_rows, manifest_rows
-from app.report.html import render_report
+from app.pipeline import local_cli
+from app.pipeline.report.evidence import claim_evidence_rows, manifest_rows
+from app.pipeline.report.html import render_report
+from app.pipeline.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan import security_agent, sql_injection
 from app.scan.browser import ScanSession, scan_archive
 from app.scan.pattern_catalog import catalog_manifest
 from app.scan.static import run_static_scan
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_browser_cve import CATALOG
 
 SQL = ('def load(cursor, user_id):\n'

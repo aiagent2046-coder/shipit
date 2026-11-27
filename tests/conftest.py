@@ -29,8 +29,8 @@ import uuid
 
 import pytest
 
-import app.audit_spool as spool_mod
 import app.db as db_mod
+import app.services.audit_spool as spool_mod
 from app.foundation.accounts import TIER_PRO, api_key_prefix, generate_api_key
 from app.main import app, get_audit_job_repo, get_rate_limiter
 from app.runtime.ratelimit import RateLimiter
@@ -450,7 +450,7 @@ async def run_audit_job(raw: bytes, *, llm_client, audit_repo=None,
     rather than about the endpoint. Goes through the real spool so the payload
     handoff -- the part that only exists because the scan moved to another
     process -- is exercised rather than assumed. Returns the persisted row."""
-    from app.audit_spool import stage_archive
+    from app.services.audit_spool import stage_archive
     from app.worker.main import _execute_job
 
     repo = audit_repo or RecordingAuditRepo()
@@ -537,7 +537,7 @@ def _no_ambient_production_integrations(monkeypatch):
     Also drops app_auth_ok's cached verdict, which is module-level and would
     otherwise let one test's credentials answer another test's health probe.
     """
-    from app.deploypack.github_app import reset_app_auth_cache
+    from app.services.deploypack.github_app import reset_app_auth_cache
 
     reset_app_auth_cache()
     variables = (
@@ -575,7 +575,7 @@ def _no_ambient_production_integrations(monkeypatch):
     # sandbox_client reads these values at import time, before pytest
     # fixtures execute. Override the module-level values as well so a test
     # can never contact the real production runner accidentally.
-    import app.sandbox_client as sandbox_client_mod
+    import app.pipeline.sandbox_client as sandbox_client_mod
 
     monkeypatch.setattr(sandbox_client_mod, "SANDBOX_RUNNER_URL", "")
     monkeypatch.setattr(

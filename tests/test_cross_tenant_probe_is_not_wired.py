@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
-_SERVING = ("app/routes", "app/main.py", "app/worker.py", "app/mcp")
+_SERVING = ("app/routes", "app/main.py", "app/worker.py", "app/orchestration/mcp")
 
 
 def test_no_request_path_imports_the_signup_probe():

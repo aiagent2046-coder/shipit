@@ -17,7 +17,6 @@ import uuid
 import httpx
 from fastapi.testclient import TestClient
 
-from app.billing import deliver_key_once, telegram_stars
 from app.foundation.accounts import api_key_prefix
 from app.main import (
     app,
@@ -25,6 +24,7 @@ from app.main import (
     get_billing_transport,
     get_payment_repo,
 )
+from app.services.billing import deliver_key_once, telegram_stars
 from tests.conftest import (
     FakeAccountRepo,
     FakeCompletionCasMixin,

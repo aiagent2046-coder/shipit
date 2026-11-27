@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient
 
 from app.foundation.llm.client import LLMClient, LLMUsage, Provider
 from app.main import app, get_audit_repo
-from app.scan_pipeline import content_digest
+from app.pipeline.scan_pipeline import content_digest
 from tests.conftest import drain_audit_queue, force_pro_account
 
 client = TestClient(app)

@@ -5,8 +5,8 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.fixpack.generate import build_fixpack_plan
-from app.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
+from app.pipeline.fixpack.generate import build_fixpack_plan
+from app.pipeline.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
 
 
 def _zip_with(files: dict[str, str]) -> bytes:

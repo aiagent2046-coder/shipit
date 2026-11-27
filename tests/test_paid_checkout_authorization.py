@@ -12,8 +12,6 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-from app.deploypack import paid_delivery_auth
-from app.deploypack.delivery_auth import DeliveryAuthorizationError
 from app.main import (
     app,
     get_audit_repo,
@@ -21,12 +19,14 @@ from app.main import (
     get_fixpack_repo,
     get_payment_repo,
 )
+from app.services.deploypack import paid_delivery_auth
+from app.services.deploypack.delivery_auth import DeliveryAuthorizationError
 from tests.test_billing_bank_transfer import (
     BANK_ENV,
+    PAYER,
     FakeAuditRepo,
     FakeFixpackRepo,
     FakePaymentRepo,
-    PAYER,
 )
 
 CALLER_TOKEN = "github-pat-checkout-fixture"

@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from app.report.html import _finding_row
+from app.pipeline.report.html import _finding_row
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.claim_evidence import narrative_review_checks
-from app.scan_pipeline import run_scan
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 from tests.test_auth_source_assessment import PATH, SERVICE, raw
 

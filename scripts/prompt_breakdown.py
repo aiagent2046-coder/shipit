@@ -18,7 +18,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.scan.llm_scan import (  # noqa: E402
-    ALL_RUBRICS, RUBRICS, SYSTEM_PROMPT, _iter_code_files, build_prompt,
+    ALL_RUBRICS,
+    RUBRICS,
+    SYSTEM_PROMPT,
+    _iter_code_files,
+    build_prompt,
     select_files,
 )
 from app.scan.source_facts import facts_prompt  # noqa: E402
@@ -38,7 +42,7 @@ def main() -> int:
     facts = ""
     t0 = time.time()
     try:
-        from app.scan_pipeline import run_static_scan
+        from app.pipeline.scan_pipeline import run_static_scan
         static = run_static_scan(io.BytesIO(raw))
         facts = facts_prompt(static.get("source_facts"), 16_000)
         print(f"static scan {time.time() - t0:.0f}s; facts_prompt "

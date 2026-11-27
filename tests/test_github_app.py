@@ -14,14 +14,14 @@ manual step can't be automated from here.
 import logging
 import time
 
-import jwt
 import httpx
+import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-import app.deploypack.github_app as github_app
-from app.deploypack.github_app import (
+import app.services.deploypack.github_app as github_app
+from app.services.deploypack.github_app import (
     GITHUB_APP_SLUG_DEFAULT,
     INSTALLATION_ABSENT,
     INSTALLATION_ACTIVE,
@@ -227,6 +227,7 @@ def test_mint_app_jwt_iss_is_string_and_stripped(keypair):
 
 def test_public_key_fingerprint_matches_independent_computation(keypair):
     import hashlib
+
     from cryptography.hazmat.primitives import serialization
 
     private_pem, _ = keypair

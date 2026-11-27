@@ -12,9 +12,9 @@ network call.
 import pytest
 from fastapi.testclient import TestClient
 
-from app.deploypack import github_app
-from app.deploypack.github_app import GitHubAppError
 from app.main import app
+from app.services.deploypack import github_app
+from app.services.deploypack.github_app import GitHubAppError
 
 client = TestClient(app)
 

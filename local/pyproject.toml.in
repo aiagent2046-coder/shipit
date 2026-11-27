@@ -15,7 +15,7 @@ requires-python = ">=3.12"
 dynamic = ["dependencies"]
 
 [project.scripts]
-drydock-local = "drydock_local.local_cli:main"
+drydock-local = "drydock_local.pipeline.local_cli:main"
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["dependencies.txt"]}

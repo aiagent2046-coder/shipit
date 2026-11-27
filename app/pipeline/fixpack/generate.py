@@ -1,0 +1,1862 @@
+"""Fix Pack generation: turn an audit's findings into a safe changeset.
+
+Given the fresh bytes of the audited repo and the findings the audit
+persisted, produce a `FixpackPlan` — the files to write, the paths to
+untrack, and human-readable descriptions of what was fixed — that a
+caller hands to app/deploypack/delivery.open_pull_request.
+
+THE ONE RULE THAT MATTERS: a real secret value must NEVER appear in the
+plan's output (file contents, PR title, PR body) — only in the ORIGINAL
+file it is being edited OUT of. The raw value is read via
+app.scan.secrets.iter_secret_matches, used to locate-and-replace, and
+then a post-check (`_verify_scrubbed`) refuses to emit any file that
+still contains a secret we were supposed to remove. Nothing here ever
+stores the value anywhere else.
+
+Eligible finding types (the exact rule_ids are read from the scanners,
+not hardcoded strings — see SECRET_RULE_IDS):
+  1. Hardcoded secrets — the secrets.py rules, EXCLUDING supabase-anon-key
+     (public by design) and any llm-* rule (too unstructured to auto-fix).
+  2. env-file-committed (checks.py) — untrack the committed .env.
+  3. gitignore-missing-secrets (checks.py) — add secret-file patterns.
+Any finding with context == "test_fixture" is excluded regardless of type.
+Any finding whose file lives under a test directory (tests/, test/,
+__tests__/, spec/ anywhere in the path) is also excluded regardless of
+context -- test files intentionally hold literal secret patterns as
+detector fixtures, and rewriting that code is unsafe (see _is_test_path).
+"""
+
+from __future__ import annotations
+
+import ast
+import io
+import json
+import logging
+import re
+import time
+import zipfile
+from dataclasses import dataclass, field
+
+import tree_sitter_javascript
+import tree_sitter_typescript
+from tree_sitter import Language, Parser
+
+from app.pipeline.fixpack.rls_policy import PolicyProposal, migration_filename, propose_read_policy
+from app.pipeline.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
+from app.scan.checks import (
+    env_file_is_public_configuration,
+    find_committed_env_files,
+    gitignore_covers_env,
+)
+from app.scan.ci_deploy_source import RULE_ID as CI_DEPLOY_RULE_ID
+from app.scan.error_boundary import RULE_ID as ERROR_BOUNDARY_RULE_ID
+from app.scan.rls import RULE_ID as RLS_RULE_ID
+from app.scan.rls import WRITE_RULE_ID as RLS_WRITE_RULE_ID
+from app.scan.rls import read_committed_sql
+from app.scan.secrets import (
+    NON_PRODUCTION_CONTEXTS,
+    RULES,
+    SecretFinding,
+    is_non_production_path,
+    iter_secret_matches,
+)
+from app.scan.service_role import RULE_ID as SERVICE_ROLE_RULE_ID
+from app.scan.sql_schema import parse_schema
+
+logger = logging.getLogger(__name__)
+
+# The secret rule_ids we will auto-fix: every rule secrets.py defines,
+# minus the ones that are unsafe/pointless to rewrite. Derived from RULES
+# (not a copied list) so a new rule is opted-in by default and this can't
+# silently drift from the scanner. supabase-anon-key is a *derived*
+# rule_id (never in RULES) for a value that's public by design; excluding
+# it here is belt-and-suspenders. llm-* findings never reach RULES either.
+_EXCLUDED_SECRET_RULE_IDS = frozenset({"supabase-anon-key"})
+SECRET_RULE_IDS = frozenset(r.id for r in RULES) - _EXCLUDED_SECRET_RULE_IDS
+
+_CHECK_RULE_IDS = frozenset({"env-file-committed", "gitignore-missing-secrets"})
+
+_RLS_RULE_IDS = frozenset({RLS_RULE_ID})
+
+# Frontend fixes the Pack can generate. Only the error boundary so far, and
+# only its app-router shape produces a file — the SPA/pages/Remix shapes are
+# recorded as skipped with the two-line change, because wrapping a mount is an
+# edit to the customer's own entry file and this Pack does not guess at those.
+_FRONTEND_RULE_IDS = frozenset({ERROR_BOUNDARY_RULE_ID})
+
+# rule_id -> the environment variable name we substitute the literal with.
+# Small, explicit, and deliberately not clever: a sensible conventional
+# name per provider, not an exhaustive taxonomy.
+ENV_VAR_BY_RULE = {
+    "aws-access-key-id": "AWS_ACCESS_KEY_ID",
+    "github-pat": "GITHUB_TOKEN",
+    "stripe-live-key": "STRIPE_SECRET_KEY",
+    "anthropic-api-key": "ANTHROPIC_API_KEY",
+    "telegram-bot-token": "TELEGRAM_BOT_TOKEN",
+    "private-key-block": "PRIVATE_KEY",
+    "jwt-in-code": "JWT_SECRET",
+    "connection-string-password": "DATABASE_URL",
+    "sql-secret-assignment": "DATABASE_SECRET",
+    "generic-assignment": "APP_SECRET",
+}
+
+# rule_id -> where the owner must go to rotate the now-compromised secret.
+# Removing a secret from code does NOT invalidate it, so every secret fix
+# carries one of these into the PR body as an explicit call to action.
+ROTATE_GUIDANCE = {
+    "aws-access-key-id": "AWS (IAM console — deactivate the key, create a new one)",
+    "github-pat": "GitHub (Settings → Developer settings → Personal access tokens → revoke)",
+    "stripe-live-key": "Stripe (Dashboard → Developers → API keys → roll the key)",
+    "anthropic-api-key": "Anthropic (Console → API keys → revoke and reissue)",
+    "telegram-bot-token": "Telegram (@BotFather → /revoke)",
+    "private-key-block": "the key's issuer (generate a fresh key pair, replace the old)",
+    "jwt-in-code": "your auth/JWT provider (rotate the signing secret)",
+    "connection-string-password":
+        "your database/broker provider (change the password on that user, "
+        "then update the connection string)",
+    "sql-secret-assignment": "your database/secret provider (change the credential)",
+    "generic-assignment": "the relevant provider (rotate the credential)",
+}
+
+_JS_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+# Checked BEFORE _JS_SUFFIXES, which also contains them: TypeScript needs a
+# narrowed reference where plain JavaScript does not. See _env_reference.
+_TS_SUFFIXES = (".ts", ".tsx")
+
+# Full secret-file pattern set for the gitignore-missing-secrets fix,
+# mirroring what the scan rule and env-file detection care about (.env and
+# .env.<x>, plus key material). "!.env.example" keeps the safe template
+# committed.
+#
+# Not a perfect mirror of find_committed_env_files, which excludes a family
+# of template names (.env.sample, .env.local.example, ...) and not just this
+# one. It does not need to be: .gitignore has no effect on a file git is
+# already tracking, so a template already in the repository stays in it. The
+# cost is that a template ADDED later needs `git add -f` or a negation of its
+# own -- worth fixing if anyone hits it, not worth five more lines in every
+# customer's .gitignore today.
+_GITIGNORE_SECRET_PATTERNS = (".env", ".env.*", "!.env.example", "*.pem", "*.key")
+
+_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+# Inner quoted literal of an assignment-style match (generic/sql rules
+# match the whole `name = "value"` span; we only want the value).
+_QUOTED_LITERAL_RE = re.compile(r"['\"`]([^'\"`\s]+)['\"`]")
+_ASSIGNMENT_RULES = {
+    rule.id: rule for rule in RULES
+    if rule.id in {"generic-assignment", "sql-secret-assignment"}
+}
+
+
+@dataclass
+class SecretFix:
+    rule_id: str
+    title: str
+    file: str          # repo-relative path
+    env_var: str
+    rotate_where: str
+
+
+@dataclass
+class ConfigFix:
+    rule_id: str
+    title: str
+    detail: str
+
+
+@dataclass
+class SkippedFinding:
+    rule_id: str
+    file: str
+    line: int
+    reason: str
+    # What the finding actually said. Without it the list reads
+    # "llm-security (action_service.py:17)", which tells the owner nothing --
+    # and that line happened to be a live API key. A rule id is our
+    # vocabulary; the title is theirs.
+    title: str = ""
+    # ...and why it matters, and what to do about it. The deep review writes
+    # both for every finding it makes, the audit report prints them, and this
+    # list dropped them at the boundary -- so the buyer of a Fix Pack got the
+    # title, the location, and one sentence repeated under every row saying
+    # the Pack would not touch it.
+    #
+    # That is the wrong half to keep. The findings this Pack does not rewrite
+    # are precisely the ones the customer has to fix themselves, and the
+    # analysis is the only part that helps them do it.
+    explanation: str = ""
+    fix_hint: str = ""
+
+
+@dataclass
+class FixpackPlan:
+    files: dict[str, str] = field(default_factory=dict)
+    deletions: list[str] = field(default_factory=list)
+    secret_fixes: list[SecretFix] = field(default_factory=list)
+    config_fixes: list[ConfigFix] = field(default_factory=list)
+    skipped: list[SkippedFinding] = field(default_factory=list)
+
+    # A committed .env is a leak, and until now it was filed as tidying.
+    #
+    # `env-file-committed` produces a ConfigFix, so on a repository whose only
+    # leak was a committed .env, secret_fixes stayed empty -- which meant the
+    # PR title read "secure repository configuration", the "ROTATE THESE
+    # SECRETS NOW" block never rendered at all, and the one sentence about
+    # rotation sat mid-bullet under "Configuration hardening", where it reads
+    # like housekeeping. That is exactly backwards: a committed .env usually
+    # holds MORE credentials than a lone hardcoded literal, and it is the
+    # commonest shape of this leak in the repositories this product exists for.
+    #
+    # Seen in production on a paid Fix Pack: two live API keys and a server's
+    # SSH details, and the customer merged without rotating anything. He was
+    # not careless. He was not told.
+    #
+    # Names only, never values -- these reach the PR body, and _env_key_names
+    # discards the right-hand side for that reason.
+    leaked_env_files: list[str] = field(default_factory=list)
+    leaked_env_vars: list[str] = field(default_factory=list)
+
+    # How many findings the audit produced, so the PR can state the fraction
+    # it addressed instead of only enumerating its wins. A customer counting
+    # 15 findings on the report and 1 change in the pull request deserves that
+    # arithmetic from us rather than from their own suspicion.
+    total_findings: int = 0
+
+    # (path, line) for every place a secret this plan removed still survives
+    # in the tree it is about to deliver. Coordinates only — the values that
+    # produced them never leave _surviving_occurrences.
+    surviving_secrets: list[tuple[str, int]] = field(default_factory=list)
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.files or self.deletions)
+
+
+def _repo_relative(name: str) -> str:
+    """Drop the single wrapper folder GitHub zipballs (and Lovable/Bolt
+    exports) put everything under, so paths match the repo's own layout.
+    The audit was fetched the same way, so its stored finding paths carry
+    the same style of wrapper — stripping the first segment on both sides
+    is what lets a stored finding line up with a fresh re-scan."""
+    return name.split("/", 1)[1] if "/" in name else name
+
+
+_TEST_DIR_SEGMENTS = frozenset(("tests", "test", "__tests__", "spec"))
+
+
+def _is_test_path(path: str) -> bool:
+    """True if any directory segment of `path` is a conventional test dir.
+
+    Applied to the raw finding path (not the repo-relative one, whose first
+    segment gets stripped): matches "tests/x.py", "wrapper/tests/x.py" and
+    "src/__tests__/foo.ts" alike. Fix Pack never rewrites files here --
+    test files deliberately embed literal secret *patterns* as detector
+    fixtures, and mechanically editing that code is unsafe for any client,
+    not just this repo. Broader than the context="test_fixture" marker,
+    which only fires when the value self-labels as a placeholder."""
+    segments = path.lower().split("/")[:-1]
+    return any(seg in _TEST_DIR_SEGMENTS for seg in segments)
+
+
+def _env_key_names(body: str) -> set[str]:
+    """Variable names declared in a dotenv-style body, values discarded.
+
+    Names only, never values: this feeds `.env.example`, which ships in the
+    PR, and the bodies it reads are the customer's real secrets."""
+    names: set[str] = set()
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name = line.split("=", 1)[0].strip()
+        if name.startswith("export "):
+            name = name[len("export "):].strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _secret_format_supported(path: str) -> bool:
+    """Only emit secret expressions in languages with a supported rewrite.
+
+    Balanced delimiters do not establish runtime interpolation: SQL, JSON,
+    YAML and shell require different configuration contracts. They still
+    belong in the audit, but must not receive a placeholder pretending to be
+    an executable fix.
+    """
+    return path.lower().endswith((".py",) + _JS_SUFFIXES)
+
+
+def _secret_finding_formats_supported(finding: dict) -> bool:
+    if not _secret_format_supported(finding.get("file", "")):
+        return False
+    paths = finding.get("occurrence_files")
+    # A supported representative does not make its SQL/shell copies fixable.
+    # Those live copies would still fail the proof gate after a partial edit.
+    # Known documentation/test paths are intentionally preserved by the plan.
+    return not isinstance(paths, list) or all(
+        _secret_format_supported(path) or is_non_production_path(path)
+        for path in paths if isinstance(path, str)
+    )
+
+
+def _env_reference(path: str, env_var: str) -> str:
+    """The idiomatic way to read an env var in this file's language."""
+    lower = path.lower()
+    if lower.endswith(_TS_SUFFIXES):
+        # `process.env.X` is typed `string | undefined`, which does not
+        # satisfy a `string` parameter under `strict` — and `strict` is the
+        # create-next-app default, so a bare reference makes the PR we sell
+        # fail to compile for most of the market (TS2345). The non-null
+        # assertion keeps the "this must be set" contract, is the idiomatic
+        # form in this ecosystem, and surfaces a missing variable at first
+        # use rather than substituting a plausible-looking empty secret.
+        return f"process.env.{env_var}!"
+    if lower.endswith(_JS_SUFFIXES):
+        return f"process.env.{env_var}"
+    if lower.endswith(".py"):
+        return f'os.environ["{env_var}"]'
+    raise ValueError("unsupported format for automatic secret replacement")
+
+
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_ENV_REFERENCE_RE = re.compile(
+    r"(?:\b(?:os\s*\.\s*)?getenv\s*\("
+    r"|\b(?:os\s*\.\s*)?environ(?:\s*\.\s*get\s*\(|\s*\[)"
+    r"|\bprocess\s*\.\s*env\s*\[)\s*['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]"
+    r"|\bprocess\s*\.\s*env\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def _reserved_env_names(contents: dict[str, str]) -> set[str]:
+    """Do not give a new credential a name already used by the repository.
+
+    Only names are retained. Conservatively reserving a reference in a
+    comment costs a numeric suffix; reusing a live name could change which
+    credential an existing integration receives.
+    """
+    names: set[str] = set()
+    for path, text in contents.items():
+        if path.rsplit("/", 1)[-1].startswith(".env"):
+            names.update(name for name in _env_key_names(text)
+                         if _ENV_NAME_RE.fullmatch(name))
+        for match in _ENV_REFERENCE_RE.finditer(text):
+            names.add(match.group(1) or match.group(2))
+    return names
+
+
+def _env_for_secret(rule_id: str, raw_match: str, text: str) -> str:
+    """Prefer the assignment's complete name, never its displayed mask.
+
+    The generic rule may start at PASSWORD inside PG_PASSWORD; recover the
+    adjacent identifier prefix from the fresh source before naming the env
+    variable. Provider-specific rules keep their conventional names.
+    """
+    if rule_id in _ASSIGNMENT_RULES:
+        match = _ASSIGNMENT_RULES[rule_id].pattern.fullmatch(raw_match)
+        if match:
+            lhs = raw_match[:match.start("value") - 1]
+            key = re.fullmatch(r"\s*(['\"]?)([A-Za-z_$][A-Za-z0-9_$-]*)\1\s*[:=]\s*", lhs)
+            if key:
+                name = key.group(2)
+                if not key.group(1):
+                    offset = text.find(raw_match)
+                    if offset >= 0:
+                        prefix = re.search(r"[A-Za-z_$][A-Za-z0-9_$]*$", text[:offset])
+                        if prefix:
+                            name = prefix.group() + name
+                name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+                name = re.sub(r"[^A-Za-z0-9_]", "_", name).upper()
+                if _ENV_NAME_RE.fullmatch(name):
+                    return name
+    return ENV_VAR_BY_RULE.get(rule_id, "APP_SECRET")
+
+
+def _allocate_secret_env(
+    preferred: str, sensitive: tuple[str, ...],
+    allocated: dict[tuple[str, ...], str], reserved: set[str],
+) -> str:
+    """One actual credential per new env name, stable across its copies.
+
+    These literal identities stay local to plan generation, just like the
+    existing scrub checks. Neither values nor derived hashes enter output.
+    A provider or assignment name alone is not a credential identity.
+    """
+    if sensitive in allocated:
+        return allocated[sensitive]
+    name = preferred
+    suffix = 2
+    while name in reserved:
+        name = f"{preferred}_{suffix}"
+        suffix += 1
+    allocated[sensitive] = name
+    reserved.add(name)
+    return name
+
+
+def _sensitive_literals(rule_id: str, raw_match: str) -> list[str]:
+    """The actual secret substring(s) to scrub for one match.
+
+    Private keys are multi-line: the rule only matches the BEGIN line, but
+    leaving the key body behind would keep the leak, so we return the whole
+    block (located by _apply_secret_fix against the file text). For
+    assignment-style rules the match is `name = "value"`; we want just the
+    quoted value. For token rules the match IS the token.
+    """
+    if rule_id == "private-key-block":
+        return []  # handled specially against the full file text
+    if rule_id in _ASSIGNMENT_RULES:
+        match = _ASSIGNMENT_RULES[rule_id].pattern.fullmatch(raw_match)
+        return [match.group("value")] if match else [raw_match]
+    m = _QUOTED_LITERAL_RE.search(raw_match)
+    if m:
+        return [m.group(1)]
+    return [raw_match]
+
+
+def _apply_secret_fix(text: str, rule_id: str, raw_match: str,
+                      env_ref: str) -> tuple[str, list[str]]:
+    """Replace a secret in `text` with `env_ref`. Returns the new text and
+    the list of sensitive strings that must no longer appear (for the
+    post-check). Prefers replacing the quoted literal so the result stays
+    valid code (`key = "SECRET"` -> `key = process.env.NAME`), falling back
+    to a bare replacement."""
+    if rule_id == "private-key-block":
+        blocks = _PEM_BLOCK_RE.findall(text)
+        new_text = _PEM_BLOCK_RE.sub(env_ref, text)
+        return new_text, blocks
+
+    sensitive = _sensitive_literals(rule_id, raw_match)
+    if rule_id in _ASSIGNMENT_RULES:
+        match = _ASSIGNMENT_RULES[rule_id].pattern.fullmatch(raw_match)
+        if match is None:
+            return text, sensitive  # the unchanged span fails the scrub gate
+        # The scanner identifies the VALUE, even when the key is quoted too.
+        # Replace only its surrounding literal within the matched assignment;
+        # a global replacement could also rewrite an unrelated dictionary key.
+        start, end = match.span("value")
+        replacement = raw_match[:start - 1] + env_ref + raw_match[end + 1:]
+        return text.replace(raw_match, replacement), sensitive
+    new_text = text
+    for secret in sensitive:
+        replaced = False
+        for q in ('"', "'", "`"):
+            wrapped = f"{q}{secret}{q}"
+            if wrapped in new_text:
+                new_text = new_text.replace(wrapped, env_ref)
+                replaced = True
+        if not replaced and secret in new_text:
+            new_text = new_text.replace(secret, env_ref)
+    return new_text, sensitive
+
+
+def _verify_scrubbed(text: str, sensitive: list[str]) -> bool:
+    """No secret we were meant to remove may survive into the emitted file
+    — this is the last line of defence behind the never-leak rule."""
+    return all(secret not in text for secret in sensitive)
+
+
+def _ensure_python_os_import(text: str) -> str | None:
+    """Supply the generated os.environ reference, or decline ambiguous names."""
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "os" and not isinstance(node.ctx, ast.Load):
+            return None
+        if isinstance(node, ast.arg) and node.arg == "os":
+            return None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "os":
+            return None
+        if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name == "os":
+            return None
+        if isinstance(node, ast.MatchMapping) and node.rest == "os":
+            return None
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and "os" in node.names:
+            return None
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".", 1)[0]
+                if alias.name == "*":
+                    return None
+                if bound != "os":
+                    continue
+                if isinstance(node, ast.Import) and alias.name == "os" and node in tree.body:
+                    imports.append(node.lineno)
+                else:
+                    return None
+    first_use = min((node.lineno for node in ast.walk(tree)
+                     if isinstance(node, ast.Name) and node.id == "os"), default=0)
+    if imports and min(imports) < first_use:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    insertion = 0
+    while insertion < len(lines) and (
+        not lines[insertion].strip() or lines[insertion].lstrip().startswith("#")
+    ):
+        insertion += 1
+    body = tree.body
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)):
+        insertion = body[0].end_lineno
+        body = body[1:]
+    for node in body:
+        if not isinstance(node, ast.ImportFrom) or node.module != "__future__":
+            break
+        insertion = node.end_lineno
+    if first_use and insertion >= first_use:
+        # A docstring/future import and the changed assignment can share a
+        # semicolon-delimited line. Inserting after that line would be too late.
+        return None
+    newline = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+    prefix = "".join(lines[:insertion])
+    if prefix and not prefix.endswith(("\n", "\r")):
+        prefix += newline
+    return prefix + "import os" + newline + "".join(lines[insertion:])
+
+
+def _brackets_balanced(text: str) -> bool:
+    """True if (), [], {} are properly nested. A cheap, language-agnostic
+    heuristic (it ignores quotes/comments, so it is only ever used as a
+    *relative* before/after check, never as absolute truth)."""
+    pairs = {")": "(", "]": "[", "}": "{"}
+    openers = set(pairs.values())
+    stack: list[str] = []
+    for ch in text:
+        if ch in openers:
+            stack.append(ch)
+        elif ch in pairs:
+            if not stack or stack.pop() != pairs[ch]:
+                return False
+    return not stack
+
+
+_MAX_JS_SYNTAX_BYTES = 256_000
+
+
+def _validate_syntax(path: str, original: str, new: str) -> bool:
+    """Best-effort guard that our edit left the file syntactically valid.
+
+    This is the ROOT-CAUSE safety net, independent of the test-path
+    exclusion: a value-span replacement can land *inside* a larger string
+    literal (a PEM block, an f-string, a concatenation, a JSON value),
+    leaving the surrounding quotes and injecting an env reference that
+    itself contains quotes — a SyntaxError. We refuse to ship such a file.
+
+    Authoritative for the languages the standard library can parse:
+      * .py            -> ast.parse
+      * .json / .jsonc -> json.loads
+
+    JS/JSX and TS/TSX use their respective Tree-sitter grammars. Reject
+    recovered parse errors too: getting a tree does not mean valid syntax.
+    Oversized or unparseable edits are excluded, never passed to the weaker
+    delimiter check. Parsing does not execute code, resolve imports or check
+    types/behaviour; a clean syntax tree is not proof that an edit is correct.
+
+    Other languages retain the relative delimiter check: reject only when
+    our edit turned a bracket-balanced file into an unbalanced one.
+    """
+    lower = path.lower()
+    if lower.endswith(_JS_SUFFIXES):
+        if len(new) > _MAX_JS_SYNTAX_BYTES:
+            return False
+        try:
+            data = new.encode("utf-8")
+            if len(data) > _MAX_JS_SYNTAX_BYTES:
+                return False
+            if lower.endswith(".tsx"):
+                language = tree_sitter_typescript.language_tsx()
+            elif lower.endswith(".ts"):
+                language = tree_sitter_typescript.language_typescript()
+            else:
+                language = tree_sitter_javascript.language()
+            tree = Parser(Language(language)).parse(data)
+            return tree is not None and not tree.root_node.has_error
+        except (ValueError, OverflowError):
+            return False
+    if lower.endswith(".py"):
+        try:
+            ast.parse(new)
+            return True
+        except (SyntaxError, ValueError):
+            return False
+    if lower.endswith((".json", ".jsonc")):
+        try:
+            json.loads(new)
+            return True
+        except (json.JSONDecodeError, ValueError):
+            return False
+    # Unknown language: only fail if we demonstrably broke bracket balance.
+    return _brackets_balanced(new) or not _brackets_balanced(original)
+
+
+def _append_missing(body: str, patterns: tuple[str, ...] | list[str]) -> str:
+    """Append any of `patterns` not already present (line-exact) to a
+    file body, keeping the existing content untouched."""
+    existing = {line.strip() for line in body.splitlines()}
+    to_add = [p for p in patterns if p not in existing]
+    if not to_add:
+        return body
+    out = body
+    if out and not out.endswith("\n"):
+        out += "\n"
+    return out + "\n".join(to_add) + "\n"
+
+
+def _read_zip(zip_bytes: bytes) -> tuple[list[str], dict[str, str]]:
+    """Return (raw entry names, {entry name: text}) for text-ish files,
+    reading each once. Binary/oversized files are skipped for content but
+    still listed."""
+    raw_names: list[str] = []
+    contents: dict[str, str] = {}
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for info in zf.infolist():
+            raw_names.append(info.filename)
+            if info.is_dir():
+                continue
+            data = zf.read(info)
+            if b"\x00" in data[:4096]:
+                continue
+            contents[info.filename] = data.decode("utf-8", errors="ignore")
+    return raw_names, contents
+
+
+def _find_entry(raw_names: list[str], repo_rel: str) -> str | None:
+    """The raw zip entry whose repo-relative path is `repo_rel`."""
+    for n in raw_names:
+        if _repo_relative(n) == repo_rel:
+            return n
+    return None
+
+
+def _is_fixable_rule(finding: dict) -> bool:
+    """Is this finding's rule one the Fix Pack knows how to rewrite at all?
+
+    Most rules are advice -- "no tests", "no Dockerfile" -- and no amount of
+    code generation turns them into a pull request.
+    """
+    if (finding.get("rule_id") == "env-file-committed"
+            and finding.get("context") == "public_configuration"):
+        return False
+    return finding.get("rule_id") in (
+        SECRET_RULE_IDS | _CHECK_RULE_IDS | _RLS_RULE_IDS | _FRONTEND_RULE_IDS)
+
+
+# Below this length a dotenv value is not a credential, it is configuration.
+# A committed .env holds SSH_PORT=3333, SSH_USER=root and LOG_LEVEL=debug
+# beside the API key, and searching the tree for "root" matches every third
+# file. 16 characters keeps sk-295ca99ac1e74ad7a8db90d4e84a1145 (35) and drops
+# 195.245.112.66 (14), which is an address rather than a secret.
+_MIN_SECRET_VALUE_CHARS = 16
+
+
+def _env_values(body: str) -> set[str]:
+    """Credential-shaped values in a dotenv body. Held in memory only.
+
+    The counterpart to _env_key_names, and the reason that one exists: names
+    reach the customer's PR, values must not. Nothing here is stored on the
+    plan or rendered — these strings are used to search the resulting tree and
+    then dropped with the frame.
+    """
+    values: set[str] = set()
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        value = line.split("=", 1)[1].strip().strip("'\"")
+        if len(value) >= _MIN_SECRET_VALUE_CHARS:
+            values.add(value)
+    return values
+
+
+def _surviving_occurrences(
+    values: set[str], tree: dict[str, str],
+) -> list[tuple[str, int]]:
+    """Where a secret the plan removed from one place still lives in another.
+
+    The invariant this serves: a Fix Pack must not report success on a secret
+    while the same value remains in the tree it is about to deliver. It did,
+    once, for a paying customer -- the key was untracked out of .env and left
+    verbatim in two source files, under a pull request titled "secure
+    repository configuration".
+
+    Returns coordinates only. The value never leaves this function.
+    """
+    hits: list[tuple[str, int]] = []
+    for path in sorted(tree):
+        for number, line in enumerate(tree[path].splitlines(), start=1):
+            if any(v in line for v in values):
+                hits.append((path, number))
+    return hits
+
+
+def _why_not_fixable(finding: dict) -> str:
+    """Why this finding gets no code change, in the customer's terms.
+
+    Two very different reasons wear the same "not fixable" flag, and telling
+    them apart is the whole point of showing this at all. "No Dockerfile" has
+    nothing to rewrite and needs no apology. A CRITICAL hardcoded key found by
+    the deep review has plenty to rewrite and is left alone by a deliberate
+    policy the buyer never agreed to -- that one is a limitation to disclose,
+    not a non-event.
+    """
+    rule_id = str(finding.get("rule_id", ""))
+    if (rule_id == "env-file-committed"
+            and finding.get("context") == "public_configuration"):
+        return "Public build configuration; retained without automatic deletion."
+    if rule_id.startswith("llm-"):
+        return (
+            "Found by the deep review. This Fix Pack rewrites only findings "
+            "from the static rules, so these are reported and NOT changed — "
+            "they are still yours to fix."
+        )
+    if rule_id == RLS_WRITE_RULE_ID:
+        # NOT "advisory, nothing to rewrite". There is plenty to rewrite — one
+        # ALTER TABLE closes it — and calling a critical finding advisory is
+        # the same failure as dropping it. We decline for a reason the buyer
+        # is entitled to hear: we do not know which writes their application
+        # makes with the anon key, and turning RLS on would stop those too.
+        return (
+            "Closing this needs one line of SQL, but we cannot tell from your "
+            "repository which writes your app makes with the public key — "
+            "enabling Row Level Security would stop those as well. The finding "
+            "explains the change; it is deliberately yours to apply."
+        )
+    if rule_id == SERVICE_ROLE_RULE_ID:
+        # The temptation is a one-line substitution -- swap the key, done --
+        # and it would break every route it touched. The service-role client
+        # works without a caller; the user-scoped one needs that route's own
+        # JWT, and some of its queries deliberately cross users and must keep
+        # the admin client. Which is which is a reading of the route, not a
+        # find-and-replace, and getting it wrong here does not leave data
+        # exposed -- it takes the customer's app down.
+        return (
+            "Swapping the key is one line, but which of this route's queries "
+            "may run as the caller — and which genuinely have to cross users — "
+            "is a decision about your app that we cannot read off your code. "
+            "Getting it wrong breaks the route rather than leaving it open, so "
+            "the finding shows you where to look and the change stays yours."
+        )
+    if rule_id == CI_DEPLOY_RULE_ID:
+        # Which of the two repositories is the source of truth is a fact about
+        # how the owner's projects relate, and it is not in either of them.
+        # Guessing would either silently redirect a deployment or silently
+        # neuter one -- both worse than saying so.
+        return (
+            "Which repository this deployment should follow is a decision "
+            "about your projects, not something either of them states. "
+            "Pointing the deploy at the wrong one would redirect production, "
+            "so the finding shows you where to look and the change stays "
+            "yours."
+        )
+    return "Advisory findings: there is nothing in the code to rewrite."
+
+
+def _skipped(finding: dict, reason: str, *, file: str | None = None
+             ) -> SkippedFinding:
+    """One place that knows what a skipped finding carries.
+
+    Six call sites build these from a finding, and a field added to
+    SkippedFinding without touching all six reaches the buyer down some paths
+    and not others -- which is how `explanation` and `fix_hint` came to be
+    missing everywhere at once. This is the same guard _SCORED_FIELDS is in
+    the scan pipeline, for the same reason.
+
+    `file` is an override rather than always recomputed: _repo_relative
+    strips the leading segment and is NOT idempotent, so a call site that has
+    already stripped must pass its result rather than hand back a path that
+    would lose a second directory.
+    """
+    return SkippedFinding(
+        rule_id=str(finding.get("rule_id") or ""),
+        file=_repo_relative(finding.get("file", "")) if file is None else file,
+        line=finding.get("line", 0),
+        reason=reason,
+        title=str(finding.get("title") or ""),
+        explanation=str(finding.get("explanation") or ""),
+        fix_hint=str(finding.get("fix_hint") or ""),
+    )
+
+
+def _is_production_code(finding: dict) -> bool:
+    """Is it somewhere worth rewriting? See the note in build_fixpack_plan:
+    editing a comment, a doc example or a test fixture buys no security."""
+    return (
+        finding.get("context") not in NON_PRODUCTION_CONTEXTS
+        and not _is_test_path(finding.get("file", ""))
+    )
+
+
+def has_auto_fixable_findings(findings: list[dict]) -> bool:
+    """Could a Fix Pack for these findings produce anything at all?
+
+    Answers one question reliably -- "there is definitely nothing to fix" --
+    and does NOT promise the opposite. A finding eligible here can still fall
+    away when the repository is re-fetched, because the code may have moved on
+    since the audit ran. So this is a filter against selling a Fix Pack that
+    was empty before the customer paid, not a guarantee of a pull request.
+
+    That case is not hypothetical. Audit 05fa18f5 was sold a Fix Pack with
+    zero eligible findings: the job ran, found nothing, and the payer got
+    "Nothing to auto-fix" for their money. It was computable in advance from
+    the stored findings, with no network and no LLM.
+
+    Shares _is_fixable_rule and _is_production_code with build_fixpack_plan on
+    purpose. A second copy of "what counts as fixable" is exactly what drifted
+    in #132, where the plan builder knew one non-production context and the
+    report knew four.
+
+    THE RULE ID IS NOT ALWAYS THE WHOLE ANSWER, which is how it happened a
+    SECOND time. Audit bd970b2b (devtools-aggregator) carried one eligible
+    finding — `users` readable by the anon key — and was sold a Fix Pack that
+    produced nothing, because whether the RLS generator can write a policy
+    depends on the TABLE, not on the rule:
+
+        create table public.users (id uuid, github_id bigint, ...);  -- no FK
+        create policy "Users viewable by all" on public.users
+          for select using (true);
+
+    Nothing to narrow `using (true)` down to and nothing to scope by, so
+    propose_read_policy refuses — correctly. The rule was in the set and the
+    generator still had no move. mark_unfixable_findings answers that question
+    while the repository is in hand, and stamps the finding; this function
+    honours the stamp.
+    """
+    return any(
+        f.get("fixpack_eligible") is not False
+        and _is_fixable_rule(f) and _is_production_code(f)
+        and (f.get("rule_id") not in SECRET_RULE_IDS
+             or _secret_finding_formats_supported(f))
+        for f in findings
+    )
+
+
+def mark_unfixable_findings(zip_bytes: bytes, findings: list[dict]) -> list[dict]:
+    """Stamp `fixpack_eligible: False` on findings the generator cannot act on.
+
+    Called once, at audit time, while the repository is still in memory. Every
+    other consumer of "is there anything to fix" runs in a request handler
+    with no repo bytes and no business fetching any, so the question has to be
+    answered here or answered wrong.
+
+    RLS reads need the schema. Secret findings also need a supported file
+    format: a literal in SQL or YAML is detectable without having a safe
+    runtime environment expression to replace it with.
+
+    Stamped rather than filtered: the finding is REAL and stays in the report
+    in full. What changes is only whether we offer to sell a fix for it.
+
+    Absence of the key means "not asked", not "eligible" — audits stored
+    before this existed keep the old behaviour rather than silently becoming
+    unsellable.
+    """
+    findings = [
+        {**f, "fixpack_eligible": False}
+        if f.get("rule_id") in SECRET_RULE_IDS
+        and not _secret_finding_formats_supported(f) else f
+        for f in findings
+    ]
+    if not any(f.get("rule_id") == RLS_RULE_ID for f in findings):
+        return findings
+
+    try:
+        sql, _paths = read_committed_sql(io.BytesIO(zip_bytes))
+        schema = parse_schema(sql) if sql.strip() else {}
+    except Exception:                                          # noqa: BLE001
+        # A schema we cannot read is not evidence that the generator would
+        # fail. Leave every finding unstamped and let the old behaviour hold:
+        # this function exists to refuse a sale we KNOW is empty, never to
+        # refuse one we merely cannot confirm.
+        return findings
+
+    marked: list[dict] = []
+    for finding in findings:
+        if finding.get("rule_id") != RLS_RULE_ID:
+            marked.append(finding)
+            continue
+        table = _table_from_finding(finding)
+        proposal = propose_read_policy(table, schema) if table else None
+        if isinstance(proposal, PolicyProposal):
+            marked.append(finding)
+        else:
+            marked.append({**finding, "fixpack_eligible": False})
+    return marked
+
+
+def _grouped_secret_occurrences(
+    finding: dict,
+    raw_value: str,
+    fresh_by_file: dict[tuple[str, str], list[tuple[SecretFinding, str]]],
+) -> list[tuple[dict, str, str]]:
+    """Recover a collapsed finding's other locations from current source.
+
+    Report masks are not secret identities: unrelated credentials can have
+    the same prefix and length. Use the representative's freshly matched
+    literal, and limit expansion to the group's recorded files. Every added
+    location must still be production code; collapse can combine examples
+    and tests with a production representative.
+    """
+    paths = finding.get("occurrence_files")
+    if not isinstance(paths, list):
+        return []
+    rule_id = finding["rule_id"]
+    sensitive = _sensitive_literals(rule_id, raw_value)
+    if not sensitive:
+        return []
+    occurrences = []
+    for path in paths:
+        if not isinstance(path, str):
+            continue
+        for fresh, raw in fresh_by_file.get((rule_id, _repo_relative(path)), []):
+            current = {
+                **finding,
+                "file": fresh.file,
+                "line": fresh.line,
+                "context": fresh.context,
+                "title": fresh.title,
+            }
+            if (_is_production_code(current)
+                    and _sensitive_literals(rule_id, raw) == sensitive):
+                occurrences.append((current, fresh.file, raw))
+    return occurrences
+
+
+def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
+    """Build the changeset for a Fix Pack from fresh repo bytes and the
+    audit's persisted findings. Never opens a PR and never touches the
+    network — pure transform, so it's trivially testable and the delivery
+    side stays separate."""
+    plan = FixpackPlan()
+
+    # NON_PRODUCTION_CONTEXTS, not a single literal. The scanner already
+    # classifies a match as test_fixture, test_file, comment or doc_example,
+    # and #125 taught the REPORT to damp all four -- but this filter only knew
+    # the first, so the Fix Pack kept editing the other three.
+    #
+    # It shipped a PR that rewrote an illustrative string inside a comment
+    # documenting one of our own scanner rules, added a bogus variable to
+    # .env.example, and told the customer to rotate a credential that never
+    # existed.
+    #
+    # Editing a secret out of a comment buys no security whatsoever: the value
+    # is in git history either way and must be rotated regardless, and a
+    # comment executes nothing, so there is no running code to disarm. The
+    # entire value of a code fix is absent, and only the damage remains.
+    #
+    # They stay in the report -- damped, as #125 left them. Noticing something
+    # and declining to rewrite it automatically is not the same as hiding it.
+    plan.total_findings = len(findings)
+    eligible = []
+    for f in findings:
+        if not _is_fixable_rule(f):
+            # Recorded, not dropped. Silently discarding these is how a
+            # customer paid for a Fix Pack, watched it untrack one .env, and
+            # never learned that three CRITICAL findings about a live API key
+            # in two source files had been filtered out before planning even
+            # began. The PR listed what it did; nothing listed what it did not.
+            plan.skipped.append(_skipped(f, _why_not_fixable(f)))
+            continue
+        context = f.get("context")
+        if not _is_production_code(f):
+            # Recorded rather than dropped silently, so the PR body can show
+            # that the finding was seen and deliberately left alone.
+            plan.skipped.append(_skipped(f, (
+                f"{context or 'test path'} — not executable code, so "
+                "editing it would change nothing an attacker can use; "
+                "reported instead of rewritten"
+            )))
+            continue
+        eligible.append(f)
+
+    if not eligible:
+        return plan
+
+    raw_names, contents = _read_zip(zip_bytes)
+
+    # --- Secret findings: relocate each against a fresh re-scan to get the
+    # real value, then scrub it out of the file. ------------------------
+    fresh_index: dict[tuple[str, str, int], tuple[SecretFinding, str]] = {}
+    fresh_by_file: dict[tuple[str, str], list[tuple[SecretFinding, str]]] = {}
+    for finding, raw_value in iter_secret_matches(io.BytesIO(zip_bytes)):
+        key = (finding.rule_id, _repo_relative(finding.file), finding.line)
+        fresh_index.setdefault(key, (finding, raw_value))
+        fresh_by_file.setdefault(key[:2], []).append((finding, raw_value))
+
+    # Group the wanted secret fixes by repo-relative file so overlapping
+    # findings on one file are applied together in a single edit.
+    per_file: dict[str, list[tuple[dict, str, str]]] = {}
+    selected_locations: set[tuple[str, str, int]] = set()
+    for f in eligible:
+        if f.get("rule_id") not in SECRET_RULE_IDS:
+            continue
+        repo_rel = _repo_relative(f.get("file", ""))
+        key = (f["rule_id"], repo_rel, f.get("line", 0))
+        match = fresh_index.get(key)
+        if match is None:
+            plan.skipped.append(_skipped(
+                f, "finding no longer matches on re-fetch (repo changed)",
+                file=repo_rel))
+            continue
+        fresh, raw_value = match
+        current = {**f, "file": fresh.file, "line": fresh.line,
+                   "context": fresh.context}
+        if not _is_production_code(current):
+            plan.skipped.append(_skipped(
+                current, f"{fresh.context or 'test path'} on fresh scan — "
+                "non-production context; file left unchanged", file=repo_rel))
+            continue
+        occurrences = [(current, fresh.file, raw_value)] + _grouped_secret_occurrences(
+            current, raw_value, fresh_by_file
+        )
+        for current, entry, value in occurrences:
+            current_rel = _repo_relative(entry)
+            location = (current["rule_id"], current_rel, current.get("line", 0))
+            if location in selected_locations:
+                continue
+            selected_locations.add(location)
+            per_file.setdefault(current_rel, []).append((current, entry, value))
+
+    env_vars_used: set[str] = set()
+    reserved_env_names = _reserved_env_names(contents)
+    allocated_env_names: dict[tuple[str, ...], str] = {}
+    for repo_rel, items in sorted(per_file.items()):
+        items = sorted(items, key=lambda item: (item[0].get("line", 0), item[0]["rule_id"]))
+        raw_entry = items[0][1]
+        text = contents.get(raw_entry)
+        if text is None:
+            for f, _, _ in items:
+                plan.skipped.append(_skipped(
+                    f, "file not readable on re-fetch", file=repo_rel))
+            continue
+
+        if not _secret_format_supported(repo_rel):
+            for f, _, _ in items:
+                plan.skipped.append(_skipped(
+                    f, "unsupported format for automatic secret replacement; "
+                    "configure the credential manually using this format's "
+                    "runtime configuration mechanism, then rotate it",
+                    file=repo_rel))
+            continue
+
+        private_keys = tuple(dict.fromkeys(_PEM_BLOCK_RE.findall(text)))
+        if (any(f["rule_id"] == "private-key-block" for f, _, _ in items)
+                and len(private_keys) != 1):
+            # That rewrite replaces every PEM block in a file. Decline the
+            # entire file rather than combine distinct keys or emit one of
+            # their unchanged values alongside another credential's fix.
+            for f, _, _ in items:
+                plan.skipped.append(_skipped(
+                    f, "multiple or incomplete private keys; configure each "
+                    "credential separately before rotating it", file=repo_rel))
+            continue
+
+        new_text = text
+        all_sensitive: list[str] = []
+        applied: list[tuple[dict, str]] = []
+        for f, _, raw_value in items:
+            sensitive_values = tuple(_sensitive_literals(f["rule_id"], raw_value))
+            if f["rule_id"] == "private-key-block":
+                sensitive_values = private_keys
+            env_var = _allocate_secret_env(
+                _env_for_secret(f["rule_id"], raw_value, text), sensitive_values,
+                allocated_env_names, reserved_env_names,
+            )
+            env_ref = _env_reference(repo_rel, env_var)
+            new_text, sensitive = _apply_secret_fix(
+                new_text, f["rule_id"], raw_value, env_ref
+            )
+            all_sensitive.extend(sensitive)
+            applied.append((f, env_var))
+
+        # Safety gate: if ANY secret survived, drop the whole file rather
+        # than ship a PR that still leaks it. Mark every fix on it skipped.
+        if not _verify_scrubbed(new_text, all_sensitive):
+            for f, _ in applied:
+                plan.skipped.append(_skipped(
+                    f, "could not safely remove the value; file left unchanged",
+                    file=repo_rel))
+            continue
+
+        if repo_rel.lower().endswith(".py"):
+            imported = _ensure_python_os_import(new_text)
+            if imported is None:
+                for f, _ in applied:
+                    plan.skipped.append(_skipped(
+                        f, "invalid syntax or ambiguous Python os binding; "
+                        "file excluded from Fix Pack", file=repo_rel))
+                continue
+            new_text = imported
+
+        # Root-cause safety net: never ship a file our edit made
+        # unparseable. A value-span replacement can corrupt the surrounding
+        # literal (PEM/f-string/JSON value); drop the file instead of
+        # emitting a PR that breaks the client's code.
+        if not _validate_syntax(repo_rel, text, new_text):
+            for f, _ in applied:
+                plan.skipped.append(_skipped(
+                    f, "invalid syntax or syntax-check limit; file excluded from "
+                    "Fix Pack", file=repo_rel))
+            logger.warning(
+                "fixpack: syntax validation failed for %s after applying "
+                "%d fix(es); excluding file from Fix Pack",
+                repo_rel, len(applied),
+            )
+            continue
+
+        plan.files[repo_rel] = new_text
+        for f, env_var in applied:
+            env_vars_used.add(env_var)
+            plan.secret_fixes.append(SecretFix(
+                rule_id=f["rule_id"],
+                title=f.get("title", f["rule_id"]),
+                file=repo_rel,
+                env_var=env_var,
+                rotate_where=ROTATE_GUIDANCE.get(f["rule_id"], "the relevant provider"),
+            ))
+
+    # --- Config findings: env-file-committed + gitignore-missing-secrets.
+    check_rule_ids = {f["rule_id"] for f in eligible
+                      if f.get("rule_id") in _CHECK_RULE_IDS}
+
+    names = [_repo_relative(n) for n in raw_names]
+    files_list = [n for n in names if n and not n.endswith("/")]
+    gitignore_entry = _find_entry(raw_names, ".gitignore")
+    gitignore_body = contents.get(gitignore_entry, "") if gitignore_entry else ""
+
+    required_gitignore: list[str] = []
+    # Names declared in the env files we are about to untrack. Recorded so
+    # they survive in `.env.example`: untracking removes the file from the
+    # customer's working copy on pull, and a key that lived only there would
+    # otherwise vanish with no record that the app ever needed it.
+    untracked_env_names: set[str] = set()
+    # Values, not names, and deliberately local: they are used to search the
+    # tree this plan will deliver and never reach the plan or the PR.
+    known_secret_values: set[str] = set()
+
+    if "env-file-committed" in check_rule_ids:
+        # Findings now identify individual files. Never expand a finding for
+        # one credential-bearing env into deletion of every env in the repo.
+        # Old aggregated or stale paths must also fail closed.
+        candidates = set(find_committed_env_files(files_list))
+        committed = []
+        for f in eligible:
+            if f.get("rule_id") != "env-file-committed":
+                continue
+            path = f.get("file", "")
+            # Config findings use repo-relative paths, while older persisted
+            # findings can include the exact archive wrapper. Do not blindly
+            # strip the first component of a nested repo-relative path.
+            env_path = _repo_relative(path) if path in raw_names else path
+            entry = _find_entry(raw_names, env_path)
+            if env_path not in candidates or entry is None:
+                plan.skipped.append(_skipped(
+                    f, "recorded env file not present on re-fetch"))
+                continue
+            body = contents.get(entry)
+            if body is None:
+                plan.skipped.append(_skipped(
+                    f, "env file could not be read safely on re-fetch"))
+                continue
+            if env_file_is_public_configuration(body):
+                plan.skipped.append(_skipped(
+                    f, "Public build configuration on re-fetch; retained "
+                    "without automatic deletion."))
+                continue
+            if env_path not in committed:
+                committed.append(env_path)
+        committed.sort()
+        if committed:
+            plan.deletions.extend(committed)
+            for env_path in committed:
+                entry = _find_entry(raw_names, env_path)
+                if entry:
+                    untracked_env_names |= _env_key_names(contents.get(entry, ""))
+            # Sorted, because the PR title and body are part of what a paying
+            # customer receives and must not reorder between two runs over
+            # byte-identical content.
+            plan.leaked_env_files = sorted(committed)
+            plan.leaked_env_vars = sorted(untracked_env_names)
+            for env_path in committed:
+                entry = _find_entry(raw_names, env_path)
+                if entry:
+                    known_secret_values |= _env_values(contents.get(entry, ""))
+            # A committed .env re-appears on the next `git add` without an
+            # ignore rule, so untracking without this is a half-fix.
+            for env_path in committed:
+                # Anchor nested/variant files to their exact repo path, and
+                # escape glob syntax so a filename cannot broaden the rule.
+                p = ".env" if env_path == ".env" else "/" + re.sub(
+                    r"([\\*?\[\] ])", r"\\\1", env_path)
+                if p not in required_gitignore:
+                    required_gitignore.append(p)
+            plan.config_fixes.append(ConfigFix(
+                rule_id="env-file-committed",
+                title="Environment file committed to repository",
+                # Says what was done, nothing more. The warnings that used to
+                # live here — rotate the credentials, and your local copy
+                # disappears on pull — now open the PR body instead. They were
+                # true here and unread here: a bullet under "Configuration
+                # hardening" reads as housekeeping, which is how a customer
+                # merged a real Fix Pack without rotating two live API keys.
+                detail="Untracked "
+                       + ", ".join(f"`{c}`" for c in committed)
+                       + " and added it to `.gitignore`.",
+            ))
+
+    if "gitignore-missing-secrets" in check_rule_ids:
+        if not gitignore_covers_env(gitignore_body):
+            for p in _GITIGNORE_SECRET_PATTERNS:
+                if p not in required_gitignore:
+                    required_gitignore.append(p)
+            plan.config_fixes.append(ConfigFix(
+                rule_id="gitignore-missing-secrets",
+                title="No .gitignore coverage for secret-bearing files",
+                detail="Added secret-file patterns ("
+                       + ", ".join(f"`{p}`" for p in _GITIGNORE_SECRET_PATTERNS)
+                       + ") to `.gitignore`.",
+            ))
+        else:
+            plan.skipped.append(SkippedFinding(
+                rule_id="gitignore-missing-secrets", file=".gitignore", line=0,
+                reason=".gitignore already covers .env on re-fetch",
+            ))
+
+    if required_gitignore:
+        new_gitignore = _append_missing(gitignore_body, required_gitignore)
+        if new_gitignore != gitignore_body:
+            plan.files[".gitignore"] = new_gitignore
+
+    # A path we're untracking must never also be emitted as a file. This
+    # collides for the exact real case of a committed `.env` that ALSO holds
+    # a hardcoded secret: the secret pass scrubs it into plan.files[".env"]
+    # while env-file-committed puts ".env" in plan.deletions — a
+    # self-contradictory changeset (commit a modified `.env` and untrack it
+    # in the same tree). Untracking wins: the file is leaving version
+    # control, so a scrubbed copy is pointless and would produce two tree
+    # entries for one path in the PR.
+    for path in plan.deletions:
+        plan.files.pop(path, None)
+
+    # --- .env.example: record every substituted var and every key from an
+    # env file we untracked (placeholder values only, never the real ones). --
+    wanted_env_names = set(env_vars_used) | untracked_env_names
+    if wanted_env_names:
+        example_entry = _find_entry(raw_names, ".env.example")
+        example_body = contents.get(example_entry, "") if example_entry else ""
+        existing_names = _env_key_names(example_body)
+        additions = [f"{name}=changeme" for name in sorted(wanted_env_names)
+                     if name not in existing_names]
+        if additions:
+            new_example = _append_missing(example_body, additions)
+            plan.files[".env.example"] = new_example
+
+    # --- The post-condition: does a secret we removed still live somewhere? --
+    #
+    # Built against the tree this plan WILL deliver, not the one it was given:
+    # originals, with plan.files applied over them and plan.deletions taken
+    # out. Anything found here is a value the customer is about to be told was
+    # dealt with, sitting in a file the pull request does not touch.
+    #
+    # Not a reason to refuse delivery. Refusing leaves the customer with no
+    # fix AND the same exposure; the untracking and the .gitignore are still
+    # worth having. It is a reason to stop CLAIMING, which is what the PR body
+    # does with this list.
+
+    # --- Static CORS / SQLi rewrites (independent of audit rule_ids).
+    working: dict[str, str] = {}
+    for name, text in contents.items():
+        rel = _repo_relative(name)
+        if not rel or rel.endswith("/"):
+            continue
+        working[rel] = plan.files.get(rel, text)
+    for rel, text in plan.files.items():
+        working.setdefault(rel, text)
+
+    for apply_fn, label in (
+        (apply_cors_fixes, "cors"),
+        (apply_sqli_fixes, "sqli"),
+    ):
+        updates, static_fixes = apply_fn(working)
+        for rel, new_text in updates.items():
+            original = working.get(rel, "")
+            if not _validate_syntax(rel, original, new_text):
+                logger.warning(
+                    "fixpack: %s rewrite for %s failed syntax validation; "
+                    "leaving file unchanged",
+                    label, rel,
+                )
+                continue
+            plan.files[rel] = new_text
+            working[rel] = new_text
+            for sf in static_fixes:
+                if sf.file != rel:
+                    continue
+                plan.config_fixes.append(ConfigFix(
+                    rule_id=sf.rule_id,
+                    title=sf.title,
+                    detail=f"`{sf.file}` — {sf.detail}",
+                ))
+
+    # --- RLS: a migration per exposed table, or a recorded refusal. --------
+    #
+    # Emitted as a NEW migration rather than an edit, because the existing ones
+    # are history: a customer's migration chain has already run against their
+    # database and rewriting a link in it desynchronises the two.
+    _plan_rls_fixes(plan, eligible, zip_bytes)
+
+    # Frontend: create the app-router error boundary where we can, record the
+    # two-line change where we will not edit the customer's mount.
+    _plan_error_boundary_fixes(plan, eligible, zip_bytes)
+
+    if known_secret_values:
+        delivered: dict[str, str] = {}
+        for name, text in contents.items():
+            rel = _repo_relative(name)
+            if rel in plan.deletions:
+                continue
+            delivered[rel] = plan.files.get(rel, text)
+        for rel, text in plan.files.items():
+            delivered.setdefault(rel, text)
+        plan.surviving_secrets = _surviving_occurrences(
+            known_secret_values, delivered)
+
+    return plan
+
+
+
+_ERROR_TSX = """\
+'use client'
+
+// Added by Drydock. Without an error boundary above your routes, a single
+// render error blanks the whole app; this shows a recoverable fallback and a
+// retry instead. See https://nextjs.org/docs/app/building-your-application/routing/error-handling
+export default function Error({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string }
+  reset: () => void
+}) {
+  return (
+    <div style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+      <h2>Something went wrong</h2>
+      <p>An unexpected error occurred while loading this page.</p>
+      <button onClick={() => reset()}>Try again</button>
+    </div>
+  )
+}
+"""
+
+_ERROR_JSX = """\
+'use client'
+
+// Added by Drydock. Without an error boundary above your routes, a single
+// render error blanks the whole app; this shows a recoverable fallback and a
+// retry instead. See https://nextjs.org/docs/app/building-your-application/routing/error-handling
+export default function Error({ error, reset }) {
+  return (
+    <div style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+      <h2>Something went wrong</h2>
+      <p>An unexpected error occurred while loading this page.</p>
+      <button onClick={() => reset()}>Try again</button>
+    </div>
+  )
+}
+"""
+
+
+_GLOBAL_ERROR_TSX = """\
+'use client'
+
+// Added by Drydock. `error.tsx` catches render errors in your routes, but not
+// an error in the root layout itself -- that one still blanks the page.
+// `global-error.tsx` is the boundary for the root layout, so it must render its
+// own <html> and <body> (it replaces the layout when it activates).
+export default function GlobalError({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string }
+  reset: () => void
+}) {
+  return (
+    <html>
+      <body style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+        <h2>Something went wrong</h2>
+        <p>An unexpected error occurred while loading the app.</p>
+        <button onClick={() => reset()}>Try again</button>
+      </body>
+    </html>
+  )
+}
+"""
+
+_GLOBAL_ERROR_JSX = """\
+'use client'
+
+// Added by Drydock. `error.jsx` catches render errors in your routes, but not
+// an error in the root layout itself -- that one still blanks the page.
+// `global-error.jsx` is the boundary for the root layout, so it must render its
+// own <html> and <body> (it replaces the layout when it activates).
+export default function GlobalError({ error, reset }) {
+  return (
+    <html>
+      <body style={{ padding: 24, fontFamily: 'system-ui, sans-serif' }}>
+        <h2>Something went wrong</h2>
+        <p>An unexpected error occurred while loading the app.</p>
+        <button onClick={() => reset()}>Try again</button>
+      </body>
+    </html>
+  )
+}
+"""
+
+
+def _app_router_target(file: str) -> tuple[str, str, str] | None:
+    """(directory for error.*, directory for global-error.*, extension) for a
+    Next.js app-router finding, or None when the render root is not an app
+    router we place a file into.
+
+    Only the app router gets a generated file: `error.tsx`/`error.jsx` is an
+    app-router mechanism. A SPA mount (`src/main.tsx`), the pages router
+    (`pages/_app.*`), Remix or TanStack entries are NOT app router and return
+    None, so the caller records them as skipped with the two-line change rather
+    than writing a file that would not be the boundary.
+
+    TWO DIRECTORIES, NOT ONE, and the first version of this got both wrong by
+    collapsing them. `error.tsx` only catches for the layout it sits BESIDE:
+    for a root layout at `app/[locale]/layout.tsx` an `app/error.tsx` is
+    outside that layout and catches nothing. So `error.*` goes in the
+    layout's own directory. `global-error.*` replaces the root layout and
+    Next.js only reads it at the app root, so that one goes at the `app/`
+    segment. And the whole path is kept: a workspace app's finding reads
+    `apps/web/app/layout.tsx`, and dropping the prefix wrote the file at the
+    repository root, in a directory that was not the application.
+    """
+    f = (file or "").strip()
+    # A framework label reads `src/routes/ (TanStack Start)`: space, paren,
+    # words, at the END. A route group reads `app/(onboarding)/layout.tsx`:
+    # paren as a path segment. Only the first is not an app-router layout --
+    # the first version of this test caught both with "(" in f, and
+    # ai-co-founder-matching's real root layout was skipped as a label.
+    if " (" in f or f.startswith("pages/") or "/pages/" in f:
+        return None
+    m = re.search(r"^(.*?)(?:^|/)?(app)/(?:.*/)?layout\.([jt]sx?)$", f)
+    if not m:
+        return None
+    layout_dir = f.rsplit("/", 1)[0]
+    # The app root is the `app` segment closest to the layout, with whatever
+    # sits before it -- "", "src", or "apps/web" -- preserved.
+    parts = layout_dir.split("/")
+    try:
+        app_idx = len(parts) - 1 - parts[::-1].index("app")
+    except ValueError:
+        return None
+    app_root = "/".join(parts[: app_idx + 1])
+    ext = "jsx" if m.group(3) in ("jsx", "js") else "tsx"
+    return layout_dir, app_root, ext
+
+
+def _plan_error_boundary_fixes(plan: FixpackPlan, eligible: list[dict],
+                               zip_bytes: bytes) -> None:
+    """Create `app/error.tsx` for an app-router app; record the rest as skipped.
+
+    The app-router case is a pure file creation -- no edit to code the customer
+    wrote -- so it is the shape the Pack delivers with confidence. Every other
+    render root (a Vite SPA, the pages router, Remix) needs the customer's own
+    entry file wrapped, and this Pack does not rewrite a mount it did not write;
+    those are recorded in `skipped`, carrying the analyzer's own fix_hint (the
+    <ErrorBoundary> two-liner), because a refusal with the change in hand is
+    information and silence is not -- the same rule as the RLS refusals above.
+    """
+    findings = [f for f in eligible
+                if f.get("rule_id") == ERROR_BOUNDARY_RULE_ID]
+    if not findings:
+        return
+
+    existing = {_repo_relative(n)
+                for n in zipfile.ZipFile(io.BytesIO(zip_bytes)).namelist()}
+
+    for finding in findings:
+        target = _app_router_target(finding.get("file", ""))
+        if target is None:
+            plan.skipped.append(_skipped(
+                finding,
+                "adding an error boundary here means wrapping your app's root "
+                "component, which edits your entry file — the Pack does not "
+                "rewrite a mount you wrote. The two-line change is in the "
+                "suggested fix."))
+            continue
+        layout_dir, app_root, ext = target
+        filename = f"error.{ext}"
+        error_path = f"{layout_dir}/error.{ext}"
+        global_path = f"{app_root}/global-error.{ext}"
+        # The analyzer fires only when NO boundary exists, so in the fire case
+        # neither of these is present. This guard is defensive: if either is
+        # somehow here, the app already has a boundary and the Pack leaves it.
+        if error_path in existing or global_path in existing:
+            plan.skipped.append(_skipped(
+                finding, f"`{error_path}` (or a global-error beside it) already "
+                "exists; leaving your boundary untouched."))
+            continue
+        is_tsx = ext == "tsx"
+        # Both files, because they catch DIFFERENT failures: error.tsx covers
+        # render errors in the routes below the root layout, global-error.tsx
+        # covers an error in the root layout itself -- which error.tsx cannot
+        # catch and which is a common blank-page source. Both are new files.
+        plan.files[error_path] = _ERROR_TSX if is_tsx else _ERROR_JSX
+        plan.files[global_path] = _GLOBAL_ERROR_TSX if is_tsx else _GLOBAL_ERROR_JSX
+        plan.config_fixes.append(ConfigFix(
+            rule_id=ERROR_BOUNDARY_RULE_ID,
+            title="Error boundaries above your routes",
+            detail=(
+                f"`{error_path}` and `{global_path}` — Next.js app-router error "
+                f"boundaries. Without them, a render error replaces the whole "
+                f"app with a blank page: `{filename}` catches errors in your "
+                f"routes, and `global-error.{ext}` catches an error in the root "
+                f"layout itself, which the first cannot. Both are new files, so "
+                f"they change nothing you already wrote."),
+        ))
+
+
+def _plan_rls_fixes(plan: FixpackPlan, eligible: list[dict],
+                    zip_bytes: bytes) -> None:
+    """Add a guarded RLS migration for each exposed table we can justify.
+
+    A refusal is recorded in `skipped` rather than dropped. The customer paid
+    for a Fix Pack; "we saw this and would not guess at your authorisation
+    model" is information, and silence is not.
+    """
+    rls_findings = [f for f in eligible if f.get("rule_id") == RLS_RULE_ID]
+    if not rls_findings:
+        return
+
+    sql, _paths = read_committed_sql(io.BytesIO(zip_bytes))
+    schema = parse_schema(sql) if sql.strip() else {}
+    stamp = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+
+    for index, finding in enumerate(rls_findings):
+        table = _table_from_finding(finding)
+        if table is None:
+            plan.skipped.append(_skipped(
+                finding, "could not identify the table from the finding"))
+            continue
+        result = propose_read_policy(table, schema)
+        if not isinstance(result, PolicyProposal):
+            plan.skipped.append(_skipped(finding, result.reason))
+            continue
+        # Distinct second granularity per table, so two migrations in one Pack
+        # cannot collide on a filename and cannot apply out of order.
+        path = migration_filename(result.table, f"{stamp}{index:02d}")
+        plan.files[path] = result.sql
+        plan.config_fixes.append(ConfigFix(
+            rule_id=RLS_RULE_ID,
+            title=f"Row Level Security for `{result.table}`",
+            detail=(
+                f"`{path}` — {result.summary}. Enabling RLS without a policy "
+                f"would close the table to your application too, so the "
+                f"migration adds both, and only where no read policy exists "
+                f"yet."
+            ),
+        ))
+
+
+def _table_from_finding(finding: dict) -> str | None:
+    """The table this finding is about, from the title the detector wrote
+    (``Table `x` is readable …``).
+
+    It does NOT check the name against the schema: propose_read_policy already
+    refuses an unknown table, with a better reason than this could give. A
+    second guard here looked like defence in depth and was really an untested
+    branch — mutation testing removed it by surviving.
+    """
+    match = re.search(r"`([A-Za-z_][A-Za-z0-9_]*)`", finding.get("title", ""))
+    return match.group(1) if match else None
+
+
+def _plural(n: int, singular: str, plural: str | None = None) -> str:
+    return singular if n == 1 else (plural or singular + "s")
+
+
+def render_pr_title(plan: FixpackPlan) -> str:
+    """The title names what the CUSTOMER must still do, not what we did.
+
+    We already removed the secret; that half is finished the moment the PR
+    exists. The half that is not finished is rotation, and the title is the
+    one piece of a pull request nobody can scroll past -- it is in the list,
+    in the notification email's subject, in the merge commit, in the browser
+    tab. A production Fix Pack proved the body is not enough: the loud block
+    was there for hardcoded secrets and absent for a committed .env, and the
+    customer merged without rotating.
+
+    No count for the .env case on purpose. A dotenv file holds
+    SSH_PORT beside MIMO_API_KEY, and calling six variables "six leaked
+    credentials" is a number we cannot stand behind. The file is named
+    instead, and the variable names are listed in the body so the reader
+    decides which of them are secret.
+    """
+    n_sec = len(plan.secret_fixes)
+    leaked = plan.leaked_env_files
+    where = ", ".join(f"`{f}`" for f in leaked)
+
+    if n_sec and leaked:
+        return (f"Drydock Fix Pack: rotate {n_sec} hardcoded "
+                f"{_plural(n_sec, 'secret')} and everything in {where} "
+                f"before merging")
+    if leaked:
+        return f"Drydock Fix Pack: rotate the credentials in {where} before merging"
+    if n_sec:
+        return (f"Drydock Fix Pack: rotate {n_sec} hardcoded "
+                f"{_plural(n_sec, 'secret')} before merging")
+
+    # No rotation to demand -- so the title names what the PR DOES, not what is
+    # left to do. When the only substantive change is the error boundary, the
+    # old "secure repository configuration" was both vague and wrong-category:
+    # a blank-page-on-error is reliability, not security, and the customer
+    # skimming the title could not tell what the Pack added. A rotation Pack
+    # that ALSO adds a boundary never reaches here -- the branches above keep
+    # rotation as the headline, because that is the half nobody may scroll
+    # past. This branch only sharpens the previously-bland case.
+    config_rules = {cf.rule_id for cf in plan.config_fixes}
+    if config_rules == {ERROR_BOUNDARY_RULE_ID}:
+        return "Drydock Fix Pack: add the error boundary your app is missing"
+    return "Drydock Fix Pack: secure repository configuration"
+
+
+# GitHub rejects a pull request body over 65,536 characters, and the Fix Pack
+# gets no second attempt at delivery: the branch is already pushed and the
+# customer has already paid, so the request that fails is the one that hands
+# them the work. Kept well under the real ceiling because the body is assembled
+# from model-authored text whose length we do not control.
+#
+# It became load-bearing when the deep review's analysis moved into the
+# NOT-fixed list: up to 900 characters per finding, on audits that routinely
+# carry thirty. Before that the body could not plausibly reach the limit, and
+# nothing checked -- the same shape as building a prompt for a context window
+# nobody had measured.
+PR_BODY_LIMIT = 60_000
+
+_TRUNCATED = (
+    "\n\n---\n**This description was cut short** because it exceeded what "
+    "GitHub accepts in a pull request body. Your full audit report lists "
+    "every finding, including the ones below the cut."
+)
+
+_ANALYSIS_OMITTED = (
+    "The deep review's explanation for each of these is in your audit "
+    "report; there were too many to repeat here without exceeding what "
+    "GitHub accepts in a pull request body.\n"
+)
+
+
+def render_pr_body(plan: FixpackPlan) -> str:
+    """PR description. Contains finding titles, files, and rotation
+    guidance — NEVER a secret value (the plan never carries one).
+
+    Degrades rather than overflows. The full body carries the deep review's
+    explanation and fix hint under every finding it did not rewrite; if that
+    exceeds what GitHub accepts, the analysis is dropped and the list is kept,
+    because a delivered pull request listing what is still open beats a 422 on
+    a Fix Pack the customer has paid for. The reader is told which one they
+    are looking at.
+    """
+    full = _render_pr_body(plan, with_analysis=True)
+    if len(full) <= PR_BODY_LIMIT:
+        return full
+    trimmed = _render_pr_body(plan, with_analysis=False)
+    if len(trimmed) <= PR_BODY_LIMIT:
+        return trimmed
+    # Still over with the analysis gone: a hard cut, marked. Returning an
+    # over-limit body would be a check that measures and does not enforce,
+    # which is the same thing as no check.
+    return trimmed[:PR_BODY_LIMIT - len(_TRUNCATED)] + _TRUNCATED
+
+
+def _render_pr_body(plan: FixpackPlan, *, with_analysis: bool) -> str:
+    parts: list[str] = ["## Drydock Fix Pack\n"]
+    parts.append(
+        "This PR was generated automatically from your audit. It removes "
+        "hardcoded secrets and/or hardens your repository configuration. "
+        "Nothing is merged until you press merge.\n"
+    )
+
+    if plan.secret_fixes or plan.leaked_env_files:
+        parts.append(
+            "> ## ⚠️ ROTATE THESE SECRETS BEFORE YOU MERGE\n"
+            "> Removing a secret from the code does **NOT** make it safe. "
+            "Every value below has already been committed to your git "
+            "history and must be treated as **compromised**. Deleting it "
+            "here does not invalidate it — you MUST rotate/revoke each one "
+            "at its provider, or an attacker who already has it keeps full "
+            "access.\n>"
+        )
+        # Before, not after. Between merging and rotating, the credential is
+        # still live and now easier to find: this PR's own diff shows every
+        # removed line in plain text, which is also why a secret-scanning
+        # check on your repository may go red on this commit.
+        #
+        # That sentence lived here as a comment only, and the customer never
+        # saw it. It is the sharpest argument the block has -- "rotate first"
+        # sounds like caution until you learn the pull request itself is a new,
+        # more convenient copy of the credential -- so it now goes in the body.
+        #
+        # It does NOT warn about the push being blocked, because it is not.
+        # GitHub push protection does not block a secret it has already
+        # alerted on, and a secret this Fix Pack is removing is by
+        # construction already in the repository. The delivery push therefore
+        # goes through; the scanning ALERT is what may appear, and it is
+        # correct. Saying "your push may be rejected" would be a warning about
+        # something that does not happen, which costs the ones that do.
+        #
+        # No history-rewriting command is offered, deliberately. It is
+        # destructive, it breaks every existing clone, and it does not undo
+        # the exposure -- the value is already out. Handing a force-push
+        # recipe to someone who merges without reading (the behaviour this
+        # whole block exists for) trades a live credential for a broken
+        # repository AND a live credential.
+        parts.append(
+            "> **This pull request's own diff shows those values in plain "
+            "text.** A removed line is still part of the patch: it is on this "
+            "page, in the notification email GitHub has already sent, and in "
+            "anything that reads this repository's pull requests. Until each "
+            "value is rotated, this pull request makes the credential easier "
+            "to find, not harder — which is why rotation belongs before the "
+            "merge and not after it. Rewriting history to erase the value is "
+            "not a substitute: everyone who already cloned, forked or read "
+            "the repository still has it. Rotating at the provider is the "
+            "only action that ends the exposure.\n>"
+        )
+        if plan.leaked_env_files:
+            where = ", ".join(f"`{f}`" for f in plan.leaked_env_files)
+            parts.append(
+                f"> **{where} was committed to git.** Everything it defined "
+                "is public to anyone who can read this repository's history, "
+                "and stays public after this PR is merged — deleting a file "
+                "does not remove it from earlier commits. Rotate every one of "
+                "these that is a credential:\n>"
+            )
+            for name in plan.leaked_env_vars:
+                parts.append(f"> - `{name}`")
+            parts.append(">")
+            # The other half of the harm, and the half a build check cannot
+            # see: this PR untracks the file, so pulling the merge DELETES it
+            # from every working copy — the developer's laptop, and any server
+            # deployed by `git pull`. The app then starts with no credentials.
+            #
+            # Recoverable rather than merely warned about: the values are
+            # still in the customer's own history, so the exact command to get
+            # the file back is safe to hand over. Verified against a real
+            # merged Fix Pack and against both merge styles — a merge commit
+            # and a squash — because a recovery command that does not work is
+            # worse than none.
+            for path in plan.leaked_env_files:
+                parts.append(
+                    f"> **Pulling this merge deletes your local `{path}`.** "
+                    f"Back it up first (`cp {path} {path}.backup`). If you "
+                    "have already merged and lost it, restore it from your "
+                    "own history:\n>"
+                )
+                parts.append(
+                    f"> `git show $(git rev-list -n 1 HEAD -- {path})^:{path}"
+                    f" > {path}`\n>"
+                )
+
+    if plan.surviving_secrets:
+        # The claim this pull request is NOT allowed to make. A real Fix Pack
+        # untracked a .env and titled itself "secure repository configuration"
+        # while the same key sat verbatim in two source files it never touched.
+        where = "\n".join(
+            f"> - `{path}`:{line}" for path, line in plan.surviving_secrets)
+        parts.append(
+            "> ### ⛔ This pull request does NOT remove the secret\n"
+            "> At least one value it takes out of one place is still present, "
+            "unchanged, in code this pull request does not modify. Removing "
+            "it from a single file therefore changes nothing about the "
+            "exposure — rotation is the only thing that does:\n>\n"
+            f"{where}\n>"
+        )
+
+    if plan.secret_fixes or plan.leaked_env_files:
+        # De-dup provider guidance so the same provider isn't listed twice.
+        seen: set[str] = set()
+        for fix in plan.secret_fixes:
+            if fix.rotate_where in seen:
+                continue
+            seen.add(fix.rotate_where)
+            parts.append(f"> - **Rotate at {fix.rotate_where}**")
+        parts.append("")
+
+        # Guarded separately from the block above: a repository whose only
+        # leak is a committed .env has no hardcoded secrets, and printing an
+        # empty "Secrets removed from code" heading under a warning about
+        # leaked credentials reads like the tool lost track of what it did.
+        if plan.secret_fixes:
+            parts.append("### Secrets removed from code\n")
+            for fix in plan.secret_fixes:
+                parts.append(
+                    f"- **{fix.title}** in `{fix.file}` — replaced with a "
+                    f"reference to the `{fix.env_var}` environment variable."
+                )
+        parts.append(
+            "\nThe substituted variables were added to `.env.example` with a "
+            "`changeme` placeholder. Set the **new, rotated** values in your "
+            "real environment (never commit them).\n"
+        )
+
+    if plan.config_fixes:
+        parts.append("### Configuration hardening\n")
+        for cfg in plan.config_fixes:
+            parts.append(f"- **{cfg.title}** — {cfg.detail}")
+        parts.append("")
+
+    if plan.skipped:
+        # Named for what it is. It used to say "Skipped", which reads like
+        # housekeeping we did on your behalf; these are findings from the
+        # audit you paid for that this pull request leaves entirely to you.
+        parts.append("### NOT fixed by this pull request\n")
+        if plan.total_findings:
+            changed = plan.total_findings - len(plan.skipped)
+            parts.append(
+                f"Your audit reported **{plan.total_findings}** findings. "
+                f"This pull request changes **{changed}** of them. The "
+                f"remaining **{len(plan.skipped)}** are listed below, "
+                "unchanged, so you can see exactly what is still open:\n"
+            )
+        if not with_analysis and any(s.explanation or s.fix_hint
+                                     for s in plan.skipped):
+            parts.append(_ANALYSIS_OMITTED)
+        # Grouped by reason, because the reason is shared and the findings are
+        # not. Repeating one long sentence under every bullet buries the
+        # titles, which are the only part of this list a reader needs.
+        by_reason: dict[str, list[SkippedFinding]] = {}
+        for s in plan.skipped:
+            by_reason.setdefault(s.reason, []).append(s)
+        for reason, group in by_reason.items():
+            # Not .capitalize(): it lowercases everything after the first
+            # character, and the reason deliberately shouts one word.
+            parts.append(f"**{reason}**\n")
+            for s in group:
+                where = f"`{s.file}`" + (f":{s.line}" if s.line else "")
+                head = s.title or f"`{s.rule_id}`"
+                parts.append(f"- **{head}**"
+                             + (f" — {where}" if s.file else ""))
+                # Indented continuation paragraphs, so each stays its own
+                # block under the bullet instead of wrapping into the title.
+                if with_analysis and s.explanation:
+                    parts.append(f"\n  {s.explanation}")
+                if with_analysis and s.fix_hint:
+                    parts.append(f"\n  → {s.fix_hint}")
+                if with_analysis and (s.explanation or s.fix_hint):
+                    parts.append("")
+            parts.append("")
+
+    parts.append(
+        "---\nMerge is entirely up to you. Review the diff, rotate any "
+        "secrets listed above, then merge when you're ready."
+    )
+    return "\n".join(parts)

@@ -22,20 +22,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.billing import bank_transfer, telegram_stars, yookassa
 from app.db import (
     AccountRepository,
     AuditRepository,
     FixpackJobRepository,
     PaymentRepository,
     SubscriptionRepository,
-)
-from app.deploypack.delivery_auth import DeliveryAuthorizationError
-from app.deploypack.paid_delivery_auth import (
-    authorize_paid_checkout,
-    get_paid_delivery_store,
-    repository_name,
-    seal_paid_grant,
 )
 from app.routes._shared import _json_object_body, _secret_equals
 from app.routes.bank_transfer import _check_invoice_rate_limit
@@ -49,6 +41,14 @@ from app.routes.dependencies import (
     get_subscription_repo,
 )
 from app.runtime.ratelimit import RateLimiter
+from app.services.billing import bank_transfer, telegram_stars, yookassa
+from app.services.deploypack.delivery_auth import DeliveryAuthorizationError
+from app.services.deploypack.paid_delivery_auth import (
+    authorize_paid_checkout,
+    get_paid_delivery_store,
+    repository_name,
+    seal_paid_grant,
+)
 
 router = APIRouter()
 

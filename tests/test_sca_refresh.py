@@ -14,9 +14,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.foundation.llm.client import LLMClient
-from app.report.evidence import manifest_rows
-from app.sca.osv import OsvClient
-from app.sca.refresh import (
+from app.pipeline.report.evidence import manifest_rows
+from app.pipeline.sca.osv import OsvClient
+from app.pipeline.sca.refresh import (
     dependencies_from_payload,
     inventory_payload,
     refresh_stale_dependency_audits,
@@ -24,8 +24,8 @@ from app.sca.refresh import (
     refreshed_score,
     score_inputs_from_stored,
 )
-from app.sca.stage import RULE_ID, SCA_FRESHNESS_TTL_DAYS, freshness
-from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan, score_findings
+from app.pipeline.sca.stage import RULE_ID, SCA_FRESHNESS_TTL_DAYS, freshness
+from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan, score_findings
 from tests.test_sca_stage import LODASH_ADVISORY, FakeTransport, make_zip
 
 NOW = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
@@ -170,7 +170,7 @@ def test_a_withdrawn_advisory_actually_leaves_the_report():
 
 
 def test_a_refresh_that_finds_a_new_advisory_replaces_the_old_row():
-    from app.sca.stage import run_sca_stage
+    from app.pipeline.sca.stage import run_sca_stage
     scan = run_scan(repo_bytes(), LLMClient(), sca_client=advisory_client())
     other = {**LODASH_ADVISORY, "id": "GHSA-new-0000-0000", "aliases": ["CVE-2026-0001"],
              "database_specific": {"severity": "CRITICAL"}}
@@ -329,7 +329,7 @@ async def test_the_sweep_respects_its_limit():
 async def test_the_refreshed_row_reports_a_current_date_to_the_reader(monkeypatch):
     # Refresh and rendering must share a clock; the real date eventually makes
     # the fixed NOW fixture stale even immediately after its simulated refresh.
-    monkeypatch.setattr("app.report.evidence.freshness",
+    monkeypatch.setattr("app.pipeline.report.evidence.freshness",
                         lambda asked_at: freshness(asked_at, now=NOW))
     repo = StoredRepo([stored_row(SCA_FRESHNESS_TTL_DAYS + 3)])
     before = dict(manifest_rows(repo.rows[0]["score_json"]))

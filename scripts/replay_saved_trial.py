@@ -16,9 +16,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
+from app.pipeline.scan_pipeline import run_scan
 from app.scan.llm_scan import RUBRICS
 from app.scan.version import AUDIT_ENGINE_VERSION
-from app.scan_pipeline import run_scan
 
 
 def canonical_sha256(value: object) -> str:

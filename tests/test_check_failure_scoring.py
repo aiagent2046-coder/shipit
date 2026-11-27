@@ -6,12 +6,12 @@ import json
 import pytest
 
 from app.foundation.llm.client import LLMClient
+from app.pipeline.sca.refresh import score_inputs_from_stored
+from app.pipeline.scan_pipeline import run_scan, score_findings
 from app.runtime.capabilities import CHECKS_RUN
-from app.sca.refresh import score_inputs_from_stored
 from app.scan import static
 from app.scan.check_failure_scoring import CHECK_CATEGORIES
 from app.scan.scoring import CATEGORIES, compute_scores
-from app.scan_pipeline import run_scan, score_findings
 from tests.test_check_isolation import explode, make_zip
 from tests.test_error_boundary import ROUTED_NEXT, _zip
 

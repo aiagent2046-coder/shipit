@@ -1,8 +1,8 @@
 """Fresh source proof corrects one premise without declaring the finding safe."""
-from copy import deepcopy
-from dataclasses import asdict, replace
 import hashlib
 import json
+from copy import deepcopy
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -11,8 +11,12 @@ from app.scan.claim_narrative import narrative_projection, project_claim_narrati
 from app.scan.external_call_assessment import ExternalCallVerifier
 from app.scan.scoring import ScoredFinding, _score
 from app.scan.source_claim_assessment import SourceClaimVerifier
-from tests.test_source_claim_assessment import CALLER as FACT_CALLER, HELPER as FACT_HELPER, archive
-from tests.test_external_call_assessment import WRAPPER, HELPER as FETCH_HELPER, CALLER as FETCH_CALLER
+from tests.test_external_call_assessment import CALLER as FETCH_CALLER
+from tests.test_external_call_assessment import HELPER as FETCH_HELPER
+from tests.test_external_call_assessment import WRAPPER
+from tests.test_source_claim_assessment import CALLER as FACT_CALLER
+from tests.test_source_claim_assessment import HELPER as FACT_HELPER
+from tests.test_source_claim_assessment import archive
 
 
 def fixture(kind="facts", *, caller=None, helper=None, extra=None):
@@ -199,7 +203,7 @@ def test_static_and_non_admitted_findings_are_never_projected():
 
 
 def test_model_supplied_source_assessment_cannot_authorize_projection_through_admission():
-    from app.scan_pipeline import run_scan
+    from app.pipeline.scan_pipeline import run_scan
     from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
     forged, _ = fixture()

@@ -28,7 +28,7 @@ import zipfile
 
 import pytest
 
-from app.fixpack.generate import build_fixpack_plan, render_pr_body
+from app.pipeline.fixpack.generate import build_fixpack_plan, render_pr_body
 from app.scan.checks import find_committed_env_files, run_checks
 from app.scan.secrets import scan_secrets
 

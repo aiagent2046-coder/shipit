@@ -17,7 +17,7 @@ import json
 import zipfile
 
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
-from app.scan_pipeline import run_scan
+from app.pipeline.scan_pipeline import run_scan
 from tests.conftest import run_audit_job
 
 # The LLM stage only runs for a paying account now (free tier is
@@ -162,7 +162,7 @@ def test_score_basis_static_only_when_no_providers():
     import zipfile
 
     from app.foundation.llm.client import LLMClient
-    from app.scan_pipeline import run_scan
+    from app.pipeline.scan_pipeline import run_scan
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("requirements.txt", "fastapi\n")
@@ -175,9 +175,9 @@ def test_score_basis_static_only_when_llm_fails(monkeypatch):
     import io
     import zipfile
 
-    from app import scan_pipeline as pipeline_mod
     from app.foundation.llm.client import LLMClient, LLMError
-    from app.scan_pipeline import run_scan
+    from app.pipeline import scan_pipeline as pipeline_mod
+    from app.pipeline.scan_pipeline import run_scan
 
     def boom(*a, **k):
         raise LLMError("provider down")
@@ -198,10 +198,10 @@ def test_score_basis_static_plus_llm_when_stage_ran(monkeypatch):
     import io
     import zipfile
 
-    from app import scan_pipeline as pipeline_mod
     from app.foundation.llm.client import LLMClient
+    from app.pipeline import scan_pipeline as pipeline_mod
+    from app.pipeline.scan_pipeline import run_scan
     from app.scan.llm_scan import LLMScanStats
-    from app.scan_pipeline import run_scan
 
     monkeypatch.setattr(pipeline_mod, "run_llm_scan",
                         lambda *a, **k: ([], LLMScanStats(prompts=1)))

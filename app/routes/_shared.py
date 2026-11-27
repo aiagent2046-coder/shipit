@@ -18,7 +18,7 @@ import os
 
 from fastapi import HTTPException, Request
 
-from app.fixpack.generate import has_auto_fixable_findings
+from app.pipeline.fixpack.generate import has_auto_fixable_findings
 from app.runtime.log_context import set_log_context
 
 

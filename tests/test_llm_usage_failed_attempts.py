@@ -30,7 +30,7 @@ import pytest
 import app.db as db_mod
 from app.db import AuditJobRepository, AuditRepository, LlmUsageRepository
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
-from app.scan_pipeline import PAID_AUDIT_PASSES
+from app.pipeline.scan_pipeline import PAID_AUDIT_PASSES
 from app.worker import main as worker
 from app.worker.main import JobExecutionError, _execute_job
 
@@ -141,7 +141,7 @@ async def _account_row_id() -> str:
 
 
 def _job(raw: bytes, *, attempts: int = 1) -> dict:
-    from app.audit_spool import stage_archive
+    from app.services.audit_spool import stage_archive
 
     job_id = str(uuid.uuid4())
     return {
@@ -329,7 +329,7 @@ def no_emergency_stop(monkeypatch):
 
 
 async def _enqueue_zip_job(jobs: AuditJobRepository, raw: bytes) -> dict:
-    from app.audit_spool import stage_archive
+    from app.services.audit_spool import stage_archive
 
     staged = stage_archive(str(uuid.uuid4()), raw)
     return await jobs.enqueue(

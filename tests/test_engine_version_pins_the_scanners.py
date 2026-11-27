@@ -42,8 +42,8 @@ import inspect
 import io
 import zipfile
 
+from app.pipeline import scan_pipeline as pipeline
 from app.scan import static
-from app import scan_pipeline as pipeline
 from app.scan.error_boundary import BoundaryScan
 
 # Every scanner run_static_scan feeds into the findings list, by the name it is
@@ -186,7 +186,7 @@ def test_the_emitted_rule_ids_are_the_ones_this_version_was_stamped_for() -> Non
     green -- but it added a rule id, so a cached audit and the running engine
     disagreed about the same bytes while the cache went on serving the old one.
     """
-    from app.report.plain_language import PLAIN
+    from app.pipeline.report.plain_language import PLAIN
 
     assert tuple(sorted(PLAIN)) == EMITTED_RULE_IDS, (
         "the static engine's rule ids changed. Update EMITTED_RULE_IDS *and* "

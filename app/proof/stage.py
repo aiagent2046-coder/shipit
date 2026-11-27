@@ -15,7 +15,7 @@ from typing import Any
 
 from starlette.concurrency import run_in_threadpool
 
-from app import sandbox_client
+from app.pipeline import sandbox_client
 from app.proof.compare import build_proof_report, run_proof_pair
 from app.proof.core.artifacts import artifacts_to_json, build_artifacts
 from app.proof.core.routing import select_templates

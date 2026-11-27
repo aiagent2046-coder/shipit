@@ -1,6 +1,6 @@
 """Advice must not turn advisory boundaries into unverified upgrade guarantees."""
 from app.foundation.lockfiles import Dependency
-from app.sca.stage import _advisories, build_finding
+from app.pipeline.sca.stage import _advisories, build_finding
 
 
 def package(*, development=None):

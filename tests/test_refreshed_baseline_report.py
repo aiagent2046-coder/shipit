@@ -1,15 +1,14 @@
 """A refreshed free baseline keeps current, retained and reused evidence distinct."""
+import json
+import re
 from copy import deepcopy
 from html import escape
-import json
 from pathlib import Path
-import re
 
 import pytest
 
-from app.audit_history import baseline_snapshot
-from app.report.html import render_report
-
+from app.pipeline.report.html import render_report
+from app.services.audit_history import baseline_snapshot
 
 CASES = json.loads((Path(__file__).parents[1] / "web/src/lib/fixtures/dependency_snapshot_cases.json").read_text())
 

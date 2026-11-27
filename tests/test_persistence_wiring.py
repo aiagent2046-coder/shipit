@@ -20,10 +20,8 @@ import zipfile
 
 from fastapi.testclient import TestClient
 
-import app.deploypack.pipeline as pipeline_mod
+import app.services.deploypack.pipeline as pipeline_mod
 import app.worker.main as worker_mod
-from app.deploypack.delivery import PullRequestResult
-from app.deploypack.sandbox import SandboxResult
 from app.foundation.llm.client import LLMClient
 from app.main import (
     app,
@@ -33,6 +31,8 @@ from app.main import (
     get_pr_opener,
     get_repo_fetcher,
 )
+from app.services.deploypack.delivery import PullRequestResult
+from app.services.deploypack.sandbox import SandboxResult
 from tests.conftest import FakeAuditQueue, drain_audit_queue
 
 client = TestClient(app)

@@ -22,8 +22,7 @@ import json
 import httpx
 import pytest
 
-from app.billing import yookassa
-
+from app.services.billing import yookassa
 
 CREDS = ("test-shop", "test_secret")
 

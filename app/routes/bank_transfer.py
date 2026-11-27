@@ -20,15 +20,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from app.billing import bank_transfer, telegram_stars
 from app.db import (
     AuditRepository,
     FixpackJobRepository,
     PaymentRepository,
     ServiceFlagsRepository,
 )
-from app.deploypack.delivery_auth import DeliveryAuthorizationError
-from app.deploypack.paid_delivery_auth import authorize_paid_checkout, repository_name
 from app.routes._shared import (
     _client_key,
     _reject_if_fixpack_already_live,
@@ -43,7 +40,10 @@ from app.routes.dependencies import (
     get_service_flags_repo,
 )
 from app.runtime.ratelimit import RateLimiter, RateLimitExceeded
-from app.service_flags import _emergency_stop_active
+from app.services.billing import bank_transfer, telegram_stars
+from app.services.deploypack.delivery_auth import DeliveryAuthorizationError
+from app.services.deploypack.paid_delivery_auth import authorize_paid_checkout, repository_name
+from app.services.service_flags import _emergency_stop_active
 
 router = APIRouter()
 

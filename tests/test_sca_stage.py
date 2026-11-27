@@ -15,9 +15,9 @@ import httpx
 import pytest
 
 from app.foundation.lockfiles import Dependency
-from app.sca import osv as osv_module
-from app.sca.osv import OsvClient, OsvUnavailable
-from app.sca.stage import CHECKS_RUN_KEY, RULE_ID, run_sca_stage
+from app.pipeline.sca import osv as osv_module
+from app.pipeline.sca.osv import OsvClient, OsvUnavailable
+from app.pipeline.sca.stage import CHECKS_RUN_KEY, RULE_ID, run_sca_stage
 
 LODASH_ADVISORY = {
     "id": "GHSA-35jh-r3h4-6jhm",
@@ -428,7 +428,7 @@ def test_a_lockfile_that_cannot_be_parsed_does_not_abort_the_audit(monkeypatch):
     def exploding(_data):
         raise RecursionError("nested deeper than this parser can walk")
 
-    monkeypatch.setattr("app.sca.stage.collect_dependency_inventory", exploding)
+    monkeypatch.setattr("app.pipeline.sca.stage.collect_dependency_inventory", exploding)
     findings, stats = run_sca_stage(repo_with(), client_for(one_advisory()))
     assert findings == []
     assert stats["skipped_reason"] == "lockfile_unreadable: RecursionError"

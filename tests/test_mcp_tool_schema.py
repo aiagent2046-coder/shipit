@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.mcp.server import TOOLS
+from app.orchestration.mcp.server import TOOLS
 
 GOLDEN = Path(__file__).parent / "data" / "mcp_tools.json"
 
@@ -43,7 +43,7 @@ def test_the_published_schema_matches_the_golden():
     """A failure here is not a defect -- it is a change to a published
     interface that wants a second pair of eyes. Regenerate with:
 
-        python3 -c "import json; from app.mcp.server import TOOLS; \\
+        python3 -c "import json; from app.orchestration.mcp.server import TOOLS; \\
             print(json.dumps(list(TOOLS), indent=2, ensure_ascii=False))" \\
             > tests/data/mcp_tools.json
     """

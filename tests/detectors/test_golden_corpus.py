@@ -18,7 +18,7 @@ import inspect
 
 import pytest
 
-from app.report.plain_language import PLAIN
+from app.pipeline.report.plain_language import PLAIN
 from app.scan import static
 from app.scan.static import run_static_scan
 

@@ -69,7 +69,7 @@ def test_file_is_authoritative_parses_quotes_and_restores_shell(env_file, monkey
 
 
 def test_preview_mutation_is_seen_without_reloading_pipeline(env_file, monkeypatch):
-    from app import scan_pipeline as pipeline
+    from app.pipeline import scan_pipeline as pipeline
 
     monkeypatch.setattr(pipeline, "FREE_TIER_MODEL", "stale-shared")
     monkeypatch.setattr(pipeline, "FREE_TIER_MODEL_BY_KIND", {"openai_compat": "stale-preview"})

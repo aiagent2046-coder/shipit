@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from app.report.plain_language import plain_fields
+from app.pipeline.report.plain_language import plain_fields
 from app.scan.checks import run_checks
 from app.scan.secrets import scan_secrets
 

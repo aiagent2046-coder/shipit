@@ -43,12 +43,6 @@ import time
 import psycopg
 
 from app import db as db_mod
-from app.audit_history import ensure_paid_baseline, refresh_cached_preview_history
-from app.audit_spool import (
-    cleanup_staged_archive,
-    read_staged_archive,
-    sweep_stale_archives,
-)
 from app.db import (
     AuditJobRepository,
     AuditRepository,
@@ -77,13 +71,11 @@ from app.main import (  # noqa: E402  -- see comment above
     _run_scan_offthread,
 )
 from app.notify.alerts import notify_operator
-from app.runtime.log_context import log_context, set_log_context
-from app.runtime.logging_config import configure_logging
-from app.sca.cache import complete_cached_dependencies, needs_dependency_scan
-from app.sca.refresh import inventory_payload, refresh_stale_dependency_audits
-from app.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
-from app.sca.stage import sca_client_for
-from app.scan_pipeline import (
+from app.pipeline.sca.cache import complete_cached_dependencies, needs_dependency_scan
+from app.pipeline.sca.refresh import inventory_payload, refresh_stale_dependency_audits
+from app.pipeline.sca.snapshot import baseline_is_current, refresh_snapshot, snapshot_is_current
+from app.pipeline.sca.stage import sca_client_for
+from app.pipeline.scan_pipeline import (
     AUDIT_ENGINE_VERSION,
     BASIS_FULL,
     BASIS_PREVIEW,
@@ -93,6 +85,14 @@ from app.scan_pipeline import (
     PAID_AUDIT_PASSES,
     basis_for_account,
     content_digest,
+)
+from app.runtime.log_context import log_context, set_log_context
+from app.runtime.logging_config import configure_logging
+from app.services.audit_history import ensure_paid_baseline, refresh_cached_preview_history
+from app.services.audit_spool import (
+    cleanup_staged_archive,
+    read_staged_archive,
+    sweep_stale_archives,
 )
 
 logger = logging.getLogger("app.worker")

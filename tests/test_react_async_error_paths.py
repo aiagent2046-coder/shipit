@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from app.report.evidence import claim_evidence_rows, finding_counts
-from app.report.html import render_report
+from app.pipeline.report.evidence import claim_evidence_rows, finding_counts
+from app.pipeline.report.html import render_report
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.scoring import ScoredFinding
 from app.scan.source_facts import facts_prompt

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.fixpack.generate import build_fixpack_plan, has_auto_fixable_findings
+from app.pipeline.fixpack.generate import build_fixpack_plan, has_auto_fixable_findings
 from app.proof.core.workspace import apply_plan_to_zip
 from app.proof.templates.secrets_leak import run as prove_secrets
 from app.scan.secrets import is_non_production_path, scan_secrets

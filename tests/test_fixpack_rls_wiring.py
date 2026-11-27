@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.fixpack.generate import build_fixpack_plan
+from app.pipeline.fixpack.generate import build_fixpack_plan
 from app.scan.rls import RULE_ID, WRITE_RULE_ID, scan_rls
 from app.scan.service_role import RULE_ID as SERVICE_ROLE_RULE_ID
 from app.scan.service_role import scan_service_role

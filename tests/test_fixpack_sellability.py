@@ -32,7 +32,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.fixpack.generate import (
+from app.pipeline.fixpack.generate import (
     build_fixpack_plan,
     has_auto_fixable_findings,
     mark_unfixable_findings,
@@ -190,7 +190,7 @@ def test_the_scan_pipeline_stamps_what_it_stores() -> None:
     audit sells exactly like before.
     """
     from app.foundation.llm.client import LLMClient
-    from app.scan_pipeline import run_scan
+    from app.pipeline.scan_pipeline import run_scan
 
     scan = run_scan(make_zip(UNFIXABLE), LLMClient(providers=[]))
     exposed = [f for f in scan["findings"]
@@ -202,7 +202,7 @@ def test_the_scan_pipeline_stamps_what_it_stores() -> None:
 
 def test_the_scan_pipeline_leaves_a_sellable_audit_sellable() -> None:
     from app.foundation.llm.client import LLMClient
-    from app.scan_pipeline import run_scan
+    from app.pipeline.scan_pipeline import run_scan
 
     scan = run_scan(make_zip(FIXABLE), LLMClient(providers=[]))
     assert has_auto_fixable_findings(scan["findings"]) is True

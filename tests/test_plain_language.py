@@ -1,8 +1,8 @@
 """Plain-language reports explain observations and their evidence limits."""
 import pytest
 
-from app.report.html import render_report
-from app.report.plain_language import PLAIN, plain_fields, tier
+from app.pipeline.report.html import render_report
+from app.pipeline.report.plain_language import PLAIN, plain_fields, tier
 from app.scan.checks import run_checks  # noqa: F401 (import sanity)
 
 

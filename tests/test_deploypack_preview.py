@@ -6,10 +6,9 @@ import datetime
 import subprocess
 import threading
 
-
-import app.deploypack.preview as preview
-from app.deploypack.preview import PreviewRegistry, reconcile_previews
-from app.deploypack.sandbox import SandboxResult
+import app.services.deploypack.preview as preview
+from app.services.deploypack.preview import PreviewRegistry, reconcile_previews
+from app.services.deploypack.sandbox import SandboxResult
 
 
 class FakeVerifier:

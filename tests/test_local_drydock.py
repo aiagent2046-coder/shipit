@@ -10,8 +10,8 @@ import zipfile
 
 import pytest
 
-from app import local_cli as cli
-from app import local_store as store
+from app.pipeline import local_cli as cli
+from app.pipeline import local_store as store
 
 
 @pytest.fixture
@@ -157,7 +157,7 @@ def test_scan_partial_failure_has_nonzero_exit():
 
 def test_cli_import_does_not_load_server_or_llm():
     result = subprocess.run([sys.executable, "-c",
-                             "import sys; import app.local_cli; "
+                             "import sys; import app.pipeline.local_cli; "
                              "assert 'app.main' not in sys.modules; "
                              "assert 'app.foundation.llm.client' not in sys.modules; "
                              "assert 'app.db' not in sys.modules"], capture_output=True, text=True)

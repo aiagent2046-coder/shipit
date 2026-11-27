@@ -1,8 +1,8 @@
 """A missing package-index result must not silently dismiss baseline evidence."""
 from copy import deepcopy
 
-from app.dependency_snapshot import unrepeated_dependency_matches
-from app.report.html import render_report
+from app.pipeline.dependency_snapshot import unrepeated_dependency_matches
+from app.pipeline.report.html import render_report
 
 
 def match(rule="dependency-cve-match", **evidence):

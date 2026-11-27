@@ -3,19 +3,19 @@
 Only the model response and repository storage are simulated. All scanners,
 scoring, baseline preservation and rendering run their production code.
 """
+import json
 from copy import deepcopy
 from html import escape
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from app.audit_history import ensure_paid_baseline
-from app.report.html import render_report
-from app import scan_pipeline as pipeline
+from app.pipeline import scan_pipeline as pipeline
+from app.pipeline.report.html import render_report
 from app.scan.llm_scan import LLMScanStats
 from app.scan.secrets import MAX_SCANNED_FILE_BYTES
+from app.services.audit_history import ensure_paid_baseline
 
 from .conftest import clean_nextjs_repo, make_zip
 

@@ -19,10 +19,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app.deploypack import github_app
-from app.deploypack.delivery import DeliveryError, PullRequestResult
-from app.deploypack.delivery_auth import DeliveryAuthorizationError
-from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.main import (
     app,
@@ -34,6 +30,10 @@ from app.main import (
     get_repo_fetcher,
 )
 from app.notify import alerts as alerts_mod
+from app.pipeline.fixpack.semantic_check import minimal_check as local_minimal_check
+from app.services.deploypack import github_app
+from app.services.deploypack.delivery import DeliveryError, PullRequestResult
+from app.services.deploypack.delivery_auth import DeliveryAuthorizationError
 
 client = TestClient(app)
 
@@ -296,7 +296,7 @@ def test_semantic_regression_blocks_pr_and_marks_job(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
-    from app.fixpack.semantic_check import RunResult, SemanticCheckResult
+    from app.pipeline.fixpack.semantic_check import RunResult, SemanticCheckResult
 
     def fake_check(zip_bytes, plan, **kwargs):
         return SemanticCheckResult(
@@ -346,7 +346,7 @@ def test_semantic_note_is_appended_to_pr_body(monkeypatch):
     monkeypatch.setenv("FIXPACK_PROCESS_TOKEN", "secret123")
     monkeypatch.setattr(github_app, "app_credentials_from_env", lambda: None)
 
-    from app.fixpack.semantic_check import SemanticCheckResult
+    from app.pipeline.fixpack.semantic_check import SemanticCheckResult
 
     def fake_check(zip_bytes, plan, **kwargs):
         return SemanticCheckResult(
@@ -474,7 +474,7 @@ def test_deep_review_reuses_a_full_audit_of_identical_bytes(monkeypatch):
     audits, fixpack_repo = _review_job_setup()
     # Seed a full-basis row for exactly these bytes, as a previous purchase
     # would have left behind.
-    from app.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
+    from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
     from tests.test_audit_preview_history import SNAPSHOT
     audits.rows.append({
         "id": "already-there", "status": "completed",
@@ -1111,7 +1111,7 @@ def test_lock_busy_returns_skipped_locked(monkeypatch):
 # --- sandbox runner unavailable: defer, don't deliver and don't block -------
 
 def _unavailable_result():
-    from app.fixpack.semantic_check import RunResult
+    from app.pipeline.fixpack.semantic_check import RunResult
     return RunResult(0, 0, False, "sandbox runner unavailable: refused",
                      unavailable=True)
 
@@ -1486,7 +1486,7 @@ def test_verified_build_block_without_regression_withholds_pr(
         lambda: None,
     )
 
-    from app.fixpack.semantic_check import (
+    from app.pipeline.fixpack.semantic_check import (
         SemanticCheckResult,
     )
 

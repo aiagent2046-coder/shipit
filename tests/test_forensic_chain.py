@@ -181,7 +181,7 @@ def run():
 
 
 def test_local_cli_forensics_command_runs_offline_and_enforces_observation_gate(tmp_path, capsys):
-    from app import local_cli
+    from app.pipeline import local_cli
 
     project_dir = tmp_path / "proj"
     project_dir.mkdir()
@@ -216,8 +216,8 @@ def test_local_cli_forensics_command_runs_offline_and_enforces_observation_gate(
 
 def test_hunt_exploit_dna_extracts_invariant_fingerprint_offline():
     import importlib.util
-    from pathlib import Path
     import sys
+    from pathlib import Path
 
     script_path = Path(__file__).resolve().parent.parent / "scripts" / "hunt_exploit_dna.py"
     spec = importlib.util.spec_from_file_location("hunt_exploit_dna", script_path)

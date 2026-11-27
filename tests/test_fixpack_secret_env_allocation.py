@@ -1,13 +1,13 @@
 """A generated fix must not merge unrelated credentials into one setting."""
 
-from dataclasses import asdict
 import io
 import json
 import zipfile
+from dataclasses import asdict
 
 import pytest
 
-from app.fixpack.generate import build_fixpack_plan, _validate_syntax, render_pr_body
+from app.pipeline.fixpack.generate import _validate_syntax, build_fixpack_plan, render_pr_body
 from app.scan.collapse import collapse_repeats
 from app.scan.secrets import scan_secrets
 
