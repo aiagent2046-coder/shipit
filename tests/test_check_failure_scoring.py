@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.runtime.capabilities import CHECKS_RUN
 from app.sca.refresh import score_inputs_from_stored
 from app.scan import static

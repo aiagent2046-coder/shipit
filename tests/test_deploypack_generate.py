@@ -1,9 +1,9 @@
 """Tests for Deploy Pack generation — deterministic, no LLM involved."""
 
 import io
-import pytest
 import zipfile
 
+import pytest
 import yaml
 
 from app.deploypack.generate import (
@@ -12,7 +12,7 @@ from app.deploypack.generate import (
     generate_deploy_pack,
     read_all_files,
 )
-from app.ingest.stack_detect import Stack
+from app.foundation.ingest.stack_detect import Stack
 
 
 def make_zip(entries: dict[str, bytes]) -> io.BytesIO:

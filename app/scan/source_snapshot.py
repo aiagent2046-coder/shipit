@@ -7,13 +7,13 @@ recorded by the SQL detector before any additional analysis can run.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
 import hashlib
 import io
-from itertools import islice
 import zipfile
+from dataclasses import dataclass
+from itertools import islice
 
-from app.ingest.validators import MAX_ARCHIVE_BYTES
+from app.foundation.ingest.validators import MAX_ARCHIVE_BYTES
 from app.scan.file_scope import is_binary_evidence_path
 
 MAX_SOURCE_BYTES = 400_000

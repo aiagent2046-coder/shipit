@@ -50,7 +50,7 @@ def load(target: str) -> bytes:
             f"not a file and not a github.com URL: {target}"
         )
 
-    from app.ingest.github_fetch import fetch_repo_zip
+    from app.foundation.ingest.github_fetch import fetch_repo_zip
 
     owner, _, repo = target.removeprefix(
         "https://github.com/").rstrip("/").partition("/")

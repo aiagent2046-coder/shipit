@@ -43,7 +43,6 @@ import time
 import psycopg
 
 from app import db as db_mod
-from app.alerts import notify_operator
 from app.audit_history import ensure_paid_baseline, refresh_cached_preview_history
 from app.audit_spool import (
     cleanup_staged_archive,
@@ -58,10 +57,10 @@ from app.db import (
     ServiceFlagsRepository,
     dependency_refresh_lock,
 )
-from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
-from app.ingest.stack_detect import detect_stack
-from app.ingest.validators import ArchiveValidationError, validate_zip
-from app.llm.client import LLMClient, LLMError
+from app.foundation.ingest.github_fetch import RepoFetchError, fetch_repo_zip
+from app.foundation.ingest.stack_detect import detect_stack
+from app.foundation.ingest.validators import ArchiveValidationError, validate_zip
+from app.foundation.llm.client import LLMClient, LLMError
 
 # Reused rather than reimplemented, which is the whole point: the worker must
 # run the same scan, under the same concurrency bound, with the same spend
@@ -77,6 +76,7 @@ from app.main import (  # noqa: E402  -- see comment above
     _record_llm_usage,
     _run_scan_offthread,
 )
+from app.notify.alerts import notify_operator
 from app.runtime.log_context import log_context, set_log_context
 from app.runtime.logging_config import configure_logging
 from app.sca.cache import complete_cached_dependencies, needs_dependency_scan

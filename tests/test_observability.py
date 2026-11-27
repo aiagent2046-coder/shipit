@@ -17,17 +17,16 @@ from __future__ import annotations
 import io
 import zipfile
 
-from fastapi import HTTPException
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
 from app.deploypack import github_app
-from app import alerts
-from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.deploypack.delivery import PullRequestResult
+from app.fixpack.semantic_check import minimal_check as local_minimal_check
 from app.main import app, get_fixpack_repo
-
+from app.notify import alerts
 
 
 @pytest.fixture(autouse=True)

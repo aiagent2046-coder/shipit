@@ -8,7 +8,7 @@ import zipfile
 
 import pytest
 
-from app.ingest.validators import (
+from app.foundation.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     MAX_FILE_COUNT,
     ArchiveValidationError,
@@ -210,7 +210,7 @@ def test_an_absurd_entry_count_is_refused_without_building_the_entries():
             zf.writestr(str(i), b"")
     data = buf.getvalue()
 
-    import app.ingest.validators as validators_mod
+    import app.foundation.ingest.validators as validators_mod
 
     def _explode(*a, **kw):
         raise AssertionError("ZipFile must not be constructed for this archive")
@@ -230,7 +230,7 @@ def test_the_trailer_count_is_read_for_both_zip_layouts():
     65535 entries; past that the count lives in a ZIP64 record reached
     through a locator. Reading only the classic one would return 0xFFFF and
     silently miss exactly the archives worth refusing."""
-    from app.ingest.validators import _declared_entry_count
+    from app.foundation.ingest.validators import _declared_entry_count
 
     for n in (3, 70_000):
         buf = io.BytesIO()
@@ -243,7 +243,7 @@ def test_the_trailer_count_is_read_for_both_zip_layouts():
 
 def test_a_zip_comment_does_not_hide_the_trailer():
     """The record sits before a variable-length comment, not at the very end."""
-    from app.ingest.validators import _declared_entry_count
+    from app.foundation.ingest.validators import _declared_entry_count
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -261,7 +261,7 @@ def test_an_unreadable_trailer_falls_through_instead_of_rejecting():
     short-circuits the obvious abuse. Returning None on anything it cannot
     read keeps a bug here from turning into a rejected real repository.
     """
-    from app.ingest.validators import _declared_entry_count
+    from app.foundation.ingest.validators import _declared_entry_count
 
     for junk in (b"", b"not a zip", b"PK\x05\x06short"):
         assert _declared_entry_count(io.BytesIO(junk), len(junk)) is None

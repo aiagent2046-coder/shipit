@@ -15,7 +15,7 @@ from pathlib import Path
 
 from app.deploypack.generate import extract_repo, generate_deploy_pack, read_all_files
 from app.deploypack.preview import PreviewRegistry
-from app.ingest.stack_detect import Stack
+from app.foundation.ingest.stack_detect import Stack
 from app.sandbox_client import SandboxRunnerUnavailable, verify_deploy_pack
 
 # Coarse zip-bomb / disk-fill guard on the client archive before we extract it

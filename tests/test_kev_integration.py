@@ -1,13 +1,13 @@
 """KEV changes priority evidence without changing the underlying project findings."""
-from copy import deepcopy
 import hashlib
 import json
 import socket
 import subprocess
+from copy import deepcopy
 
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.scan import kev_catalog
 from app.scan.browser import ScanSession, scan_archive
 from app.scan_pipeline import BASIS_PREVIEW, run_scan

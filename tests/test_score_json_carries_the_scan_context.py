@@ -22,9 +22,9 @@ from __future__ import annotations
 import io
 import zipfile
 
-from app.llm.client import LLMClient
-from app.scan_pipeline import run_scan
+from app.foundation.llm.client import LLMClient
 from app.scan.static import run_static_scan
+from app.scan_pipeline import run_scan
 
 
 def _zip(files: dict[str, str]) -> io.BytesIO:

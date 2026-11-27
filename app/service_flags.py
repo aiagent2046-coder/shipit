@@ -18,9 +18,8 @@ from __future__ import annotations
 
 import time
 
-from app import alerts
 from app.db import ServiceFlagsRepository
-
+from app.notify import alerts
 
 # Emergency-stop flag cache. The kill switch is read on the request path, so it
 # is cached for a few seconds to avoid a DB round-trip per request; a pause thus

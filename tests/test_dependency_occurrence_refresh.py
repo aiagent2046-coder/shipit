@@ -1,14 +1,13 @@
 """Refresh keeps every recorded dependency location without multiplying OSV queries."""
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-import json
 
 import pytest
 
-from app.scan_pipeline import BASIS_STATIC_ONLY
-from app.lockfiles import (
+from app.foundation.lockfiles import (
     MAX_LOCKFILES,
     collect_dependency_inventory,
     dependency_occurrences,
@@ -21,7 +20,8 @@ from app.sca.refresh import (
     refresh_stale_dependency_audits,
 )
 from app.sca.stage import RULE_ID, DependencyFinding, run_sca_stage
-from tests.test_sca_stage import FakeTransport, LODASH_ADVISORY, make_zip
+from app.scan_pipeline import BASIS_STATIC_ONLY
+from tests.test_sca_stage import LODASH_ADVISORY, FakeTransport, make_zip
 
 NOW = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
 ASKED = (NOW - timedelta(days=10)).isoformat()

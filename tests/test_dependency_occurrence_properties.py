@@ -8,11 +8,11 @@ import json
 import zipfile
 
 import pytest
-from hypothesis import example, given, settings, strategies as st
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
 
-from app.lockfiles import lockfiles
+from app.foundation.lockfiles import lockfiles
 from app.scan.cve_match import match_archive
-
 
 PROPERTY_SETTINGS = settings(max_examples=24, derandomize=True)
 FACT = st.tuples(st.sampled_from([False, None, True]), st.booleans())

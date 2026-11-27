@@ -8,8 +8,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.ingest.github_fetch import RepoFetchError, fetch_repo_zip
-from app.ingest.stack_detect import Stack, detect_stack
+from app.foundation.ingest.github_fetch import RepoFetchError, fetch_repo_zip
+from app.foundation.ingest.stack_detect import Stack, detect_stack
 from app.main import app, get_repo_fetcher
 
 client = TestClient(app)
@@ -455,7 +455,7 @@ def test_fetch_repo_zip_404_raises_repo_not_found():
 def test_fetch_repo_zip_rejects_oversized_content_length(monkeypatch):
     # Declared Content-Length over the limit -> rejected up front, before
     # the (here tiny) body is read at all.
-    monkeypatch.setattr("app.ingest.github_fetch.MAX_ARCHIVE_BYTES", 1000)
+    monkeypatch.setattr("app.foundation.ingest.github_fetch.MAX_ARCHIVE_BYTES", 1000)
 
     def handler(request):
         return httpx.Response(
@@ -470,7 +470,7 @@ def test_fetch_repo_zip_rejects_oversized_content_length(monkeypatch):
 def test_fetch_repo_zip_streaming_cutoff_when_length_absent(monkeypatch):
     # codeload can respond chunked with no Content-Length; the streamed
     # byte count is the real guard, not the header.
-    monkeypatch.setattr("app.ingest.github_fetch.MAX_ARCHIVE_BYTES", 1000)
+    monkeypatch.setattr("app.foundation.ingest.github_fetch.MAX_ARCHIVE_BYTES", 1000)
 
     def handler(request):
         def gen():

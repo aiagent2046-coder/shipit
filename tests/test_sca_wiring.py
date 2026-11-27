@@ -13,12 +13,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.report.evidence import manifest_rows
 from app.sca.osv import OsvClient
-from app.sca.stage import (SCA_ENABLED_ENV, RULE_ID, freshness, sca_client_for)
+from app.sca.stage import RULE_ID, SCA_ENABLED_ENV, freshness, sca_client_for
 from app.scan_pipeline import AUDIT_ENGINE_VERSION, run_scan
-from tests.test_sca_stage import FakeTransport, LODASH_ADVISORY, make_zip
+from tests.test_sca_stage import LODASH_ADVISORY, FakeTransport, make_zip
 
 
 def repo_with_lockfile(version: str = "4.17.4") -> bytes:

@@ -54,14 +54,14 @@ const paths = (await readdir(join(root, 'app/scan')))
   .filter(name => name.endsWith('.py') && !excluded.has(name))
   .map(name => `app/scan/${name}`);
 paths.push('app/__init__.py', 'app/runtime/__init__.py',
-  'app/runtime/capabilities.py', 'app/ingest/__init__.py',
-  'app/ingest/validators.py', 'app/report/__init__.py', 'app/report/plain_language.py',
+  'app/runtime/capabilities.py', 'app/foundation/__init__.py', 'app/foundation/ingest/__init__.py',
+  'app/foundation/ingest/validators.py', 'app/report/__init__.py', 'app/report/plain_language.py',
   'app/report/sarif.py', 'app/runtime/project_checks.py', 'app/runtime/threat_context.py',
-  'app/dependency_snapshot.py', 'app/archive_names.py', 'app/runtime/finding_text.py',
-  'app/runtime/path_policy.py', 'app/snapshot_record.py',
-  'app/lockfiles/__init__.py', 'app/lockfiles/lockfiles.py',
-  'app/lockfiles/lockfile_primitives.py', 'app/lockfiles/resolved_locks.py',
-  'app/lockfiles/bun_lock.py');
+  'app/dependency_snapshot.py', 'app/runtime/archive_names.py', 'app/runtime/finding_text.py',
+  'app/runtime/path_policy.py', 'app/runtime/snapshot_record.py',
+  'app/foundation/lockfiles/__init__.py', 'app/foundation/lockfiles/lockfiles.py',
+  'app/foundation/lockfiles/lockfile_primitives.py', 'app/foundation/lockfiles/resolved_locks.py',
+  'app/foundation/lockfiles/bun_lock.py');
 for (const path of paths.sort()) files[path] = await readFile(join(root, path), 'utf8');
 // KEV is an inert, pinned data snapshot. Include it in the engine receipt so
 // browser scans remain offline and source changes cannot reuse old intelligence.

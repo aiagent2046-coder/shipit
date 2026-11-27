@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.llm.response_diagnostics import response_diagnostics
+from app.foundation.llm.response_diagnostics import response_diagnostics
 
 
 @pytest.mark.parametrize(("raw", "envelope", "items"), [
@@ -46,7 +46,7 @@ def test_json_parser_recursion_limit_does_not_break_telemetry(monkeypatch):
     def recursion_limit(*args, **kwargs):
         raise RecursionError("JSON nesting exceeds this runtime's limit")
 
-    monkeypatch.setattr("app.llm.response_diagnostics.json.loads", recursion_limit)
+    monkeypatch.setattr("app.foundation.llm.response_diagnostics.json.loads", recursion_limit)
     diagnostics = response_diagnostics("[[[]]]")
     assert diagnostics["response_envelope"] == "non_json"
     assert diagnostics["direct_array_items"] is None

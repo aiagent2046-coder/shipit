@@ -19,7 +19,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 # of them and every query needs a regex instead.
 Environment=SHIPIT_SERVICE=shipit-alert
 ExecStartPre=/usr/bin/test -x /srv/shipit/current/.venv/bin/python
-ExecStart=/srv/shipit/current/.venv/bin/python -m app.alerts "Drydock: systemd unit %i failed on the production VPS"
+ExecStart=/srv/shipit/current/.venv/bin/python -m app.notify.alerts "Drydock: systemd unit %i failed on the production VPS"
 TimeoutStartSec=30
 NoNewPrivileges=true
 PrivateTmp=true

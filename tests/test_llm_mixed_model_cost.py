@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.llm.accounting import estimate_stats_cost
-from app.llm.client import LLMClient, LLMUsage, Provider
+from app.foundation.llm.accounting import estimate_stats_cost
+from app.foundation.llm.client import LLMClient, LLMUsage, Provider
 from app.scan.llm_scan import run_llm_scan
 
 

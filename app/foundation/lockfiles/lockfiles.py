@@ -21,8 +21,8 @@ import zlib
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 
-from app.lockfiles.bun_lock import bun_packages
-from app.lockfiles.lockfile_primitives import (  # re-exported for existing callers
+from app.foundation.lockfiles.bun_lock import bun_packages
+from app.foundation.lockfiles.lockfile_primitives import (  # re-exported for existing callers
     _NPM_NAME,
     _NPM_VERSION,
     _PYPI_NAME,
@@ -33,7 +33,7 @@ from app.lockfiles.lockfile_primitives import (  # re-exported for existing call
     _load_json,
     normalize_pypi,
 )
-from app.lockfiles.resolved_locks import pnpm_packages, uv_packages
+from app.foundation.lockfiles.resolved_locks import pnpm_packages, uv_packages
 from app.runtime.path_policy import is_non_production_path
 
 # The bound is on the LOOKUP, not on the repository: every dependency costs one

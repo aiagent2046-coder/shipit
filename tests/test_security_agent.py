@@ -1,26 +1,25 @@
 """The coordinator cannot turn source observations or missing coverage into proof."""
-from copy import deepcopy
 import hashlib
 import io
 import json
 import socket
 import subprocess
-from types import SimpleNamespace
 import zipfile
+from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
 from app import local_cli
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.report.evidence import claim_evidence_rows, manifest_rows
 from app.report.html import render_report
 from app.scan import security_agent, sql_injection
 from app.scan.browser import ScanSession, scan_archive
 from app.scan.pattern_catalog import catalog_manifest
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.static import run_static_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_browser_cve import CATALOG
-
 
 SQL = ('def load(cursor, user_id):\n'
        '    query = "SELECT id FROM users WHERE id = " + user_id\n'

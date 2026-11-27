@@ -22,9 +22,9 @@ tests/test_audit_worker.py) -- a limit in a process that no longer runs scans
 was bounding nothing.
 """
 
-import math
 import io
 import json
+import math
 import uuid
 import zipfile
 from decimal import Decimal
@@ -32,26 +32,32 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app import accounts, alerts
-from app.llm.client import LLMClient, LLMUsage, Provider
-from app.scan.llm_scan import JOB_COST_CAP_USD, run_llm_scan
+from app.foundation import accounts
+from app.foundation.llm.client import LLMClient, LLMUsage, Provider
 from app.main import (
+    DEFAULT_DAILY_SPEND_CAP_USD,
     app,
     get_account_repo,
     get_audit_repo,
+    get_billing_transport,
     get_llm_client,
     get_llm_usage_repo,
-    get_service_flags_repo,
     get_monitoring_repo,
-    get_subscription_repo,
     get_repo_fetcher,
-    get_billing_transport,
+    get_service_flags_repo,
+    get_subscription_repo,
 )
-from app.main import DEFAULT_DAILY_SPEND_CAP_USD
-from app.scan_pipeline import (AUDIT_ENGINE_VERSION, BASIS_FULL,
-                               BASIS_PREVIEW, FREE_TIER_MODEL,
-                               PAID_AUDIT_PASSES,
-                               basis_for_account, content_digest)
+from app.notify import alerts
+from app.scan.llm_scan import JOB_COST_CAP_USD, run_llm_scan
+from app.scan_pipeline import (
+    AUDIT_ENGINE_VERSION,
+    BASIS_FULL,
+    BASIS_PREVIEW,
+    FREE_TIER_MODEL,
+    PAID_AUDIT_PASSES,
+    basis_for_account,
+    content_digest,
+)
 from tests.conftest import drain_audit_queue
 
 client = TestClient(app)
@@ -652,9 +658,9 @@ def test_the_cost_cap_sits_above_what_a_full_scan_is_meant_to_spend():
     (8192 by default -- the test prices the ceiling the code actually has, so
     raising the default without re-deriving the cap fails here).
     """
-    from app.llm.client import DEFAULT_MODEL
-    from app.llm.pricing import cost_usd
-    from app.scan.llm_scan import MAX_TOTAL_CHARS, RUBRICS, RUBRIC_MAX_TOKENS
+    from app.foundation.llm.client import DEFAULT_MODEL
+    from app.foundation.llm.pricing import cost_usd
+    from app.scan.llm_scan import MAX_TOTAL_CHARS, RUBRIC_MAX_TOKENS, RUBRICS
 
     # The intended depth times a deliberate 2x safety factor. Since
     # 2026-08-18 a paid audit really does run PAID_AUDIT_PASSES=2 (the

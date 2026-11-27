@@ -5,20 +5,20 @@ import logging
 import uuid
 from typing import Any
 
-from app.accounts import TIER_PRO, api_key_prefix, generate_api_key, hash_api_key
-from app.monitor import MONITORING_INTERVAL_HOURS
 from app.db._core import (
     _GRANT_LOCK_NAMESPACE,
-    _grant_lock_key,
-    _grant_lock_timeout_ms,
     DatabaseNotConfigured,
     ProGrantConflict,
     _expires_at_to_timestamptz,
+    _grant_lock_key,
+    _grant_lock_timeout_ms,
     _resolve_get_pool,
     _row_to_account,
     _row_to_payment,
     _row_to_subscription,
 )
+from app.foundation.accounts import TIER_PRO, api_key_prefix, generate_api_key, hash_api_key
+from app.foundation.monitor import MONITORING_INTERVAL_HOURS
 
 logger = logging.getLogger("app.db")
 
@@ -330,7 +330,7 @@ class PaymentRepository:
         Legacy jobs without a key are usable only with one unambiguous linked
         completed payment. Missing/ambiguous ownership requires reconciliation.
         """
-        from app.fixpack_funding import funding_key
+        from app.foundation.fixpack_funding import funding_key
 
         try:
             pool = await _resolve_get_pool()()

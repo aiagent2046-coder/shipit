@@ -1,8 +1,9 @@
 """Shared path categories; each scanner chooses which categories it reads."""
 
 
-from app.archive_names import (  # noqa: F401  (re-exported)
-    is_binary_evidence_path, source_archive_names,
+from app.runtime.archive_names import (  # noqa: F401  (re-exported)
+    is_binary_evidence_path,
+    source_archive_names,
 )
 
 BINARY_EVIDENCE_PATH = ".drydock-evidence/ghidra.json"

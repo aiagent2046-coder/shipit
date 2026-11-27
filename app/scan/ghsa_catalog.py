@@ -8,13 +8,13 @@ than turning missing semantics into safety.
 """
 from __future__ import annotations
 
-from copy import deepcopy
-from collections.abc import Iterable
 import json
 import re
+from collections.abc import Iterable
+from copy import deepcopy
 
+from app.foundation.lockfiles import normalize_pypi
 from app.scan.cve_evidence import _date
-from app.lockfiles import normalize_pypi
 
 REPOSITORY = "https://github.com/github/advisory-database"
 GHSA_PAGE = "https://github.com/advisories/"

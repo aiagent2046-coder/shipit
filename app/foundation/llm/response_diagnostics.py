@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 
-
 _JSON_FENCE = re.compile(r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*?)\r?\n```\Z", re.DOTALL)
 
 

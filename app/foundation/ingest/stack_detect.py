@@ -28,7 +28,7 @@ import zipfile
 from enum import Enum
 from typing import BinaryIO
 
-from app.archive_names import source_archive_names
+from app.runtime.archive_names import source_archive_names
 
 
 class Stack(str, Enum):

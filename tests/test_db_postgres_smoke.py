@@ -43,7 +43,6 @@ import pytest
 
 import app.db as db_mod
 from app.audit_history import refresh_cached_preview_history
-from app.accounts import api_key_prefix, generate_api_key
 from app.billing import bank_transfer
 from app.db import (
     AccountRepository,
@@ -56,7 +55,8 @@ from app.db import (
     ServedBundleCheckRepository,
     SubscriptionRepository,
 )
-from app.monitor import MONITORING_INTERVAL_HOURS
+from app.foundation.accounts import api_key_prefix, generate_api_key
+from app.foundation.monitor import MONITORING_INTERVAL_HOURS
 
 # Captured at import time, before conftest's autouse _no_ambient_database_url
 # deletes it. skipif is evaluated at collection time too, so both see the
@@ -101,6 +101,7 @@ async def real_db(monkeypatch):
 
 async def test_llm_provider_usage_roundtrip_and_legacy_null(real_db):
     from decimal import Decimal
+
     from app.db import LlmUsageRepository
 
     repo = LlmUsageRepository()
@@ -272,7 +273,7 @@ async def test_all_repository_write_paths(real_db):
 
     # rotate_key: overwrite prefix+hash in place, surface a new plaintext once.
     # The old key's hash must no longer resolve; the new one must.
-    from app.accounts import hash_api_key
+    from app.foundation.accounts import hash_api_key
     old_hash = account["key_hash"]
     rotated = await account_repo.rotate_key(account_id)
     assert rotated is not None

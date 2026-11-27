@@ -148,7 +148,7 @@ async def grant_fixpack(
     Review-required means money was recorded but no additional work was funded;
     it is not a refund and must not be announced as a new queued Fix Pack.
     """
-    from app.fixpack_funding import funding_key
+    from app.foundation.fixpack_funding import funding_key
 
     key = funding_key(provider, external_ref)
     existing = await payment_repo.get_by_external_ref(provider, external_ref)

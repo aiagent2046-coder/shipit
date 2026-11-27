@@ -8,8 +8,7 @@ from threading import Barrier
 import httpx
 import pytest
 
-from app.llm.client import LLMClient, LLMError, Provider
-
+from app.foundation.llm.client import LLMClient, LLMError, Provider
 
 PRIMARY = Provider("openai_compat", "https://api.aitunnel.ru/v1", "secret-key",
                    "claude-sonnet-4.6")
@@ -134,7 +133,7 @@ def test_empty_billed_answer_remains_in_ledger_after_anthropic_fallback():
 
 def test_timeout_unknown_cost_retry_success_records_both_attempts(monkeypatch):
     sleeps, requests = [], []
-    monkeypatch.setattr("app.llm.client.time.sleep", sleeps.append)
+    monkeypatch.setattr("app.foundation.llm.client.time.sleep", sleeps.append)
 
     def handler(request):
         requests.append(request)
@@ -150,7 +149,7 @@ def test_timeout_unknown_cost_retry_success_records_both_attempts(monkeypatch):
 
 
 def test_final_failure_retains_every_attempt_and_reported_error_response_cost(monkeypatch):
-    monkeypatch.setattr("app.llm.client.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("app.foundation.llm.client.time.sleep", lambda seconds: None)
     client = LLMClient([PRIMARY], httpx.MockTransport(lambda request: httpx.Response(
         503, json={"usage": {"cost_rub": "0.50"}, "error": "private code"})))
     with pytest.raises(LLMError) as caught:

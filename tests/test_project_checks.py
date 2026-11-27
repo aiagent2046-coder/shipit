@@ -1,20 +1,21 @@
 """Independent source, advisory and binary evidence survive the real audit entry points."""
-from copy import deepcopy
 import hashlib
 import json
 import socket
 import subprocess
+from copy import deepcopy
 
 import pytest
 
 from app import local_cli, local_store
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.sca import snapshot
 from app.scan import cve_catalog, ghsa_catalog
 from app.scan.binary_evidence import attach_binary_reports
 from app.scan.browser import scan_archive
 from app.scan_pipeline import BASIS_PREVIEW, run_scan
-from tests.test_binary_evidence import archive, elf, encoded, report as binary_report
+from tests.test_binary_evidence import archive, elf, encoded
+from tests.test_binary_evidence import report as binary_report
 from tests.test_ghsa_pipeline import DATE, GHSA, cve_record, ghsa_record
 
 
@@ -269,9 +270,10 @@ def test_packaging_rejects_bad_inputs_without_creating_output(local_project, tmp
 
 
 def test_paid_live_lookup_remains_distinct_from_offline_catalog_and_binary_facts():
-    from tests.test_sca_refresh import advisory_client, repo_bytes
     import io
     import zipfile
+
+    from tests.test_sca_refresh import advisory_client, repo_bytes
 
     raw = io.BytesIO(repo_bytes())
     with zipfile.ZipFile(raw, 'a') as zipped:

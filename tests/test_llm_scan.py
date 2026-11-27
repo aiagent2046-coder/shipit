@@ -16,8 +16,8 @@ import httpx
 import pytest
 
 from app import scan_pipeline as pipeline_mod
-from app.llm import client as client_mod
-from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
+from app.foundation.llm import client as client_mod
+from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan import (
     atomic_claims,
     auth_source_assessment,
@@ -80,7 +80,7 @@ from app.scan_pipeline import AUDIT_ENGINE_VERSION
 # and the file selection that fills them. First 16 hex characters. Paired with
 # AUDIT_ENGINE_VERSION by the test at the bottom of this file, which explains
 # what to do when it fails.
-PROMPT_FINGERPRINT = "0a591101417775ed"
+PROMPT_FINGERPRINT = "3d7b384553eeef54"
 
 VULN_TS = (
     "import jwt from 'jsonwebtoken'\n"
@@ -517,7 +517,7 @@ def _shipped_budgets() -> list[int]:
     reserve/4 reaches MAX_FILE_CHARS, included so the pin covers the edge
     itself rather than only comfortable values.
     """
-    import app.llm.client as client_mod
+    import app.foundation.llm.client as client_mod
     budgets = [
         llm_scan.content_budget(
             type("C", (), {"input_char_budget": lambda self, m=m:
@@ -665,7 +665,7 @@ def test_prompt_chars_counts_the_system_prompt_too():
 def test_client_falls_back_to_second_provider(monkeypatch):
     # 500 on the primary is now retried (TRANSIENT_RETRIES times)
     # before falling back — the extra calls are the new contract.
-    from app.llm import client as client_mod
+    from app.foundation.llm import client as client_mod
     monkeypatch.setattr(client_mod, "RETRY_BACKOFF_S", 0.0)
     calls = []
 
@@ -753,8 +753,8 @@ def test_cross_rubric_dedup_keeps_most_severe():
 
 
 def test_transient_5xx_retried_then_succeeds(monkeypatch):
-    from app.llm import client as client_mod
-    from app.llm.client import LLMClient, Provider
+    from app.foundation.llm import client as client_mod
+    from app.foundation.llm.client import LLMClient, Provider
 
     monkeypatch.setattr(client_mod, "RETRY_BACKOFF_S", 0.0)
     calls = {"n": 0}
@@ -777,8 +777,8 @@ def test_transient_5xx_retried_then_succeeds(monkeypatch):
 def test_4xx_not_retried(monkeypatch):
     import pytest as _pytest
 
-    from app.llm import client as client_mod
-    from app.llm.client import LLMClient, LLMError, Provider
+    from app.foundation.llm import client as client_mod
+    from app.foundation.llm.client import LLMClient, LLMError, Provider
 
     monkeypatch.setattr(client_mod, "RETRY_BACKOFF_S", 0.0)
     calls = {"n": 0}

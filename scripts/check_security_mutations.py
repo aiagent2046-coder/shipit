@@ -8,17 +8,16 @@ failures never count as detecting a mutation. Logs and JUnit XML are retained.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
-
+from dataclasses import dataclass
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SEED = "20260917"
@@ -48,14 +47,14 @@ MUTATIONS = (
         "tests/test_cve_properties.py::test_source_uncertainty_and_evidence_survive_source_reordering",
     ),
     Mutation(
-        "dependency-second-origin-dropped", "app/lockfiles/lockfiles.py",
+        "dependency-second-origin-dropped", "app/foundation/lockfiles/lockfiles.py",
         "occurrences=occurrences,",
         "occurrences=occurrences[:1],",
         "tests/test_dependency_occurrence_properties.py::"
         "test_two_manifests_retain_both_origins_without_duplicate_assessments",
     ),
     Mutation(
-        "malformed-manifest-gap-hidden", "app/lockfiles/lockfiles.py",
+        "malformed-manifest-gap-hidden", "app/foundation/lockfiles/lockfiles.py",
         "incomplete[manifest] = reason",
         "pass  # deliberately lose a selected manifest's failure",
         "tests/test_manifest_fuzz_integration.py::"

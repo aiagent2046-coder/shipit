@@ -28,8 +28,6 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ValidationError
 
-from app import accounts
-from app.accounts import TIER_FREE, entitlements_for_tier
 from app.audit_history import refresh_cached_preview_history
 from app.audit_spool import SpoolFull, cleanup_staged_archive, stage_archive
 from app.db import (
@@ -39,9 +37,11 @@ from app.db import (
     AuditRepository,
     ServiceFlagsRepository,
 )
-from app.ingest.github_fetch import RepoFetchError
-from app.ingest.stack_detect import detect_stack
-from app.ingest.validators import (
+from app.foundation import accounts
+from app.foundation.accounts import TIER_FREE, entitlements_for_tier
+from app.foundation.ingest.github_fetch import RepoFetchError
+from app.foundation.ingest.stack_detect import detect_stack
+from app.foundation.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
     validate_zip,

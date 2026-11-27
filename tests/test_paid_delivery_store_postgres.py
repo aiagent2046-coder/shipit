@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 from app import db
 from app.deploypack.paid_delivery_store import PaidDeliveryStore
-from app.fixpack_funding import funding_key
+from app.foundation.fixpack_funding import funding_key
 from app.routes._shared import _reject_if_fixpack_already_live
 
 _DB_URL = os.environ.get("DATABASE_URL")

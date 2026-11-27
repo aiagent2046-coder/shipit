@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import secrets
 
-from app.accounts import KEY_PREFIX_LEN, hash_api_key
+from app.foundation.accounts import KEY_PREFIX_LEN, hash_api_key
 
 # Deliberately not `sk_live_`. See the module docstring: the two credentials
 # must be distinguishable on sight. The length matches the account key's body

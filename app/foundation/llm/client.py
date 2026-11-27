@@ -9,11 +9,11 @@ of truth; nothing is hardcoded except API shapes.
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
 import math
 import os
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 

@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.llm import pricing
+from app.foundation.llm import pricing
 
 
 @pytest.mark.parametrize("model", ["gpt-6-luna", "openai/gpt-6-luna"])

@@ -26,11 +26,11 @@ suite that fails on a plane.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import httpx
 
-from app.lockfiles import Dependency
+from app.foundation.lockfiles import Dependency
 
 if TYPE_CHECKING:
     from app.sca.cve import CveClient

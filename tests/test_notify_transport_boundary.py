@@ -26,8 +26,7 @@ import pathlib
 import httpx
 import pytest
 
-from app import alerts
-from app.notify import telegram
+from app.notify import alerts, telegram
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -69,7 +68,7 @@ def test_the_operator_alert_channel_does_not_go_through_billing() -> None:
     """app/alerts.py is the specific module that was wired this way. It is
     called from the Fix Pack failure path and the 5xx handler: a payment
     provider must not be in that import chain."""
-    reached = {n for n in _imported_modules(ROOT / "app" / "alerts.py")
+    reached = {n for n in _imported_modules(ROOT / "app" / "notify" / "alerts.py")
                if n.startswith("app.billing")}
     assert not reached, f"app/alerts.py imports {sorted(reached)}"
 

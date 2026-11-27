@@ -26,8 +26,8 @@ import pytest
 
 import app.db as db_mod
 from app.db import AuditJobRepository, AuditRepository
-from app.ingest.github_fetch import RepoFetchError
-from app.ingest.validators import ArchiveValidationError
+from app.foundation.ingest.github_fetch import RepoFetchError
+from app.foundation.ingest.validators import ArchiveValidationError
 from app.worker import main as worker
 
 _SMOKE_DB_URL = os.environ.get("DATABASE_URL")

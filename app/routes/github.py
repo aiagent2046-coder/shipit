@@ -23,7 +23,6 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from app import monitor
 from app.db import (
     FixOutcomeRepository,
     MonitoringRunRepository,
@@ -31,7 +30,8 @@ from app.db import (
 )
 from app.deploypack import github_app
 from app.deploypack.github_app import GitHubAppError
-from app.monitor import normalize_repo_full_name
+from app.foundation import monitor
+from app.foundation.monitor import normalize_repo_full_name
 from app.routes._shared import _secret_equals
 from app.routes.dependencies import (
     get_fix_outcome_repo,

@@ -10,7 +10,8 @@ import zipfile
 
 import pytest
 
-from app import local_cli as cli, local_store as store
+from app import local_cli as cli
+from app import local_store as store
 
 
 @pytest.fixture
@@ -158,7 +159,7 @@ def test_cli_import_does_not_load_server_or_llm():
     result = subprocess.run([sys.executable, "-c",
                              "import sys; import app.local_cli; "
                              "assert 'app.main' not in sys.modules; "
-                             "assert 'app.llm.client' not in sys.modules; "
+                             "assert 'app.foundation.llm.client' not in sys.modules; "
                              "assert 'app.db' not in sys.modules"], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 

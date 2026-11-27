@@ -1,21 +1,20 @@
 """The agent must acquire bounded source facts without claiming runtime proof."""
-from copy import deepcopy
 import hashlib
 import io
 import json
 import socket
 import subprocess
+from copy import deepcopy
 
 import pytest
 
 from app import local_cli
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.scan import security_agent, sql_injection
 from app.scan.browser import ScanSession, scan_archive
-from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from app.scan.static import run_static_scan
+from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_security_agent import archive, sql_findings
-
 
 HTTP_SQL = '''from fastapi import FastAPI
 import psycopg

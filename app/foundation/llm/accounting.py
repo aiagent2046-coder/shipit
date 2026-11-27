@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, localcontext
 
-from app.llm import pricing
+from app.foundation.llm import pricing
 
 
 def provider_usage_summary(attempts: list[dict]) -> dict | None:

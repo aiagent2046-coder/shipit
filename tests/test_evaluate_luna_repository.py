@@ -1,13 +1,13 @@
 """No paid calls: actual production payload/response handling via MockTransport."""
 import json
-from decimal import Decimal
 import time
 import zipfile
+from decimal import Decimal
 
 import httpx
 import pytest
 
-from app.llm.client import LLMError
+from app.foundation.llm.client import LLMError
 from scripts import evaluate_luna_repository as trial
 
 

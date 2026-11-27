@@ -36,7 +36,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.llm.pricing import cost_usd  # noqa: E402
+from app.foundation.llm.pricing import cost_usd  # noqa: E402
 from app.scan.llm_scan import (  # noqa: E402
     RUBRICS,
     SYSTEM_PROMPT,

@@ -31,7 +31,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
-from app.ingest.stack_detect import Stack
+from app.foundation.ingest.stack_detect import Stack
 
 _DB_MARKERS = re.compile(r"asyncpg|psycopg2|psycopg\b", re.I)
 _VITE_ENV_VAR = re.compile(r"import\.meta\.env\.(VITE_[A-Z0-9_]+)")

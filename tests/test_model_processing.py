@@ -1,11 +1,11 @@
 """Deterministic regression examples; no provider calls or uploaded-code execution."""
-from dataclasses import asdict, replace
 import io
 import json
-from pathlib import Path
 import zipfile
+from dataclasses import asdict, replace
+from pathlib import Path
 
-from app.llm.client import LLMClient, LLMUsage
+from app.foundation.llm.client import LLMClient, LLMUsage
 from app.report.evidence import manifest_rows
 from app.report.html import render_report
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
@@ -110,8 +110,9 @@ def test_actual_operator_route_context_and_equivalent_claims():
 
 
 def test_source_order_does_not_claim_runtime_authorization():
-    from app.scan.operator_context import operator_guard_context
     import ast
+
+    from app.scan.operator_context import operator_guard_context
     for source, expected in [
         ('async def route():\n    _require_bearer_token(request, token)\n'
          '    return await payment_repo.get(id)', 'observed'),

@@ -3,14 +3,13 @@ import json
 
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.report.evidence import claim_evidence_rows
 from app.report.html import render_report
 from app.scan.claim_evidence import model_claim_evidence, quote_match_window
 from app.scan_pipeline import run_scan
 from tests.conftest import run_audit_job
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
-
 
 FILES = {"app/auth.py": b"def handler():\n    return lookup(payment_id)\n"}
 CLAIM = {

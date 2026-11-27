@@ -28,12 +28,12 @@ import json
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app.monitor import (
+from app.foundation.monitor import (
     MONITORING_INTERVAL_HOURS,
     normalize_repo_full_name,
     repo_url_from_full_name,
 )
-from app.monitor.diff import new_high_severity_findings
+from app.foundation.monitor.diff import new_high_severity_findings
 from app.main import (
     app,
     get_monitoring_repo,

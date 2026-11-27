@@ -1,13 +1,13 @@
 """MCP forensic projection fences all repository-controlled paths and preserves golden tool schemas."""
 import hashlib
+import json
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.mcp.server import _public_forensics
 from app.scan import binary_evidence as binary
 from app.scan.cfg_topology import compute_cfg_dna
 from app.scan_pipeline import BASIS_PREVIEW, run_scan
 from tests.test_binary_evidence import archive, elf
-import json
 
 
 def test_mcp_forensics_fences_prompt_injection_filenames_and_exposes_wl_stager():

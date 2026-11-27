@@ -22,13 +22,15 @@ DEPENDENCIES = {"pyyaml", "tree-sitter", "tree-sitter-typescript", "pglast"}
 EXTERNAL = {"yaml", "tree_sitter", "tree_sitter_typescript", "pglast"}
 ALLOWED = {
     "app", "app.runtime", "app.local_cli", "app.local_store", "app.runtime.logging_config",
-    "app.runtime.log_context", "app.runtime.capabilities", "app.archive_names",
+    "app.runtime.log_context", "app.runtime.capabilities", "app.runtime.archive_names",
     "app.dependency_snapshot", "app.runtime.finding_text", "app.runtime.path_policy",
-    "app.runtime.project_checks", "app.snapshot_record", "app.runtime.threat_context",
-    "app.ingest", "app.ingest.validators", "app.report", "app.report.sarif",
-    "app.report.plain_language", "app.report.dependency_snapshot", "app.report.project_checks",
-    "app.report.threat_context", "app.sca", "app.lockfiles", "app.lockfiles.lockfile_primitives",
-    "app.lockfiles.lockfiles", "app.lockfiles.resolved_locks", "app.lockfiles.bun_lock",
+    "app.runtime.project_checks", "app.runtime.snapshot_record", "app.runtime.threat_context",
+    "app.foundation", "app.foundation.ingest", "app.foundation.ingest.validators", "app.report",
+    "app.report.sarif", "app.report.plain_language", "app.report.dependency_snapshot",
+    "app.report.project_checks", "app.report.threat_context", "app.sca",
+    "app.foundation.lockfiles", "app.foundation.lockfiles.lockfile_primitives",
+    "app.foundation.lockfiles.lockfiles", "app.foundation.lockfiles.resolved_locks",
+    "app.foundation.lockfiles.bun_lock",
 }
 
 

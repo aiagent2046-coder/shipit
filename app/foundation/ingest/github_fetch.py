@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import httpx
 
-from app.ingest.validators import MAX_ARCHIVE_BYTES
+from app.foundation.ingest.validators import MAX_ARCHIVE_BYTES
 
 GITHUB_API = "https://api.github.com"
 # 30s outbound-call timeout, same convention as app/deploypack/delivery.py.

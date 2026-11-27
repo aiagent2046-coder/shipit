@@ -4,9 +4,14 @@ import json
 
 import pytest
 
-from app.llm.client import LLMClient
-from app.report.evidence import coverage_rows, finding_counts, manifest_rows
-from app.report.evidence import model_status_notice, source_severity_counts
+from app.foundation.llm.client import LLMClient
+from app.report.evidence import (
+    coverage_rows,
+    finding_counts,
+    manifest_rows,
+    model_status_notice,
+    source_severity_counts,
+)
 from app.report.html import render_report
 from app.report.plain_language import plain_fields
 from app.scan.manifest import scan_manifest

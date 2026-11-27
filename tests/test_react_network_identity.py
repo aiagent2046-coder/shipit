@@ -2,16 +2,16 @@
 
 No production source, customer report, network service or model API is used.
 """
-from copy import deepcopy
-from dataclasses import asdict, replace
-from hashlib import sha256
 import io
 import json
 import zipfile
+from copy import deepcopy
+from dataclasses import asdict, replace
+from hashlib import sha256
 
 import pytest
 
-from app.llm.client import LLMClient, LLMUsage
+from app.foundation.llm.client import LLMClient, LLMUsage
 from app.scan.claim_evidence import model_claim_evidence
 from app.scan.cross_rubric_dedup import dedup_cross_rubric
 from app.scan.issue_identity import SourceIssueResolver
@@ -21,7 +21,6 @@ from app.scan.react_network_identity import MECHANISM, network_cleanup_identity,
 from app.scan.scoring import ScoredFinding, compute_scores
 from app.scan.source_facts import facts_prompt
 from app.scan.syntax_claims import SyntaxVerifier
-
 
 BODY = """setSaving(true);
 const token = await getToken();

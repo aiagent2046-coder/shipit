@@ -30,8 +30,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from app import alerts, sandbox_client
-from app.accounts import (
+from app import sandbox_client
+
+from app.notify import alerts
+from app.foundation.accounts import (
     CSRF_HEADER,
     validate_api_key_pepper_configured,
 )
@@ -71,13 +73,13 @@ from app.fixpack.generate import (
 from app.fixpack.generate import (
     render_pr_title as render_fixpack_pr_title,
 )
-from app.ingest.stack_detect import detect_stack
-from app.ingest.validators import (
+from app.foundation.ingest.stack_detect import detect_stack
+from app.foundation.ingest.validators import (
     MAX_ARCHIVE_BYTES,
     ArchiveValidationError,
     validate_zip,
 )
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.llm_budget import (  # noqa: F401  (re-exported for the test suite)
     _ANON_SPEND_ALERT_FRACTION,
     DEFAULT_DAILY_SPEND_CAP_USD,
@@ -393,7 +395,7 @@ async def _record_llm_usage(
     if not isinstance(llm_stats, dict):
         return
     try:
-        from app.llm.accounting import estimate_stats_cost, provider_usage_summary
+        from app.foundation.llm.accounting import estimate_stats_cost, provider_usage_summary
 
         calls = int(llm_stats.get("calls") or 0)
         try:

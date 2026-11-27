@@ -31,7 +31,7 @@ from app.db import (
 )
 from app.deploypack.preview import PreviewRegistry
 from app.fixpack.merit import UNDETERMINED, Reason, Verdict, assess
-from app.learning.external_cve import external_cve_status
+from app.foundation.learning.external_cve import external_cve_status
 from app.notify import messages
 from app.routes._shared import (
     _json_object_body,

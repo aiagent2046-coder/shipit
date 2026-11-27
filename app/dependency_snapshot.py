@@ -1,14 +1,14 @@
 """Bounded presentation of offline advisory coverage, independent of live OSV."""
 from __future__ import annotations
 
-from app.snapshot_record import (  # noqa: F401  (re-exported)
-    _count, _date, snapshot_metadata,
-)
-
 import re
 
+from app.runtime.snapshot_record import (  # noqa: F401  (re-exported)
+    _count,
+    _date,
+    snapshot_metadata,
+)
 from app.scan.remediation_catalog import remediation_hint, remediation_record
-
 
 SCOPE_REASONS = {"dependency_snapshot_scope", "dependency_runtime_reachability_not_checked"}
 SOURCE_REPOSITORIES = {

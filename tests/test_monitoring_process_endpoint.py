@@ -15,9 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi.testclient import TestClient
 
 import app.main as main_mod
-from app import alerts as alerts_mod
-from app.ingest.github_fetch import RepoFetchError
-from tests.conftest import enable_monitoring
+from app.foundation.ingest.github_fetch import RepoFetchError
 from app.main import (
     app,
     get_audit_repo,
@@ -27,6 +25,8 @@ from app.main import (
     get_repo_fetcher,
     get_subscription_repo,
 )
+from app.notify import alerts as alerts_mod
+from tests.conftest import enable_monitoring
 
 client = TestClient(app)
 

@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import hashlib
 import json
-from pathlib import Path
 import subprocess
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
-from app.learning.external_cve import external_cve_status
+from app.foundation.learning.external_cve import external_cve_status
 from scripts import build_cve_catalog as pipeline
 
 
@@ -160,6 +160,7 @@ async def test_operator_adds_external_source_without_inflating_customer_readines
     from decimal import Decimal
 
     from starlette.requests import Request
+
     from app.routes import operator
 
     customer = {"rules": [{"rule_id": "SEC001", "labelled": 3, "ready": False}],

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.billing import grant_fixpack
-from app.fixpack_funding import funding_key
+from app.foundation.fixpack_funding import funding_key
 from app.notify.messages import funding_review_message
 
 

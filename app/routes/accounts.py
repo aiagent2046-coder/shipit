@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app import accounts, alerts
-from app.accounts import TIER_FREE, entitlements_dict, entitlements_for_tier
 from app.db import AccountRepository, ServiceFlagsRepository
+from app.foundation import accounts
+from app.foundation.accounts import TIER_FREE, entitlements_dict, entitlements_for_tier
+from app.notify import alerts
 from app.routes._shared import (
     _bind_account,
     _json_object_body,

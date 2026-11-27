@@ -50,7 +50,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app import accounts
 from app.db import (
     AccountRepository,
     AuditJobRepository,
@@ -60,6 +59,7 @@ from app.db import (
     McpKeyRepository,
     ServiceFlagsRepository,
 )
+from app.foundation import accounts
 from app.mcp.keys import hash_mcp_key, looks_like_mcp_key
 from app.mcp.untrusted import fence, fence_optional
 from app.routes.dependencies import (

@@ -103,7 +103,7 @@ def test_every_priced_model_has_a_dry_run_estimate(compare) -> None:
     """--dry-run exists to answer "what will this cost" BEFORE spending it. A
     priced model missing here silently falls back to $1.00 per audit, which for
     the models in this table is wrong by up to 4x in either direction."""
-    from app.llm import pricing
+    from app.foundation.llm import pricing
 
     missing = sorted(set(pricing.PRICE_TABLE) - set(compare._ROUGH_COST_PER_AUDIT))
     assert missing == [], (

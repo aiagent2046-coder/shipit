@@ -7,7 +7,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.llm.client import LLMClient
+from app.foundation.llm.client import LLMClient
 from app.scan.security_agent import agent_record
 from app.scan.static import run_static_scan
 from app.scan.synthetic_record import (

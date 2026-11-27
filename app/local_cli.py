@@ -17,7 +17,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.ingest.validators import ArchiveValidationError
+from app.foundation.ingest.validators import ArchiveValidationError
 from app.local_store import connect, default_state_dir, load_catalog, update_catalog
 from app.report.plain_language import plain_fields
 from app.runtime.logging_config import configure_logging

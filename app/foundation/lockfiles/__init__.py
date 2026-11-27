@@ -7,13 +7,14 @@ bottom-layer material that both scan and sca consume.
 """
 from __future__ import annotations
 
-from app.lockfiles.lockfiles import (  # noqa: F401  (re-exported)
-    Dependency,
-    DependencyOccurrence,
+from app.foundation.lockfiles import bun_lock, lockfile_primitives, lockfiles, resolved_locks  # noqa: F401
+from app.foundation.lockfiles.lockfiles import (  # noqa: F401  (re-exported)
     MAX_DEPENDENCIES,
     MAX_EXCLUDED_MANIFESTS,
     MAX_LOCKFILES,
     OSV_ECOSYSTEM,
+    Dependency,
+    DependencyOccurrence,
     collect_dependencies,
     collect_dependency_inventory,
     dependency_exclusion_reason,
@@ -23,4 +24,3 @@ from app.lockfiles.lockfiles import (  # noqa: F401  (re-exported)
     occurrence_summary,
     unusable_lockfiles,
 )
-from app.lockfiles import bun_lock, lockfile_primitives, lockfiles, resolved_locks  # noqa: F401

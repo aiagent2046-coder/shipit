@@ -14,12 +14,12 @@ When both failure types occur, 2 takes precedence: not everything was checked.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-from dataclasses import replace
 import os
 import pathlib
 import sys
 import time
+from contextlib import contextmanager
+from dataclasses import replace
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -28,7 +28,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.llm.client import LLMClient, Provider, providers_from_env  # noqa: E402
+from app.foundation.llm.client import LLMClient, Provider, providers_from_env  # noqa: E402
 from scripts.env_file import read_values  # noqa: E402
 
 PROBE_MAX_TOKENS = 8

@@ -29,7 +29,7 @@ import pytest
 
 import app.db as db_mod
 from app.db import AuditJobRepository, AuditRepository, LlmUsageRepository
-from app.llm.client import LLMClient, LLMError, LLMUsage, Provider
+from app.foundation.llm.client import LLMClient, LLMError, LLMUsage, Provider
 from app.scan_pipeline import PAID_AUDIT_PASSES
 from app.worker import main as worker
 from app.worker.main import JobExecutionError, _execute_job
@@ -132,8 +132,8 @@ async def _account_row_id() -> str:
     """
     global _real_account_id
     if _real_account_id is None:
-        from app.accounts import generate_api_key
         from app.db import AccountRepository
+        from app.foundation.accounts import generate_api_key
         acct = await AccountRepository().create(
             api_key=generate_api_key(), tier="pro")
         _real_account_id = str(acct["id"])

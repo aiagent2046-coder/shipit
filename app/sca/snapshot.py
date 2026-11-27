@@ -1,14 +1,14 @@
 """Server-side use of the bundled offline catalog; never contacts a service."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 
+from app.foundation.lockfiles import normalize_pypi
 from app.local_store import MAX_CATALOG_BYTES, decode_catalog
 from app.scan.cve_evidence import empty_cve_summary
 from app.scan.cve_match import RULE_ID, match_archive
-from app.lockfiles import normalize_pypi
 from app.scan.remediation_catalog import CATALOG_VERSION as REMEDIATION_CATALOG_VERSION
 from app.scan.threat_context import context_is_current
 
@@ -91,7 +91,7 @@ def refresh_snapshot(score: dict, findings: list[dict], raw: bytes, *,
                      context_only_if_current: bool = False) -> dict:
     """Replace only snapshot evidence, preserving already purchased analysis."""
     # Delayed import: refresh uses pipeline scoring, which imports this stage.
-    from app.sca.refresh import refreshed_score, refresh_score_threat_context
+    from app.sca.refresh import refresh_score_threat_context, refreshed_score
 
     if context_only_if_current and _catalog_is_current(score):
         # A new KEV receipt/day does not require another dependency inventory or

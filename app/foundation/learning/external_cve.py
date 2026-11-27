@@ -7,7 +7,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-DATA_DIRECTORY = Path(__file__).resolve().parents[1] / "data"
+DATA_DIRECTORY = Path(__file__).resolve().parents[2] / "data"
 
 
 @lru_cache(maxsize=4)
