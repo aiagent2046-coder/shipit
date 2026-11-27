@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from app.pipeline.scan_pipeline import AUDIT_ENGINE_VERSION, content_digest
-from scripts import recover_fixpack_review as recovery
+from scripts.ops import recover_fixpack_review as recovery
 
 REQUEST = recovery.ReviewRequest("a" * 40, "11111111-1111-4111-8111-111111111111",
                                  "22222222-2222-4222-8222-222222222222",

@@ -30,7 +30,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 
 def load_module(name: str):
-    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "scripts" / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "scripts" / "hunt" / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules.setdefault(name, module)

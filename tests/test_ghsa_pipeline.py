@@ -1,11 +1,11 @@
 """The pinned pipeline imports only the official github-reviewed advisory tree."""
 import json
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
-from scripts import build_cve_catalog as pipeline
+from scripts.catalog import build_cve_catalog as pipeline
 
 DATE = "2026-09-14T00:00:00Z"
 GHSA = "GHSA-2345-6789-cfgh"

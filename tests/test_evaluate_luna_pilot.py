@@ -1,13 +1,13 @@
 """Offline transport checks for a billable, one-attempt-only comparison pilot."""
-from copy import deepcopy
-from decimal import Decimal
 import hashlib
 import json
+from copy import deepcopy
+from decimal import Decimal
 
 import httpx
 import pytest
 
-from scripts import evaluate_luna_pilot as pilot
+from scripts.eval import evaluate_luna_pilot as pilot
 
 
 @pytest.fixture

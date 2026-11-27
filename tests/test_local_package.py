@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location('local_builder', ROOT / 'scripts/build_local_package.py')
+_spec = importlib.util.spec_from_file_location('local_builder', ROOT / 'scripts/catalog/build_local_package.py')
 builder = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(builder)
 

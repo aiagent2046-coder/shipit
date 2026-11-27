@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-import scripts.probe_supabase_rls_live as live
+import scripts.e2e.probe_supabase_rls_live as live
 
 REF = "egoprezwkjaqacxtjwfl"
 GOOD_KEY = "sb_publishable_" + "a" * 24

@@ -108,7 +108,7 @@ jobs:
 
       - name: "Security properties and targeted mutation controls"
         run: |
-          python scripts/check_security_mutations.py --with-postgres \
+          python scripts/contracts/check_security_mutations.py --with-postgres \
             --output-dir "$RUNNER_TEMP/security-mutation-evidence"
 
       - name: "Retain security property and mutation evidence"

@@ -26,7 +26,7 @@ on:
       - "app/proof/rls/rls_fetch_worker.py"
       - "app/proof/compare.py"
       - "app/proof/types.py"
-      - "scripts/e2e_proof_rls_probe.py"
+      - "scripts/e2e/e2e_proof_rls_probe.py"
       - ".github/workflows/e2e-proof-rls.yml"
 
 jobs:
@@ -52,7 +52,7 @@ jobs:
           docker pull postgres:16-alpine
           docker pull postgrest/postgrest:v12.2.3
       - name: Anon reads the table, the fix closes it, the pair verifies
-        run: python scripts/e2e_proof_rls_probe.py
+        run: python scripts/e2e/e2e_proof_rls_probe.py
       - name: Negative control — without the fix, nothing may verify
         # A green that has never been red proves only that the script ran.
         # This run skips the fix; the after-probe must still read rows and the
@@ -60,4 +60,4 @@ jobs:
         # check_runner_bindmount_namespace.py.
         env:
           NEGATIVE_CONTROL: "1"
-        run: python scripts/e2e_proof_rls_probe.py
+        run: python scripts/e2e/e2e_proof_rls_probe.py

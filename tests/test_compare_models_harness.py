@@ -49,7 +49,7 @@ _ONE_FILE_ZIP = _make_one_file_zip()
 
 @pytest.fixture(scope="module")
 def compare():
-    return importlib.import_module("scripts.compare_models")
+    return importlib.import_module("scripts.eval.compare_models")
 
 
 def test_the_harness_imports(compare) -> None:
@@ -59,7 +59,7 @@ def test_the_harness_imports(compare) -> None:
 def test_the_default_sample_comes_from_the_batch_series(compare) -> None:
     """Imported, not copied: one list, so a comparison and a batch run can be
     said to have covered the same repositories."""
-    from scripts.batch_audit import SERIES
+    from scripts.eval.batch_audit import SERIES
 
     assert compare.SERIES is SERIES
     assert SERIES, "the sample is empty; a comparison would measure nothing"

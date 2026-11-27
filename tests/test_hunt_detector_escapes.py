@@ -39,7 +39,7 @@ def build_router():
 
 def load_hunt():
     """Import the script by path: it is a script, not a package module."""
-    path = REPO_ROOT / "scripts" / "hunt_detector_escapes.py"
+    path = REPO_ROOT / "scripts" / "hunt" / "hunt_detector_escapes.py"
     spec = importlib.util.spec_from_file_location("hunt_detector_escapes", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

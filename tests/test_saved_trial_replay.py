@@ -7,7 +7,7 @@ import pytest
 
 from app.foundation.llm.client import LLMUsage
 from app.pipeline.scan_pipeline import run_scan
-from scripts import replay_saved_trial as r
+from scripts.eval import replay_saved_trial as r
 from tests.test_audit_llm_wiring import FakeLLM, make_zip
 
 

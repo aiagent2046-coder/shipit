@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.measure_supabase_rls_yield import parse_schema  # noqa: E402
+from scripts.measure.measure_supabase_rls_yield import parse_schema  # noqa: E402
 
 USERS = """
 create table public.users (
@@ -382,8 +382,9 @@ def test_a_policy_that_declares_itself_public_is_not_an_intent_mismatch() -> Non
 
 # --- what reaches the headline count ----------------------------------------
 
-from scripts.measure_supabase_rls_yield import (  # noqa: E402
-    RepoResult, classify,
+from scripts.measure.measure_supabase_rls_yield import (  # noqa: E402
+    RepoResult,
+    classify,
 )
 
 _MIXED = """

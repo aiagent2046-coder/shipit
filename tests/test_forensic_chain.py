@@ -219,7 +219,7 @@ def test_hunt_exploit_dna_extracts_invariant_fingerprint_offline():
     import sys
     from pathlib import Path
 
-    script_path = Path(__file__).resolve().parent.parent / "scripts" / "hunt_exploit_dna.py"
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "hunt" / "hunt_exploit_dna.py"
     spec = importlib.util.spec_from_file_location("hunt_exploit_dna", script_path)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)

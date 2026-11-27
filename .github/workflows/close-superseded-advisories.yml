@@ -47,4 +47,4 @@ jobs:
       - name: Close only merged-and-verified superseded snapshots
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python scripts/close_superseded_advisories.py --apply
+        run: python scripts/catalog/close_superseded_advisories.py --apply

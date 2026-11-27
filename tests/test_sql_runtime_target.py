@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from scripts import verify_sql_runtime_contract as runner
+from scripts.contracts import verify_sql_runtime_contract as runner
 
 DSN = 'postgresql://postgres:synthetic@localhost:5432/drydock_sql_contract'  # scan-allow: fake test DSN
 

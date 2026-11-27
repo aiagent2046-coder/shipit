@@ -21,7 +21,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-_SRC = Path(__file__).resolve().parents[1] / "scripts" / "preflight_bundle_check.py"
+_SRC = Path(__file__).resolve().parents[1] / "scripts" / "e2e" / "preflight_bundle_check.py"
 _spec = importlib.util.spec_from_file_location("preflight_bundle_check", _SRC)
 preflight_bundle_check = importlib.util.module_from_spec(_spec)
 sys.modules["preflight_bundle_check"] = preflight_bundle_check

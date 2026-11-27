@@ -169,7 +169,7 @@ def test_no_llm_pipeline_retains_synthetic_evidence_in_scan_manifest():
 
 
 def test_native_command_does_not_certify_an_empty_selection(tmp_path, monkeypatch, capsys):
-    from scripts import investigate_sql_runtime as command
+    from scripts.contracts import investigate_sql_runtime as command
 
     path = tmp_path / "input.zip"
     path.write_bytes(archive({"main.py": "print('never executed')\n"}))
@@ -180,7 +180,7 @@ def test_native_command_does_not_certify_an_empty_selection(tmp_path, monkeypatc
 
 
 def test_native_command_preserves_existing_output_before_any_execution(tmp_path, monkeypatch):
-    from scripts import investigate_sql_runtime as command
+    from scripts.contracts import investigate_sql_runtime as command
 
     output = tmp_path / "report.json"
     output.write_text("earlier evidence")

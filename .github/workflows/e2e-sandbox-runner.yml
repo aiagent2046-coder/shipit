@@ -25,10 +25,10 @@ on:
       - "app/runner/**"
       - "app/pipeline/sandbox_client.py"
       - "deploy/sandbox-runner/**"
-      - "scripts/e2e_fixpack_run_suite.py"
-      - "scripts/smoke_verify_*.py"
-      - "scripts/check_runner_build_dir_perms.py"
-      - "scripts/check_runner_bindmount_namespace.py"
+      - "scripts/e2e/e2e_fixpack_run_suite.py"
+      - "scripts/e2e/smoke_verify_*.py"
+      - "scripts/contracts/check_runner_build_dir_perms.py"
+      - "scripts/contracts/check_runner_bindmount_namespace.py"
       - ".github/workflows/e2e-sandbox-runner.yml"
 
 jobs:
@@ -48,7 +48,7 @@ jobs:
         # the guard runs its probe as this user — exactly as prod does.
         run: sudo useradd --system --no-create-home --shell /usr/sbin/nologin shipit-runner
       - name: Runner build dir usable under the shipped sandbox directives
-        run: python scripts/check_runner_build_dir_perms.py
+        run: python scripts/contracts/check_runner_build_dir_perms.py
 
   # Behavioural guard for the SECOND incident: PrivateTmp gives the runner a
   # private /tmp invisible to dockerd, so a build dir under /tmp bind-mounts into
@@ -67,7 +67,7 @@ jobs:
       - name: Pre-pull the tiny probe image (shared daemon image store)
         run: docker pull busybox
       - name: Runner bind mount crosses the PrivateTmp namespace
-        run: python scripts/check_runner_bindmount_namespace.py
+        run: python scripts/contracts/check_runner_bindmount_namespace.py
 
   e2e:
     runs-on: ubuntu-latest
@@ -184,16 +184,16 @@ jobs:
           done
 
       - name: Deploy-pack — all three stacks, build+run+boot through the chain
-        run: python scripts/smoke_verify_deploy_pack.py
+        run: python scripts/e2e/smoke_verify_deploy_pack.py
 
       - name: Fixpack — install+test suite through the chain
-        run: python scripts/e2e_fixpack_run_suite.py
+        run: python scripts/e2e/e2e_fixpack_run_suite.py
 
       - name: Preview — keep-alive container + curl + reap through the chain
-        run: python scripts/smoke_verify_preview.py
+        run: python scripts/e2e/smoke_verify_preview.py
 
       - name: Reap endpoint — real backend uvicorn → runner reconcile over HTTP
-        run: python scripts/smoke_verify_reap_endpoint.py
+        run: python scripts/e2e/smoke_verify_reap_endpoint.py
 
       - name: Runner log (always, for debugging)
         if: always()

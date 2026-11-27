@@ -1,12 +1,12 @@
 """Offline false-success controls; the production matcher supplies baseline evidence."""
-from copy import deepcopy
 import json
 import os
 import sys
+from copy import deepcopy
 
 import pytest
 
-from scripts import verify_dependency_remediation as contract
+from scripts.contracts import verify_dependency_remediation as contract
 
 
 @pytest.fixture(scope='module')

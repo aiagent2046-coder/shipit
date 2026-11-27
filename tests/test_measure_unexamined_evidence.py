@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 
-from scripts.measure_unexamined_evidence import _is_ours, _total, main
 from app.scan.scoring import ScoredFinding
+from scripts.measure.measure_unexamined_evidence import _is_ours, _total, main
 
 
 def _row(audit_id: str, repo_url: str, *, total: float,

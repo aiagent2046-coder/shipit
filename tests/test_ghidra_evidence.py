@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from scripts import inspect_binary_ghidra as ghidra
+from scripts.binary import inspect_binary_ghidra as ghidra
 
 
 def elf():

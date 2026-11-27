@@ -1,7 +1,7 @@
 """An unavailable mutation probe must never be reported as a killed mutant."""
 import pytest
 
-from scripts.check_security_mutations import classify
+from scripts.contracts.check_security_mutations import classify
 
 
 @pytest.mark.parametrize("returncode,body", [

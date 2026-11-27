@@ -1,6 +1,6 @@
 """Invariant probes must preserve observable behavior, not just parse."""
 
-from scripts.metamorphic_probe import scan_entries
+from scripts.hunt.metamorphic_probe import scan_entries
 from tests.metamorphic_variants import TRANSFORMS, py_rename_locals, variant_entries
 
 

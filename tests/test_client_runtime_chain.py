@@ -100,12 +100,15 @@ def test_pipeline_import_is_no_llm_and_does_not_change_findings(monkeypatch):
 def test_tracked_scenario_matches_pin():
     from pathlib import Path
 
-    script = Path(__file__).resolve().parents[1] / "scripts/runtime_contracts/cumora_project_tenant_isolation_v1.mjs"
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/contracts/runtime_contracts/cumora_project_tenant_isolation_v1.mjs"
+    )
     assert hashlib.sha256(script.read_bytes()).hexdigest() == SCENARIO_SHA256
 
 
 def test_cli_rejects_duplicate_keys_and_existing_output(tmp_path):
-    from scripts.import_client_runtime import main
+    from scripts.contracts.import_client_runtime import main
 
     zip_path = tmp_path / "project.zip"
     zip_path.write_bytes(archive({"README.md": "hello"}))

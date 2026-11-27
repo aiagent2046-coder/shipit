@@ -1,15 +1,15 @@
 """Offline failure-path tests; no provider key or network required."""
-from copy import deepcopy
-from decimal import Decimal
 import json
-from pathlib import Path
 import signal
 import tempfile
 import time
 import unittest
-from unittest.mock import patch, MagicMock
+from copy import deepcopy
+from decimal import Decimal
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from scripts import evaluate_haiku_pilot as pilot
+from scripts.eval import evaluate_haiku_pilot as pilot
 
 
 def baseline():

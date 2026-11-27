@@ -2,7 +2,7 @@ import json
 import sys
 from collections import Counter
 
-from scripts import cve_cwe_frequency
+from scripts.catalog import cve_cwe_frequency
 
 
 def _record(cve_id: str, cwes: list[str], registry: str | None = None) -> dict:

@@ -8,7 +8,7 @@ from urllib.parse import quote
 import httpx
 import pytest
 
-from scripts import verify_llm_provider as verify
+from scripts.ops import verify_llm_provider as verify
 
 SECRET = "fixture-key-$-not-a-credential"
 PAID = "grok-4.20-multi-agent"

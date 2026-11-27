@@ -1,12 +1,12 @@
 """Protect the comparison boundary and the offline-only preparation contract."""
-from copy import deepcopy
 import json
 import stat
+from copy import deepcopy
 
 import pytest
 
-from scripts import evaluate_luna_pilot as pilot
-from scripts import prepare_payment_model_review as review
+from scripts.eval import evaluate_luna_pilot as pilot
+from scripts.eval import prepare_payment_model_review as review
 
 
 @pytest.fixture

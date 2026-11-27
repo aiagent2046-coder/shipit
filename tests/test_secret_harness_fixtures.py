@@ -91,9 +91,9 @@ def test_provider_credentials_in_harness_stay_actionable_even_with_test_markers(
 def test_actual_repository_harnesses_survive_a_fixpack_from_an_old_audit():
     root = Path(__file__).resolve().parents[1]
     paths = [
-        "scripts/e2e_proof_bundle_probe.py",
-        "scripts/e2e_proof_rls_probe.py",
-        "scripts/smoke_verify_reap_endpoint.py",
+        "scripts/e2e/e2e_proof_bundle_probe.py",
+        "scripts/e2e/e2e_proof_rls_probe.py",
+        "scripts/e2e/smoke_verify_reap_endpoint.py",
     ]
     archive = _zip({path: (root / path).read_text() for path in paths})
     findings = scan_secrets(io.BytesIO(archive))

@@ -57,7 +57,7 @@ def test_the_caddyfile_still_parses_into_hostnames():
 
 
 def test_the_minted_key_points_at_a_host_the_proxy_actually_serves():
-    from scripts.mint_mcp_key import MCP_URL
+    from scripts.ops.mint_mcp_key import MCP_URL
 
     assert MCP_URL.startswith("https://")
     assert MCP_URL.endswith("/mcp")
@@ -72,7 +72,7 @@ def test_the_url_is_not_the_frontend():
     """Named separately from the check above because it is the specific
     mistake that was made, and because `drydock.co` would still be a real,
     reachable host -- it simply serves a different application."""
-    from scripts.mint_mcp_key import MCP_URL
+    from scripts.ops.mint_mcp_key import MCP_URL
 
     assert "//drydock.co/" not in MCP_URL, (
         "drydock.co is the Next.js frontend; the backend is api.drydock.co")

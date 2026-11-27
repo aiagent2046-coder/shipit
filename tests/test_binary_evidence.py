@@ -62,8 +62,8 @@ def with_report(value=None, body=None, prefix=''):
 
 
 def test_real_exporter_pin_and_contract_match_standalone_producer():
-    from scripts import inspect_binary_ghidra as producer
-    path = Path(__file__).parents[1] / 'scripts/ghidra/ExportDrydockFacts.java'
+    from scripts.binary import inspect_binary_ghidra as producer
+    path = Path(__file__).parents[1] / 'scripts/binary/ghidra/ExportDrydockFacts.java'
     assert hashlib.sha256(path.read_bytes()).hexdigest() == binary.EXPORTER_SHA256
     assert producer.ARCHIVE_SHA256 == binary.DISTRIBUTION_SHA256
     assert producer.VERSION == binary.GHIDRA_VERSION

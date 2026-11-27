@@ -1,15 +1,15 @@
 """Exercise post-merge cleanup decisions without GitHub writes or network access."""
 from __future__ import annotations
 
-from copy import deepcopy
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 import yaml
 
-from scripts import close_superseded_advisories as cleanup
+from scripts.catalog import close_superseded_advisories as cleanup
 
 REPO = 'owner/shipit'
 MAIN = 'a' * 40

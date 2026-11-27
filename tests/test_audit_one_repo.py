@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "audit_one_repo.py"
+SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "eval" / "audit_one_repo.py"
 
 
 def _load():

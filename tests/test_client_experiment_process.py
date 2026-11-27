@@ -2,16 +2,16 @@
 
 import json
 import os
-from pathlib import Path
 import signal
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
-from scripts.cumora_experiment import execute, run
-from scripts.cumora_experiment.process import Cancelled, bounded, cancellation_signals
+from scripts.contracts.cumora_experiment import execute, run
+from scripts.contracts.cumora_experiment.process import Cancelled, bounded, cancellation_signals
 
 
 def test_timeout_kills_descendant_even_when_parent_exits_on_term(tmp_path):

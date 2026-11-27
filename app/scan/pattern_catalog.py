@@ -94,7 +94,7 @@ _CATALOG = {
                 ],
                 "mutation": {
                     "status": "static_regressions_registered",
-                    "refs": ["scripts/check_security_mutations.py"],
+                    "refs": ["scripts/contracts/check_security_mutations.py"],
                 },
                 "runtime_status": "not_run",
             },

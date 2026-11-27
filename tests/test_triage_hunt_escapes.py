@@ -27,15 +27,15 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from app.scan.static import run_static_scan
-from tests.detectors.conftest import build_archive, discover_cases
 from tests.detector_samples import expand_samples
+from tests.detectors.conftest import build_archive, discover_cases
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_triage():
     spec = importlib.util.spec_from_file_location(
-        "triage_hunt_escapes", REPO_ROOT / "scripts" / "triage_hunt_escapes.py")
+        "triage_hunt_escapes", REPO_ROOT / "scripts" / "hunt" / "triage_hunt_escapes.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules.setdefault("triage_hunt_escapes", module)
