@@ -1,0 +1,3 @@
+def fetch_sorted_orders(db, sort_expr: str):
+    sql = f"SELECT id, total FROM orders ORDER BY {sort_expr}"
+    return db.execute(sql)

@@ -1,0 +1,11 @@
+{
+  "description": "Request query parameter passed into a service helper reaches subprocess.run(..., shell=True) without validation.",
+  "expect": [
+    {
+      "rule_id": "python-interprocedural-taint-flow",
+      "file": "app/exports.py",
+      "line": 8
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,14 @@
+from fastapi import APIRouter, HTTPException, Request
+
+router = APIRouter()
+ALLOWED_SORT = {"created_at", "total"}
+
+def run_sorted_query(db, col: str):
+    if col not in ALLOWED_SORT:
+        raise HTTPException(status_code=400, detail="invalid sort")
+    return db.execute(f"SELECT id, total FROM orders ORDER BY {col}")
+
+@router.get("/orders")
+def list_orders(request: Request, db):
+    col = request.query_params.get("sort")
+    return run_sorted_query(db, col)

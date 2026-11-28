@@ -1,0 +1,7 @@
+{
+  "description": "Extractor helper coerces the untrusted query parameter with int(...) before passing it to the database helper.",
+  "expect": [],
+  "forbid": [
+    "python-interprocedural-taint-flow"
+  ]
+}

@@ -1,0 +1,14 @@
+from fastapi import APIRouter, Request
+
+router = APIRouter()
+
+def parse_account_id(request: Request) -> int:
+    return int(request.query_params.get("account_id"))
+
+def load_account(db, acc_id: int):
+    return db.execute(f"SELECT id FROM accounts WHERE id = {acc_id}")
+
+@router.get("/account")
+def get_account(request: Request, db):
+    aid = parse_account_id(request)
+    return load_account(db, aid)

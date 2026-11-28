@@ -1,0 +1,7 @@
+{
+  "description": "Callee validates the dynamic sort column against an explicit allowlist and raises HTTPException before SQL execution.",
+  "expect": [],
+  "forbid": [
+    "python-interprocedural-taint-flow"
+  ]
+}

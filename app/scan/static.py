@@ -17,6 +17,7 @@ from app.scan.core.secrets import scan_secrets
 from app.scan.detectors_app.data.auth_read import scan_auth_read
 from app.scan.detectors_app.data.auth_write import scan_auth_write
 from app.scan.detectors_app.graph_guards.bypass_detector import scan_guard_bypass
+from app.scan.detectors_app.graph_guards.interproc_taint import scan_interproc_taint
 from app.scan.detectors_app.data.rls import scan_rls
 from app.scan.detectors_app.data.schema_drift import scan_schema_drift
 from app.scan.detectors_app.data.service_role import scan_service_role
@@ -343,6 +344,16 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                 claim_evidence=g.claim_evidence or static_claim_evidence(),
             ))
 
+    fileobj.seek(0)
+    with attempt("interproc_taint_flow"):
+        for tf in list(scan_interproc_taint(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=tf.rule_id, title=tf.title, severity=tf.severity,
+                confidence=tf.confidence, category=tf.category, file=tf.file,
+                line=tf.line, explanation=tf.explanation, fix_hint=tf.fix_hint,
+                claim_evidence=tf.claim_evidence or static_claim_evidence(),
+            ))
+
     # The first static producer for Frontend. Wired on a number measured in
     # this repository (DRYDOCK_LENS_PLAN.md): 11 of 12 mounted apps in the
     # audited corpus ship no error boundary above their routes, the hits on
@@ -450,6 +461,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                      "auth_read_consistency": SCOPE["auth_read_consistency"],
                      "auth_write_consistency": SCOPE["auth_write_consistency"],
                      "cfg_guard_bypass": SCOPE["cfg_guard_bypass"],
+                     "interproc_taint_flow": SCOPE["interproc_taint_flow"],
                      "outbound_url": SCOPE["outbound_url"],
                      "open_redirect": SCOPE["open_redirect"],
                      "unsafe_deserialization": SCOPE["unsafe_deserialization"],

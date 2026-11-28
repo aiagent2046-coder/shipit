@@ -65,6 +65,8 @@ def _structural_evidence_bonus(
     src_type = claim_evidence.get("source_type")
     if src_type == "static_cfg_dominator" and claim_evidence.get("optimal_cut_lines"):
         bonus += 0.05
+    if src_type == "static_interproc_taint_summary" and claim_evidence.get("call_chain"):
+        bonus += 0.05
     sql_obs = claim_evidence.get("sql_observation")
     if isinstance(sql_obs, dict) and sql_obs.get("driver_status") == "source_resolved":
         bonus += 0.05

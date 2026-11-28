@@ -487,6 +487,15 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "cur.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,)). Where a table or column "
         "name genuinely has to vary, pick it from a fixed list in your own code.",
     ),
+    "python-interprocedural-taint-flow": (
+        "Input from a web request passes through one or more helper or service functions and "
+        "reaches a string-built SQL query, shell command or unsafe deserializer without validation.",
+        "Splitting extraction and execution across separate functions hides the flow from single-file "
+        "checks while leaving an attacker able to alter the query, command or deserialized object. "
+        "External middleware validation and runtime reachability were not verified.",
+        "Parameterize SQL queries, avoid shell=True in subprocess calls, use safe deserializers such "
+        "as json.loads, and enforce strict scalar types or allowlists on untrusted parameters.",
+    ),
     "no-ci": (
         "No recognized CI configuration file was found in the archive.",
         "External CI services, repository settings and actual build runs were not checked. "
