@@ -1,0 +1,11 @@
+import { NextResponse } from "next/server";
+import { loadInvoiceById, searchInvoicesSafe } from "@/lib/invoiceRepo";
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const id = Number(url.searchParams.get("id"));
+  const status = url.searchParams.get("status") ?? "open";
+  const a = await loadInvoiceById(id);
+  const b = await searchInvoicesSafe(status);
+  return NextResponse.json({ a, b });
+}

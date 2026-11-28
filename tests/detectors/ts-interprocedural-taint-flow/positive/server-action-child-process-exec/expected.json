@@ -1,0 +1,11 @@
+{
+  "description": "Next.js `use server` action forwards unvalidated `folderName` parameter into `node:child_process` `execSync` in a service module.",
+  "expect": [
+    {
+      "rule_id": "ts-interprocedural-taint-flow",
+      "file": "src/services/bundler.ts",
+      "line": 4
+    }
+  ],
+  "forbid": []
+}

@@ -9,12 +9,18 @@ from app.scan.detectors_app.graph_guards.ts_bypass_detector import (
     TS_RULE_ID,
     scan_ts_guard_bypass,
 )
+from app.scan.detectors_app.graph_guards.ts_interproc_taint import (
+    TS_TAINT_RULE_ID,
+    scan_ts_interproc_taint,
+)
 
 __all__ = [
     "INTERPROC_TAINT_RULE_ID",
     "RULE_ID",
     "TS_RULE_ID",
+    "TS_TAINT_RULE_ID",
     "scan_guard_bypass",
     "scan_interproc_taint",
     "scan_ts_guard_bypass",
+    "scan_ts_interproc_taint",
 ]

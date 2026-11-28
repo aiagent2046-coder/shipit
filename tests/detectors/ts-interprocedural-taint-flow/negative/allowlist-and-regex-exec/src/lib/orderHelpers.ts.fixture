@@ -1,0 +1,15 @@
+import { prisma } from "@/lib/prisma";
+
+const ALLOWED_COLS = ["id", "created_at", "total"];
+const TOKEN_RE = /^[a-z0-9_-]+$/i;
+
+export function matchTokenFormat(raw: string) {
+  return TOKEN_RE.exec(raw);
+}
+
+export async function runAllowedSort(col: string) {
+  if (!ALLOWED_COLS.includes(col)) {
+    throw new Error("Invalid sort column");
+  }
+  return await prisma.$queryRawUnsafe(`SELECT id FROM orders ORDER BY ${col}`);
+}

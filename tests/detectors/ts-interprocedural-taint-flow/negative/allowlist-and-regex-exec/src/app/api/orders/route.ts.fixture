@@ -1,0 +1,11 @@
+import { NextResponse } from "next/server";
+import { runAllowedSort, matchTokenFormat } from "@/lib/orderHelpers";
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const sort = url.searchParams.get("sort") ?? "id";
+  const token = url.searchParams.get("token") ?? "";
+  const matched = matchTokenFormat(token);
+  const rows = await runAllowedSort(sort);
+  return NextResponse.json({ matched, rows });
+}

@@ -1,4 +1,6 @@
-"""TypeScript / Next.js / Express Partial Guard Bypass detector over CFG, Dominators, and Min-Cut."""
+"""TypeScript / Next.js / Express Partial Guard Bypass detector over CFG, Dominators,
+Min-Cut, and cross-module Tarjan SCC guard/sink summaries.
+"""
 
 from __future__ import annotations
 
@@ -17,9 +19,17 @@ from app.scan.core.secrets import is_non_production_path
 from app.scan.detectors_app.graph_guards.cfg_builder import CFGBuildLimitError
 from app.scan.detectors_app.graph_guards.dominators import compute_dominator_tree
 from app.scan.detectors_app.graph_guards.min_cut import compute_optimal_fix_cut
+from app.scan.detectors_app.graph_guards.ts_call_summaries import (
+    TSParsedFunctionUnit,
+    TSRepositoryCallIndex,
+    build_ts_repository_summaries,
+    iter_ts_calls,
+    resolve_ts_callee_id,
+)
 from app.scan.detectors_app.graph_guards.ts_cfg_builder import (
     TSControlFlowGraph,
     TSFunctionSpan,
+    TSToken,
     build_ts_function_cfg,
     extract_ts_functions,
     tokenize_ts,
@@ -81,68 +91,12 @@ def _can_reach_clean_exit(cfg: TSControlFlowGraph, sink_blocks: set[int]) -> set
     return clean
 
 
-def _infer_file_custom_must_guards(spans: list[TSFunctionSpan]) -> dict[str, str]:
-    """Identify local helper functions whose normal return is strictly dominated by a guard."""
-    must_guards: dict[str, str] = {}
-    for span in spans:
-        try:
-            cfg = build_ts_function_cfg(span)
-        except CFGBuildLimitError:
-            continue
-        if not cfg.pred.get(cfg.abort_exit_id):
-            continue
-        guard_vars: dict[str, str] = {}
-        branch_guards: dict[str, set[tuple[int, int, str]]] = {"authz": set(), "signature": set()}
-        standalone_guards: dict[str, set[tuple[int, int]]] = {"authz": set(), "signature": set()}
-        for bid in sorted(cfg.blocks):
-            blk = cfg.blocks[bid]
-            if blk.is_synthetic:
-                continue
-            for stmt in blk.statements:
-                collect_guard_var_bindings(stmt, guard_vars)
-                s_cls = classify_ts_standalone_guard(stmt, must_guards)
-                if s_cls is not None:
-                    for e in cfg.succ.get(bid, ()):
-                        if e.kind != "exception":
-                            standalone_guards[s_cls].add((e.src, e.dst))
-            bg = classify_ts_branch_guard(blk.condition, guard_vars)
-            if bg is not None:
-                g_cls, p_kind = bg
-                for e in cfg.succ.get(bid, ()):
-                    if e.kind == p_kind:
-                        branch_guards[g_cls].add((e.src, e.dst, e.kind))
-
-        full_adj = {
-            bid: [e.dst for e in edges if e.dst != cfg.abort_exit_id]
-            for bid, edges in cfg.succ.items()
-        }
-        if _shortest_path(cfg.entry_id, {cfg.normal_exit_id}, full_adj) is None:
-            continue
-
-        for g_cls in ("signature", "authz"):
-            pb = branch_guards[g_cls]
-            ps = standalone_guards[g_cls]
-            if not pb and not ps:
-                continue
-            ug_adj: dict[int, list[int]] = {bid: [] for bid in cfg.blocks}
-            for e in cfg.edges:
-                if e.dst == cfg.abort_exit_id:
-                    continue
-                if (e.src, e.dst, e.kind) in pb:
-                    continue
-                if (e.src, e.dst) in ps and e.kind != "exception":
-                    continue
-                ug_adj[e.src].append(e.dst)
-            if _shortest_path(cfg.entry_id, {cfg.normal_exit_id}, ug_adj) is None:
-                must_guards[span.name] = g_cls
-                break
-    return must_guards
-
-
 def analyze_ts_function_bypass(
     span: TSFunctionSpan,
     rel_file: str,
-    custom_must_guards: dict[str, str] | None = None,
+    *,
+    unit: TSParsedFunctionUnit | None = None,
+    call_index: TSRepositoryCallIndex | None = None,
 ) -> list[CheckFinding]:
     try:
         cfg = build_ts_function_cfg(span)
@@ -150,7 +104,7 @@ def analyze_ts_function_bypass(
         return []
 
     guard_vars: dict[str, str] = {}
-    sink_info: dict[int, tuple[str, int]] = {}
+    sink_info: dict[int, tuple[str, int, tuple[str, ...]]] = {}
     standalone_guards: dict[str, set[tuple[int, int]]] = {"authz": set(), "signature": set()}
     branch_guards: dict[str, set[tuple[int, int, str]]] = {"authz": set(), "signature": set()}
 
@@ -161,12 +115,59 @@ def analyze_ts_function_bypass(
         guard_cls_in_block: str | None = None
         for stmt in block.statements:
             collect_guard_var_bindings(stmt, guard_vars)
-            s_cls = classify_ts_standalone_guard(stmt, custom_must_guards)
+            s_cls = classify_ts_standalone_guard(stmt)
+            if (
+                s_cls is None
+                and unit is not None
+                and call_index is not None
+                and stmt.tokens
+                and stmt.tokens[0].value not in {"return", "throw"}
+            ):
+                for recv, fn_name, _, _ in iter_ts_calls(stmt.tokens):
+                    cid = resolve_ts_callee_id(
+                        recv,
+                        fn_name,
+                        unit,
+                        call_index.by_mod_and_name,
+                        call_index.default_by_mod,
+                        call_index.by_unique_tail,
+                    )
+                    if cid and cid in call_index.summaries:
+                        for g_c in ("signature", "authz"):
+                            if g_c in call_index.summaries[cid].must_guards:
+                                s_cls = g_c
+                                break
+                    if s_cls is not None:
+                        break
             if s_cls is not None:
                 guard_cls_in_block = s_cls
-            sink = find_ts_privileged_sink(stmt)
-            if sink is not None and bid not in sink_info and guard_cls_in_block is None:
-                sink_info[bid] = sink
+
+            if bid not in sink_info and guard_cls_in_block is None:
+                sink = find_ts_privileged_sink(stmt)
+                if sink is not None:
+                    sink_info[bid] = (sink[0], sink[1], ())
+                elif unit is not None and call_index is not None:
+                    for recv, fn_name, call_ln, _ in iter_ts_calls(stmt.tokens):
+                        cid = resolve_ts_callee_id(
+                            recv,
+                            fn_name,
+                            unit,
+                            call_index.by_mod_and_name,
+                            call_index.default_by_mod,
+                            call_index.by_unique_tail,
+                        )
+                        if (
+                            cid
+                            and cid in call_index.summaries
+                            and call_index.summaries[cid].unguarded_sinks
+                        ):
+                            d_sink = call_index.summaries[cid].unguarded_sinks[0]
+                            sink_info[bid] = (
+                                d_sink.sink_label,
+                                call_ln,
+                                d_sink.callee_chain,
+                            )
+                            break
 
         if guard_cls_in_block is not None:
             for edge in cfg.succ.get(bid, ()):
@@ -248,7 +249,7 @@ def analyze_ts_function_bypass(
         nca_block = dom_tree.nearest_common_dominator(vuln_sinks)
 
         sink_bid = witness[-1]
-        sink_label, sink_line = sink_info[sink_bid]
+        sink_label, sink_line, delegated_chain = sink_info[sink_bid]
         dedup_lines: list[int] = []
         for b in witness:
             ln = cfg.blocks[b].start_line
@@ -263,9 +264,14 @@ def analyze_ts_function_bypass(
         nca_line = cfg.blocks[nca_block].start_line if nca_block is not None else None
         guard_noun = "signature verification" if g_cls == "signature" else "authorization check"
 
+        via_note = (
+            f" (delegated via `{' -> '.join(delegated_chain)}`)"
+            if delegated_chain
+            else ""
+        )
         explanation = (
             f"In `{span.name}`, at least one execution path enforces a {guard_noun}, "
-            f"but control-flow path lines {dedup_lines} reaches `{sink_label}` at line "
+            f"but control-flow path lines {dedup_lines} reaches `{sink_label}`{via_note} at line "
             f"{sink_line} without traversing that guard. External Next.js/Express "
             f"middleware and runtime reachability outside `{span.name}` were not verified."
         )
@@ -274,6 +280,19 @@ def analyze_ts_function_bypass(
             f"Enforce the {guard_noun} on every path before `{sink_label}` (for example at "
             f"minimum-cut {cut_hint}) and return an HTTP 401/403 response or throw when it fails."
         )
+
+        evidence_payload: dict[str, object] = {
+            "source_type": "static_cfg_dominator",
+            "language": "typescript",
+            "guard_class": g_cls,
+            "function": span.name,
+            "sink": sink_label,
+            "witness_lines": dedup_lines,
+            "optimal_cut_lines": cut_lines,
+            "dominator_nca_line": nca_line,
+        }
+        if delegated_chain:
+            evidence_payload["delegated_callee_chain"] = list(delegated_chain)
 
         results.append(
             CheckFinding(
@@ -286,16 +305,7 @@ def analyze_ts_function_bypass(
                 line=sink_line,
                 explanation=explanation,
                 fix_hint=fix_hint,
-                claim_evidence={
-                    "source_type": "static_cfg_dominator",
-                    "language": "typescript",
-                    "guard_class": g_cls,
-                    "function": span.name,
-                    "sink": sink_label,
-                    "witness_lines": dedup_lines,
-                    "optimal_cut_lines": cut_lines,
-                    "dominator_nca_line": nca_line,
-                },
+                claim_evidence=evidence_payload,
             )
         )
         break
@@ -322,17 +332,14 @@ def _is_eligible_ts_path(path: str) -> bool:
     return True
 
 
-def scan_ts_guard_bypass(fileobj: BinaryIO) -> list[CheckFinding]:
-    """Scan TypeScript and JavaScript files in an archive for partial guard bypasses."""
-    findings: list[CheckFinding] = []
+def _collect_parsed_ts_files(
+    fileobj: BinaryIO,
+) -> list[tuple[str, list[TSToken], list[TSFunctionSpan]]]:
+    parsed: list[tuple[str, list[TSToken], list[TSFunctionSpan]]] = []
     files_scanned = 0
     with zipfile.ZipFile(fileobj) as archive:
         for info in archive.infolist():
-            if (
-                info.is_dir()
-                or len(findings) >= MAX_FINDINGS
-                or files_scanned >= MAX_FILES_SCANNED
-            ):
+            if info.is_dir() or files_scanned >= MAX_FILES_SCANNED:
                 continue
             path = info.filename
             if stat.S_ISLNK(info.external_attr >> 16) or info.file_size > MAX_FILE_BYTES:
@@ -346,11 +353,24 @@ def scan_ts_guard_bypass(fileobj: BinaryIO) -> list[CheckFinding]:
                 spans = extract_ts_functions(tokens)
             except (OSError, UnicodeDecodeError, CFGBuildLimitError, ValueError):
                 continue
+            parsed.append((path, tokens, spans))
+    return parsed
 
-            custom_guards = _infer_file_custom_must_guards(spans)
-            for span in spans:
-                for hit in analyze_ts_function_bypass(span, path, custom_guards):
-                    findings.append(hit)
-                    if len(findings) >= MAX_FINDINGS:
-                        return findings
+
+def scan_ts_guard_bypass(fileobj: BinaryIO) -> list[CheckFinding]:
+    """Scan TypeScript and JavaScript files in an archive for partial guard bypasses."""
+    parsed = _collect_parsed_ts_files(fileobj)
+    if not parsed:
+        return []
+    call_index = build_ts_repository_summaries(parsed)
+
+    findings: list[CheckFinding] = []
+    for qid in sorted(call_index.units):
+        unit = call_index.units[qid]
+        for hit in analyze_ts_function_bypass(
+            unit.span, unit.rel_file, unit=unit, call_index=call_index
+        ):
+            findings.append(hit)
+            if len(findings) >= MAX_FINDINGS:
+                return findings
     return findings

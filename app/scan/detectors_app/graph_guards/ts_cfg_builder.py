@@ -78,6 +78,81 @@ class TSFunctionSpan:
     name: str
     lineno: int
     body_tokens: tuple[TSToken, ...]
+    param_names: tuple[str, ...] = ()
+    destructured_params: tuple[tuple[int, str], ...] = ()
+    is_exported: bool = False
+    is_default_export: bool = False
+    is_route_callback: bool = False
+
+
+def _parse_ts_params(
+    param_tokens: list[TSToken] | tuple[TSToken, ...],
+) -> tuple[tuple[str, ...], tuple[tuple[int, str], ...]]:
+    """Extract positional parameter names and `{ a, b }` destructured bindings."""
+    if not param_tokens:
+        return ((), ())
+    segments: list[list[TSToken]] = []
+    cur: list[TSToken] = []
+    p_d = b_d = s_d = a_d = 0
+    for tok in param_tokens:
+        v = tok.value
+        if v == "(":
+            p_d += 1
+        elif v == ")" and p_d > 0:
+            p_d -= 1
+        elif v == "{":
+            b_d += 1
+        elif v == "}" and b_d > 0:
+            b_d -= 1
+        elif v == "[":
+            s_d += 1
+        elif v == "]" and s_d > 0:
+            s_d -= 1
+        elif v == "<":
+            a_d += 1
+        elif v == ">" and a_d > 0:
+            a_d -= 1
+        elif v == "," and p_d == 0 and b_d == 0 and s_d == 0 and a_d == 0:
+            if cur:
+                segments.append(cur)
+                cur = []
+            continue
+        cur.append(tok)
+    if cur:
+        segments.append(cur)
+
+    names: list[str] = []
+    destructured: list[tuple[int, str]] = []
+    for idx, seg in enumerate(segments):
+        k = 0
+        if k < len(seg) and seg[k].value == "...":
+            k += 1
+        if k < len(seg) and seg[k].kind == "IDENT":
+            names.append(seg[k].value)
+        elif k < len(seg) and seg[k].value == "{":
+            names.append(f"__destructured_{idx}")
+            close_b = _match_delim(seg, k, "{", "}")
+            inner = seg[k + 1 : close_b] if close_b != -1 else seg[k + 1 :]
+            # Extract bound identifiers before optional `: Type` annotation
+            m = 0
+            nested = 0
+            while m < len(inner):
+                tv = inner[m].value
+                if tv in {"{", "[", "("}:
+                    nested += 1
+                elif tv in {"}", "]", ")"} and nested > 0:
+                    nested -= 1
+                elif inner[m].kind == "IDENT" and nested == 0:
+                    # `{ raw: renamed }` binds `renamed`, whereas `{ id }` binds `id`
+                    if m + 2 < len(inner) and inner[m + 1].value == ":" and inner[m + 2].kind == "IDENT":
+                        destructured.append((idx, inner[m + 2].value))
+                        m += 3
+                        continue
+                    destructured.append((idx, inner[m].value))
+                m += 1
+        else:
+            names.append(f"__param_{idx}")
+    return (tuple(names), tuple(destructured))
 
 
 def _can_precede_regex(prev: TSToken | None) -> bool:
@@ -312,6 +387,9 @@ def extract_ts_functions(tokens: list[TSToken]) -> list[TSFunctionSpan]:
         tok = tokens[i]
 
         if tok.kind == "IDENT" and tok.value == "function":
+            prev_vals = {t.value for t in tokens[max(0, i - 3) : i]}
+            is_exp = "export" in prev_vals
+            is_def = "default" in prev_vals
             j = i + 1
             fn_name = "default_handler"
             if j < n and tokens[j].kind == "IDENT":
@@ -324,6 +402,7 @@ def extract_ts_functions(tokens: list[TSToken]) -> list[TSFunctionSpan]:
             if j < n and tokens[j].value == "(":
                 close_p = _match_delim(tokens, j, "(", ")")
                 if close_p != -1:
+                    p_names, d_params = _parse_ts_params(tokens[j + 1 : close_p])
                     body_open = _find_function_body_open(tokens, close_p + 1)
                     if body_open != -1:
                         body_close = _match_delim(tokens, body_open, "{", "}")
@@ -334,12 +413,17 @@ def extract_ts_functions(tokens: list[TSToken]) -> list[TSFunctionSpan]:
                                     name=fn_name,
                                     lineno=tok.line,
                                     body_tokens=tuple(tokens[body_open + 1 : body_close]),
+                                    param_names=p_names,
+                                    destructured_params=d_params,
+                                    is_exported=is_exp,
+                                    is_default_export=is_def,
                                 )
                             )
                             i = body_close + 1
                             continue
 
         if tok.kind == "IDENT" and tok.value in {"const", "let", "var"} and i + 1 < n:
+            is_exp = i >= 1 and tokens[i - 1].value == "export"
             if tokens[i + 1].kind == "IDENT":
                 var_name = tokens[i + 1].value
                 eq_idx = i + 2
@@ -356,6 +440,7 @@ def extract_ts_functions(tokens: list[TSToken]) -> list[TSFunctionSpan]:
                     if k < n and tokens[k].value == "(":
                         close_p = _match_delim(tokens, k, "(", ")")
                         if close_p != -1:
+                            p_names, d_params = _parse_ts_params(tokens[k + 1 : close_p])
                             arrow = close_p + 1
                             while arrow < n and tokens[arrow].value not in {"=>", ";"}:
                                 arrow += 1
@@ -373,6 +458,9 @@ def extract_ts_functions(tokens: list[TSToken]) -> list[TSFunctionSpan]:
                                             name=var_name,
                                             lineno=tok.line,
                                             body_tokens=tuple(tokens[b_open + 1 : b_close]),
+                                            param_names=p_names,
+                                            destructured_params=d_params,
+                                            is_exported=is_exp,
                                         )
                                     )
                                     i = b_close + 1
@@ -395,6 +483,27 @@ def extract_ts_functions(tokens: list[TSToken]) -> list[TSFunctionSpan]:
                 k = i + 3
                 while k < call_close:
                     if tokens[k].value == "=>" and k + 1 < call_close and tokens[k + 1].value == "{":
+                        # Locate preceding `(...)` parameter list for arrow callback
+                        cb_params: tuple[str, ...] = ()
+                        cb_destr: tuple[tuple[int, str], ...] = ()
+                        p_end = k - 1
+                        if p_end >= i + 3 and tokens[p_end].value == ")":
+                            p_start = p_end
+                            depth = 0
+                            while p_start >= i + 3:
+                                if tokens[p_start].value == ")":
+                                    depth += 1
+                                elif tokens[p_start].value == "(":
+                                    depth -= 1
+                                    if depth == 0:
+                                        cb_params, cb_destr = _parse_ts_params(
+                                            tokens[p_start + 1 : p_end]
+                                        )
+                                        break
+                                p_start -= 1
+                        elif p_end >= i + 3 and tokens[p_end].kind == "IDENT":
+                            cb_params = (tokens[p_end].value,)
+
                         b_open = k + 1
                         b_close = _match_delim(tokens, b_open, "{", "}")
                         if b_close != -1 and b_close < call_close and (b_open, b_close) not in seen_ranges:
@@ -405,6 +514,9 @@ def extract_ts_functions(tokens: list[TSToken]) -> list[TSFunctionSpan]:
                                     name=label,
                                     lineno=tokens[k].line,
                                     body_tokens=tuple(tokens[b_open + 1 : b_close]),
+                                    param_names=cb_params,
+                                    destructured_params=cb_destr,
+                                    is_route_callback=True,
                                 )
                             )
                             k = b_close + 1

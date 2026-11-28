@@ -505,6 +505,15 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Move the session, ownership or webhook-signature check above all branching paths so it "
         "dominates every privileged mutation, and return 401/403 or throw when it fails.",
     ),
+    "ts-interprocedural-taint-flow": (
+        "Input from a TypeScript or JavaScript request handler or Server Action passes through "
+        "one or more helper or service calls into a dynamic SQL query, shell command or eval sink.",
+        "Splitting request parsing and execution across helper modules hides the data flow from "
+        "single-file checks while leaving an attacker able to alter the query or command. "
+        "External middleware validation and runtime reachability were not verified.",
+        "Use parameterized queries such as tagged prisma.$queryRaw`...`, avoid child_process.exec "
+        "or shell: true, and coerce scalar parameters or validate identifiers against an allowlist.",
+    ),
     "no-ci": (
         "No recognized CI configuration file was found in the archive.",
         "External CI services, repository settings and actual build runs were not checked. "

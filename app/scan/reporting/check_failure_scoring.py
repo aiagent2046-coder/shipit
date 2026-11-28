@@ -17,6 +17,7 @@ CHECK_CATEGORIES = {
     'auth_read_consistency': {'Auth'}, 'auth_write_consistency': {'Auth'}, 'cfg_guard_bypass': {'Auth'},
     'interproc_taint_flow': {'Security'},
     'ts_cfg_guard_bypass': {'Auth'},
+    'ts_interproc_taint_flow': {'Security'},
     'error_boundary': {'Frontend'}, 'http_success': {'Frontend'},
 }
 
