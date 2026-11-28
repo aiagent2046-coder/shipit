@@ -306,7 +306,8 @@ def _collect_parsed_python_files(fileobj: BinaryIO) -> list[tuple[str, ast.Modul
             path = info.filename
             if stat.S_ISLNK(info.external_attr >> 16):
                 continue
-            if ".git" in path.replace("\\", "/").split("/")[:-1]:
+            dir_parts = {seg.lower() for seg in path.replace("\\", "/").split("/")[:-1]}
+            if dir_parts & {".git", "alembic", "migrations"}:
                 continue
             if not path.endswith(".py") or info.file_size > MAX_FILE_BYTES:
                 continue

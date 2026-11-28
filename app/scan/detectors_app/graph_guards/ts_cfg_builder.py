@@ -364,8 +364,13 @@ def _find_function_body_open(tokens: list[TSToken], after_params: int) -> int:
                 angle -= 1
             elif v == "{" and angle == 0:
                 close_b = _match_delim(tokens, k, "{", "}")
-                if close_b != -1 and close_b + 1 < n and tokens[close_b + 1].value == "{":
-                    return close_b + 1
+                if close_b != -1 and close_b + 1 < n:
+                    nxt_v = tokens[close_b + 1].value
+                    if nxt_v == "{":
+                        return close_b + 1
+                    if nxt_v in {"|", "&"}:
+                        k = close_b + 1
+                        continue
                 return k
             elif v == ";" and angle == 0:
                 return -1
