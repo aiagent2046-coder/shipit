@@ -1,0 +1,13 @@
+def require_admin(actor) -> None:
+    if getattr(actor, "role", None) != "admin":
+        raise PermissionError("admin required")
+
+
+def delete_account_handler(actor, target_id: int, self_service: bool, repo):
+    if self_service:
+        if actor.account_id != target_id:
+            raise PermissionError("not owner")
+        repo.delete_account(target_id)
+    else:
+        require_admin(actor)
+        repo.delete_account(target_id)

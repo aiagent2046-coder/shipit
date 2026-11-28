@@ -1,4 +1,4 @@
 """Analysis identity shared by server and offline browser entry points."""
 
-# Correlate verified dependency identities with a pinned KEV threat snapshot.
-AUDIT_ENGINE_VERSION = "2026-11-15-2"
+# Add intra-procedural CFG dominator-tree partial guard bypass & min-cut detector.
+AUDIT_ENGINE_VERSION = "2026-11-27-1"

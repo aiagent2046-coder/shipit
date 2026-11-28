@@ -281,6 +281,17 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "destinations, including private and link-local ranges, and ensure the connection uses the "
         "address that was checked. Disable redirects or validate every redirect destination too.",
     ),
+    "python-cfg-partial-guard-bypass": (
+        "A function enforces an authorization or signature check on one branch, "
+        "but another branch reaches a privileged state change without passing that check.",
+        "If an attacker can steer execution onto the unguarded branch (such as a fallback mode "
+        "or an exception handler that continues instead of aborting), the privileged database or "
+        "account operation runs without the check the function itself expects. Middleware, "
+        "framework dependencies and runtime reachability outside this function were not verified.",
+        "Move the authorization or signature check to a common dominator block before the "
+        "privileged call (or abort in every failure/exception branch) so no execution path "
+        "reaches the state change unguarded.",
+    ),
     "python-route-write-auth-consistency": (
         "A route contains a call recognized as a write and shows no local identity check.",
         "A sibling write route on the same router declares an identity check. This is a local "

@@ -1,0 +1,11 @@
+def check_admin(actor) -> bool:
+    return getattr(actor, "role", None) == "admin"
+
+
+def remove_project_handler(actor, project_id: int, repo):
+    try:
+        if not check_admin(actor):
+            return {"error": "forbidden"}
+    except RuntimeError:
+        pass
+    repo.delete_project(project_id)

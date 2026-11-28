@@ -50,6 +50,7 @@ SCANNER_CHECKS = {
     "scan_error_boundary": "error_boundary",
     "scan_auth_read": "auth_read_consistency",
     "scan_auth_write": "auth_write_consistency",
+    "scan_guard_bypass": "cfg_guard_bypass",
     "scan_http_success": "http_success",
     "scan_insecure_randomness": "insecure_randomness",
     "scan_sql_injection": "sql_injection",

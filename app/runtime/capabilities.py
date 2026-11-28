@@ -428,6 +428,19 @@ CAPABILITIES: tuple[Capability, ...] = (
         "malformed or oversized source is reported in coverage. Whether the file is bundled for "
         "the browser or holds a live credential is not verified.",
     ),
+    Capability(
+        "cfg_guard_bypass",
+        "Control-flow branch bypassing an existing in-function authorization or signature guard",
+        ("python-cfg-partial-guard-bypass",),
+        "At most 600 Python files up to 512 KiB each and functions within 4,000 syntax nodes "
+        "and 512 control-flow basic blocks, with at most 50 findings. Recognized test, fixture, "
+        "dependency and generated paths are excluded. Reports functions that both enforce a "
+        "recognized authorization, ownership or webhook-signature guard along at least one path "
+        "to a privileged state mutation and leave an unguarded control-flow path to a privileged "
+        "mutation in the same function, computing a shortest witness path and minimum vertex cut. "
+        "Functions with no recognized guard, external middleware, router-level dependencies and "
+        "runtime reachability are not verified.",
+    ),
 )
 
 # The checks the static stage reports running, in stable report order.
