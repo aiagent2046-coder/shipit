@@ -1,0 +1,7 @@
+{
+  "description": "`Number(...)` coercion and parameterized tagged template `prisma.$queryRaw` prevent SQL injection across helper boundaries.",
+  "expect": [],
+  "forbid": [
+    "ts-interprocedural-taint-flow"
+  ]
+}

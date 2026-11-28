@@ -466,6 +466,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         "ORM, SQL or payment mutation while leaving an unguarded path to a privileged mutation "
         "in the same function. External middleware and runtime reachability are not verified.",
     ),
+    Capability(
+        "ts_interproc_taint_flow",
+        "TypeScript/JavaScript untrusted request input flowing across helper or service calls "
+        "to an injection or code-eval sink",
+        ("ts-interprocedural-taint-flow",),
+        "At most 600 TypeScript or JavaScript files up to 512 KiB each and 2,500 summarized "
+        "functions, with at most 50 findings and call-chain depth up to 5 hops. Recognized "
+        "test, fixture, build, declaration, dependency and generated paths are excluded. "
+        "Computes Tarjan strongly-connected-component summaries across relative and `@/`/`~/` "
+        "imports to report Next.js, Express, Fastify or Hono inputs reaching unsafe raw SQL, "
+        "child_process shell execution or dynamic code evaluation without numeric coercion or "
+        "allowlist checks. Dynamic dispatch, external middleware and runtime reachability are "
+        "not verified.",
+    ),
 )
 
 # The checks the static stage reports running, in stable report order.

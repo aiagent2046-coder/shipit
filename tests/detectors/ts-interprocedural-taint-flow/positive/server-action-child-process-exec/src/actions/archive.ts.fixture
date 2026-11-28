@@ -1,0 +1,6 @@
+"use server";
+import { buildArchiveBundle } from "../services/bundler";
+
+export async function exportWorkspaceArchive(folderName: string) {
+  return await buildArchiveBundle(folderName);
+}

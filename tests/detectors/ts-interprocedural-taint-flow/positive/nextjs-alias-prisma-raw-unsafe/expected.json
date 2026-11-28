@@ -1,0 +1,11 @@
+{
+  "description": "Next.js GET handler extracts query parameter via helper and passes it across `@/lib/reportRepo` alias into `prisma.$queryRawUnsafe`.",
+  "expect": [
+    {
+      "rule_id": "ts-interprocedural-taint-flow",
+      "file": "src/lib/reportRepo.ts",
+      "line": 4
+    }
+  ],
+  "forbid": []
+}

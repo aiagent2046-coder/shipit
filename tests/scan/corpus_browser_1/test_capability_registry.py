@@ -53,6 +53,7 @@ SCANNER_CHECKS = {
     "scan_guard_bypass": "cfg_guard_bypass",
     "scan_interproc_taint": "interproc_taint_flow",
     "scan_ts_guard_bypass": "ts_cfg_guard_bypass",
+    "scan_ts_interproc_taint": "ts_interproc_taint_flow",
     "scan_http_success": "http_success",
     "scan_insecure_randomness": "insecure_randomness",
     "scan_sql_injection": "sql_injection",

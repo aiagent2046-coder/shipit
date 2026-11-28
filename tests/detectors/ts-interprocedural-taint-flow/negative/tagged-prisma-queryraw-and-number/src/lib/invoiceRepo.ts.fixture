@@ -1,0 +1,9 @@
+import { prisma } from "@/lib/prisma";
+
+export async function loadInvoiceById(invoiceId: number) {
+  return await prisma.$queryRawUnsafe(`SELECT id FROM invoices WHERE id = ${invoiceId}`);
+}
+
+export async function searchInvoicesSafe(status: string) {
+  return await prisma.$queryRaw`SELECT id FROM invoices WHERE status = ${status}`;
+}

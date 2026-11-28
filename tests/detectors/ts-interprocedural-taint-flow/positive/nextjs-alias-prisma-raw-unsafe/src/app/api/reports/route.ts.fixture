@@ -1,0 +1,13 @@
+import { NextResponse } from "next/server";
+import { querySortedInvoices } from "@/lib/reportRepo";
+
+function readOrderClause(req: Request): string {
+  const url = new URL(req.url);
+  return url.searchParams.get("sort") ?? "created_at";
+}
+
+export async function GET(req: Request) {
+  const clause = readOrderClause(req);
+  const rows = await querySortedInvoices(clause);
+  return NextResponse.json({ rows });
+}

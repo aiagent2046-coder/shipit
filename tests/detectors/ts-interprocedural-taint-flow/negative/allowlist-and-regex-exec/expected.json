@@ -1,0 +1,7 @@
+{
+  "description": "Allowlist `ALLOWED_COLS.includes(col)` guard and `RegExp.exec(raw)` must never trigger inter-procedural SQL or shell findings.",
+  "expect": [],
+  "forbid": [
+    "ts-interprocedural-taint-flow"
+  ]
+}
