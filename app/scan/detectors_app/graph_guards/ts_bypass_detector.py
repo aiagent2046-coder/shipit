@@ -22,7 +22,9 @@ from app.scan.detectors_app.graph_guards.min_cut import compute_optimal_fix_cut
 from app.scan.detectors_app.graph_guards.ts_call_summaries import (
     TSParsedFunctionUnit,
     TSRepositoryCallIndex,
+    build_callee_returns_guard_map,
     build_ts_repository_summaries,
+    is_ts_client_ui_unit,
     iter_ts_calls,
     resolve_ts_callee_id,
 )
@@ -103,7 +105,20 @@ def analyze_ts_function_bypass(
     except CFGBuildLimitError:
         return []
 
+    if unit is not None and is_ts_client_ui_unit(unit):
+        return []
     guard_vars: dict[str, str] = {}
+    callee_ret_guards = (
+        build_callee_returns_guard_map(
+            unit,
+            call_index.summaries,
+            call_index.by_mod_and_name,
+            call_index.default_by_mod,
+            call_index.by_unique_tail,
+        )
+        if unit is not None and call_index is not None
+        else None
+    )
     sink_info: dict[int, tuple[str, int, tuple[str, ...]]] = {}
     standalone_guards: dict[str, set[tuple[int, int]]] = {"authz": set(), "signature": set()}
     branch_guards: dict[str, set[tuple[int, int, str]]] = {"authz": set(), "signature": set()}
@@ -114,7 +129,7 @@ def analyze_ts_function_bypass(
             continue
         guard_cls_in_block: str | None = None
         for stmt in block.statements:
-            collect_guard_var_bindings(stmt, guard_vars)
+            collect_guard_var_bindings(stmt, guard_vars, callee_ret_guards)
             s_cls = classify_ts_standalone_guard(stmt)
             if (
                 s_cls is None

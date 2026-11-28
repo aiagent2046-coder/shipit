@@ -25,6 +25,8 @@ from app.scan.detectors_app.graph_guards.ts_cfg_builder import (
     build_ts_function_cfg,
 )
 from app.scan.detectors_app.graph_guards.ts_guard_specs import (
+    LOOKUP_AUTHZ_CALLS,
+    LOOKUP_SIGNATURE_CALLS,
     SQL_CALL_TAILS,
     classify_ts_branch_guard,
     classify_ts_standalone_guard,
@@ -80,6 +82,7 @@ class TSFunctionSummary:
     param_to_return: frozenset[int]
     returns_untrusted_source: bool
     param_to_sinks: tuple[ParamSinkFlow, ...]
+    returns_guard: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -89,6 +92,7 @@ class TSParsedFunctionUnit:
     rel_file: str
     span: TSFunctionSpan
     has_use_server: bool
+    has_use_client: bool
     imports_child_process: bool
     # local_ident -> (target_mod_path, exported_symbol_or_default_or_star)
     imports_map: dict[str, tuple[str, str]]
@@ -315,6 +319,52 @@ def resolve_ts_callee_id(
     return None
 
 
+def is_ts_client_ui_unit(unit: TSParsedFunctionUnit) -> bool:
+    """Return True for browser `"use client"` modules and client React `.tsx`/`.jsx` UI components."""
+    if unit.has_use_client:
+        return True
+    if (
+        unit.rel_file.endswith((".tsx", ".jsx"))
+        and not unit.has_use_server
+        and "/api/" not in f"/{unit.mod_path}"
+        and not unit.mod_path.startswith("api/")
+        and unit.span.name[:1].isupper()
+        and unit.span.name not in NEXT_HTTP_EXPORTS
+    ):
+        return True
+    return False
+
+
+def build_callee_returns_guard_map(
+    unit: TSParsedFunctionUnit,
+    summaries: dict[str, TSFunctionSummary],
+    by_mod_and_name: dict[tuple[str, str], str],
+    default_by_mod: dict[str, str],
+    by_unique_tail: dict[str, str | None],
+) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for recv, fn_name, _, _ in iter_ts_calls(unit.span.body_tokens):
+        cid = resolve_ts_callee_id(
+            recv, fn_name, unit, by_mod_and_name, default_by_mod, by_unique_tail
+        )
+        if cid and cid in summaries and summaries[cid].returns_guard:
+            g_cls = "signature" if "signature" in summaries[cid].returns_guard else "authz"
+            key = f"{recv}.{fn_name}" if recv else fn_name
+            mapping[key] = g_cls
+            mapping.setdefault(fn_name, g_cls)
+    return mapping
+
+
+def _is_falsy_return_expr(ret_toks: tuple[TSToken, ...]) -> bool:
+    if len(ret_toks) == 1 and ret_toks[0].value in {"null", "undefined", "false"}:
+        return True
+    vals = [t.value for t in ret_toks[:8]]
+    for idx in range(len(vals) - 2):
+        if vals[idx] in {"ok", "valid"} and vals[idx + 1] == ":" and vals[idx + 2] == "false":
+            return True
+    return False
+
+
 def is_ts_entrypoint(unit: TSParsedFunctionUnit) -> bool:
     sp = unit.span
     if sp.is_route_callback:
@@ -490,6 +540,10 @@ def _compute_single_ts_summary(
 
     if cfg is not None:
         guard_vars: dict[str, str] = {}
+        callee_ret_guards = build_callee_returns_guard_map(
+            unit, summaries, by_mod_and_name, default_by_mod, by_unique_tail
+        )
+        is_client_ui = is_ts_client_ui_unit(unit)
         standalone_guards: dict[str, set[tuple[int, int]]] = {"authz": set(), "signature": set()}
         branch_guards: dict[str, set[tuple[int, int, str]]] = {"authz": set(), "signature": set()}
         block_sinks: dict[int, DelegatedSink] = {}
@@ -500,7 +554,7 @@ def _compute_single_ts_summary(
                 continue
             active_guard: str | None = None
             for stmt in block.statements:
-                collect_guard_var_bindings(stmt, guard_vars)
+                collect_guard_var_bindings(stmt, guard_vars, callee_ret_guards)
                 s_cls = classify_ts_standalone_guard(stmt)
                 if s_cls is None and stmt.tokens and stmt.tokens[0].value not in {"return", "throw"}:
                     for recv, fn_name, _, _ in iter_ts_calls(stmt.tokens):
@@ -517,7 +571,7 @@ def _compute_single_ts_summary(
                 if s_cls is not None:
                     active_guard = s_cls
 
-                if bid not in block_sinks and active_guard is None:
+                if not is_client_ui and bid not in block_sinks and active_guard is None:
                     direct_priv = find_ts_privileged_sink(stmt)
                     if direct_priv is not None:
                         lbl, ln = direct_priv
@@ -787,6 +841,48 @@ def _compute_single_ts_summary(
             if al_branch is not None and not al_branch[1]:
                 allowlisted_vars.add(al_branch[0])
 
+        returns_guard: set[str] = set()
+        body_calls = (
+            [] if is_client_ui else [fn_n for _, fn_n, _, _ in iter_ts_calls(span.body_tokens)]
+        )
+        has_hmac_calc = any(fn_n in {"createHmac", "timingSafeEqual"} for fn_n in body_calls)
+        has_falsy_ret = False
+        has_truthy_ret = False
+
+        for bid_r in (() if is_client_ui else sorted(cfg.blocks)):
+            blk_r = cfg.blocks[bid_r]
+            if blk_r.is_synthetic or blk_r.has_deny_status:
+                continue
+            for st_r in blk_r.statements:
+                rt = st_r.tokens
+                if not rt or rt[0].value != "return" or len(rt) <= 1:
+                    continue
+                ret_expr = rt[1:]
+                if _is_falsy_return_expr(ret_expr):
+                    has_falsy_ret = True
+                    continue
+                has_truthy_ret = True
+                for recv_r, fn_r, _, _ in iter_ts_calls(ret_expr):
+                    if fn_r in LOOKUP_SIGNATURE_CALLS:
+                        returns_guard.add("signature")
+                    elif fn_r in LOOKUP_AUTHZ_CALLS:
+                        returns_guard.add("authz")
+                    elif fn_r in callee_ret_guards:
+                        returns_guard.add(callee_ret_guards[fn_r])
+                    elif recv_r and f"{recv_r}.{fn_r}" in callee_ret_guards:
+                        returns_guard.add(callee_ret_guards[f"{recv_r}.{fn_r}"])
+                for tok_r in ret_expr:
+                    if tok_r.kind == "IDENT" and tok_r.value in guard_vars:
+                        returns_guard.add(guard_vars[tok_r.value])
+
+        if (
+            has_hmac_calc
+            and has_falsy_ret
+            and has_truthy_ret
+            and span.name.startswith(("verify", "validate", "check"))
+        ):
+            returns_guard.add("signature")
+
         return TSFunctionSummary(
             qual_id=unit.qual_id,
             rel_file=unit.rel_file,
@@ -798,6 +894,7 @@ def _compute_single_ts_summary(
             param_to_return=frozenset(param_to_ret),
             returns_untrusted_source=returns_untrusted,
             param_to_sinks=tuple(param_sinks.values()),
+            returns_guard=frozenset(returns_guard),
         )
 
     return TSFunctionSummary(
@@ -836,6 +933,9 @@ def build_ts_repository_summaries(
         has_use_server = any(
             t.kind == "STRING" and t.value.strip() == "use server" for t in tokens[:8]
         )
+        has_use_client = any(
+            t.kind == "STRING" and t.value.strip() == "use client" for t in tokens[:8]
+        )
         imports_map, has_cp = parse_ts_imports(tokens, mp, known_mod_paths)
         for idx_s, sp in enumerate(spans):
             if len(units) >= MAX_SUMMARY_FUNCTIONS:
@@ -847,6 +947,7 @@ def build_ts_repository_summaries(
                 rel_file=rel_file,
                 span=sp,
                 has_use_server=has_use_server,
+                has_use_client=has_use_client,
                 imports_child_process=has_cp,
                 imports_map=imports_map,
             )
