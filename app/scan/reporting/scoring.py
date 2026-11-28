@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from app.scan.detectors_app.runtime.ci_deploy_source import RULE_ID as CI_DEPLOY_RULE_ID
 from app.scan.identity.claim_evidence import syntax_contradicted, unsupported_transport
+from app.scan.reporting.conformal.strata_thresholds import summarize_conformal_risk
 
 SEVERITY_WEIGHT = {"critical": 2.0, "high": 1.0, "medium": 0.4, "low": 0.1}
 
@@ -664,3 +665,14 @@ def score_findings(findings: list[dict], *, llm_ran: bool,
         incomplete_static=incomplete_static,
         failed_static=failed_static,
     )
+
+
+def compute_conformal_summary(findings: list[ScoredFinding]) -> dict:
+    """Distribution-free three-zone Conformal Risk Control summary over active findings."""
+    active = [
+        f for f in findings
+        if not syntax_contradicted(f.claim_evidence)
+        and not unsupported_transport(f.claim_evidence)
+        and not (f.rule_id == "no-dockerfile" and f.context == "deployment_inventory")
+    ]
+    return summarize_conformal_risk(active)

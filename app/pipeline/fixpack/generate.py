@@ -41,6 +41,11 @@ import tree_sitter_javascript
 import tree_sitter_typescript
 from tree_sitter import Language, Parser
 
+from app.pipeline.fixpack.conformal_gate import (
+    CONFORMAL_SKIP_REASON,
+    conformal_rejection_metadata,
+    passes_conformal_fixpack_gate,
+)
 from app.pipeline.fixpack.rls_policy import PolicyProposal, migration_filename, propose_read_policy
 from app.pipeline.fixpack.static_security_fixes import apply_cors_fixes, apply_sqli_fixes
 from app.scan.core.checks import (
@@ -830,6 +835,7 @@ def has_auto_fixable_findings(findings: list[dict]) -> bool:
     return any(
         f.get("fixpack_eligible") is not False
         and _is_fixable_rule(f) and _is_production_code(f)
+        and passes_conformal_fixpack_gate(f)
         and (f.get("rule_id") not in SECRET_RULE_IDS
              or _secret_finding_formats_supported(f))
         for f in findings
@@ -856,9 +862,20 @@ def mark_unfixable_findings(zip_bytes: bytes, findings: list[dict]) -> list[dict
     unsellable.
     """
     findings = [
-        {**f, "fixpack_eligible": False}
-        if f.get("rule_id") in SECRET_RULE_IDS
-        and not _secret_finding_formats_supported(f) else f
+        {
+            **f,
+            "fixpack_eligible": False,
+            "conformal_gate": conformal_rejection_metadata(f),
+        }
+        if _is_fixable_rule(f)
+        and _is_production_code(f)
+        and not passes_conformal_fixpack_gate(f)
+        else (
+            {**f, "fixpack_eligible": False}
+            if f.get("rule_id") in SECRET_RULE_IDS
+            and not _secret_finding_formats_supported(f)
+            else f
+        )
         for f in findings
     ]
     if not any(f.get("rule_id") == RLS_RULE_ID for f in findings):
@@ -971,6 +988,9 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
                 "reported instead of rewritten"
             )))
             continue
+        if f.get("rule_id") not in SECRET_RULE_IDS and not passes_conformal_fixpack_gate(f):
+            plan.skipped.append(_skipped(f, CONFORMAL_SKIP_REASON))
+            continue
         eligible.append(f)
 
     if not eligible:
@@ -1004,11 +1024,14 @@ def build_fixpack_plan(zip_bytes: bytes, findings: list[dict]) -> FixpackPlan:
             continue
         fresh, raw_value = match
         current = {**f, "file": fresh.file, "line": fresh.line,
-                   "context": fresh.context}
+                   "context": fresh.context, "confidence": fresh.confidence}
         if not _is_production_code(current):
             plan.skipped.append(_skipped(
                 current, f"{fresh.context or 'test path'} on fresh scan — "
                 "non-production context; file left unchanged", file=repo_rel))
+            continue
+        if not passes_conformal_fixpack_gate(current):
+            plan.skipped.append(_skipped(current, CONFORMAL_SKIP_REASON, file=repo_rel))
             continue
         occurrences = [(current, fresh.file, raw_value)] + _grouped_secret_occurrences(
             current, raw_value, fresh_by_file
