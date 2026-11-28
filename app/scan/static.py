@@ -18,6 +18,7 @@ from app.scan.detectors_app.data.auth_read import scan_auth_read
 from app.scan.detectors_app.data.auth_write import scan_auth_write
 from app.scan.detectors_app.graph_guards.bypass_detector import scan_guard_bypass
 from app.scan.detectors_app.graph_guards.interproc_taint import scan_interproc_taint
+from app.scan.detectors_app.graph_guards.ts_bypass_detector import scan_ts_guard_bypass
 from app.scan.detectors_app.data.rls import scan_rls
 from app.scan.detectors_app.data.schema_drift import scan_schema_drift
 from app.scan.detectors_app.data.service_role import scan_service_role
@@ -354,6 +355,16 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                 claim_evidence=tf.claim_evidence or static_claim_evidence(),
             ))
 
+    fileobj.seek(0)
+    with attempt("ts_cfg_guard_bypass"):
+        for tg in list(scan_ts_guard_bypass(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=tg.rule_id, title=tg.title, severity=tg.severity,
+                confidence=tg.confidence, category=tg.category, file=tg.file,
+                line=tg.line, explanation=tg.explanation, fix_hint=tg.fix_hint,
+                claim_evidence=tg.claim_evidence or static_claim_evidence(),
+            ))
+
     # The first static producer for Frontend. Wired on a number measured in
     # this repository (DRYDOCK_LENS_PLAN.md): 11 of 12 mounted apps in the
     # audited corpus ship no error boundary above their routes, the hits on
@@ -462,6 +473,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                      "auth_write_consistency": SCOPE["auth_write_consistency"],
                      "cfg_guard_bypass": SCOPE["cfg_guard_bypass"],
                      "interproc_taint_flow": SCOPE["interproc_taint_flow"],
+                     "ts_cfg_guard_bypass": SCOPE["ts_cfg_guard_bypass"],
                      "outbound_url": SCOPE["outbound_url"],
                      "open_redirect": SCOPE["open_redirect"],
                      "unsafe_deserialization": SCOPE["unsafe_deserialization"],

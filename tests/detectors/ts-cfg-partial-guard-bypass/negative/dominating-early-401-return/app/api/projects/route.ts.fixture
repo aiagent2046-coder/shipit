@@ -1,0 +1,13 @@
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { prisma } from "@/lib/prisma";
+
+export async function DELETE(req: Request) {
+  const session = await getServerSession();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const { projectId } = await req.json();
+  await prisma.project.delete({ where: { id: projectId } });
+  return NextResponse.json({ deleted: true });
+}

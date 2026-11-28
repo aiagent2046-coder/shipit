@@ -1,0 +1,11 @@
+{
+  "description": "Webhook POST handler skips stripe.webhooks.constructEvent when x-internal-replay header is set, reaching stripe.refunds.create unverified.",
+  "expect": [
+    {
+      "rule_id": "ts-cfg-partial-guard-bypass",
+      "file": "app/api/webhooks/route.ts",
+      "line": 12
+    }
+  ],
+  "forbid": []
+}

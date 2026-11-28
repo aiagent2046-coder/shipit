@@ -1,0 +1,14 @@
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  if (url.searchParams.has("private")) {
+    const session = await getServerSession();
+    if (!session?.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+  url.searchParams.delete("token");
+  return NextResponse.json({ query: url.searchParams.toString() });
+}

@@ -496,6 +496,15 @@ PLAIN: dict[str, tuple[str, str, str]] = {
         "Parameterize SQL queries, avoid shell=True in subprocess calls, use safe deserializers such "
         "as json.loads, and enforce strict scalar types or allowlists on untrusted parameters.",
     ),
+    "ts-cfg-partial-guard-bypass": (
+        "A TypeScript or JavaScript handler checks authentication, ownership or a webhook "
+        "signature on one branch, but another branch reaches a privileged mutation without it.",
+        "Callers who trigger the unguarded branch can mutate or delete database records or "
+        "trigger payment actions without passing the check the handler itself expects. External "
+        "framework middleware and runtime reachability were not verified.",
+        "Move the session, ownership or webhook-signature check above all branching paths so it "
+        "dominates every privileged mutation, and return 401/403 or throw when it fails.",
+    ),
     "no-ci": (
         "No recognized CI configuration file was found in the archive.",
         "External CI services, repository settings and actual build runs were not checked. "
