@@ -1,0 +1,7 @@
+# RFC 9116 — how to reach us about a security issue on drydock.co.
+# The contact is the product's real support address (app/notify/messages.py:
+# SUPPORT_ADDRESS), the same channel billing and delivery mail already use.
+Contact: mailto:support@drydock.co
+Expires: 2027-11-21T12:00:00.000Z
+Preferred-Languages: en, ru
+Canonical: https://drydock.co/.well-known/security.txt
