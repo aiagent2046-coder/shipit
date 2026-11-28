@@ -22,6 +22,7 @@ from app.scan.reporting.conformal.strata_thresholds import (
     ZONE_HUMAN_REVIEW,
     StratumPolicy,
     classify_finding_risk,
+    normalize_conformal_risk,
     summarize_conformal_risk,
 )
 
@@ -42,6 +43,7 @@ __all__ = [
     "finding_nonconformity",
     "finding_stratum",
     "finite_sample_risk_bound",
+    "normalize_conformal_risk",
     "producer_stratum",
     "summarize_conformal_risk",
 ]

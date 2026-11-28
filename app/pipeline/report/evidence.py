@@ -24,6 +24,7 @@ from app.scan.identity.claim_evidence import (
     unsupported_transport,
 )
 from app.scan.reporting.check_failures import normalize_check_failures
+from app.scan.reporting.conformal import normalize_conformal_risk
 from app.scan.reporting.claim_narrative import narrative_projection
 from app.scan.reporting.fact_projection_grouping import (
     CONSEQUENCES as FACT_CONSEQUENCES,
@@ -939,6 +940,34 @@ def security_agent_rows(value: object) -> list[tuple[str, str]]:
     return rows
 
 
+
+def conformal_risk_rows(raw: object) -> list[tuple[str, str]]:
+    """Format three-zone Conformal Risk Control manifest summary when recorded."""
+    record = normalize_conformal_risk(raw)
+    if record is None:
+        return []
+    zones = record["zones"]
+    rows: list[tuple[str, str]] = [
+        (
+            "Conformal risk calibration",
+            f"{record['version']} (alpha_fix={record['alpha_fix']}, alpha_review={record['alpha_review']})",
+        ),
+        (
+            "Conformal risk zones",
+            f"auto_fix_eligible: {zones['auto_fix_eligible']}; "
+            f"human_review: {zones['human_review']}; "
+            f"damped_advisory: {zones['damped_advisory']}",
+        ),
+    ]
+    for stratum, counts in record["by_stratum"].items():
+        rows.append((
+            f"Conformal stratum: {stratum}",
+            f"auto_fix_eligible: {counts['auto_fix_eligible']}; "
+            f"human_review: {counts['human_review']}; "
+            f"damped_advisory: {counts['damped_advisory']}",
+        ))
+    return rows
+
 def manifest_rows(score: dict) -> list[tuple[str, str]]:
     manifest = score.get("scan_manifest")
     if not isinstance(manifest, dict):
@@ -957,6 +986,7 @@ def manifest_rows(score: dict) -> list[tuple[str, str]]:
         ("Review areas applied", ", ".join(manifest.get("rubrics_completed", [])) or "None"),
     ]
     rows.extend(security_agent_rows(manifest.get("security_agent")))
+    rows.extend(conformal_risk_rows(manifest.get("conformal_risk")))
     accounting = manifest.get("model_findings")
     rows.extend((f"Static check failed: {item['check']}", item["reason"])
                 for item in normalize_check_failures(manifest.get("static_checks_not_run")))

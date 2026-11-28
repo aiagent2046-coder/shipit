@@ -12,6 +12,7 @@ from html import escape
 from app.pipeline.dependency_snapshot import RECONCILIATION_DETAIL, unrepeated_dependency_matches
 from app.pipeline.report.evidence import (
     claim_evidence_rows,
+    conformal_risk_rows,
     coverage_rows,
     evidence_label,
     finding_counts,
@@ -429,6 +430,15 @@ def render_report(result: dict, project_name: str = "your app") -> str:
         for name, label in coverage_rows(score, raw_findings)
     )
     project_rows = project_checks_rows((score.get("scan_manifest") or {}).get("project_checks"))
+    crc_rows = conformal_risk_rows((score.get("scan_manifest") or {}).get("conformal_risk"))
+    conformal_html = (
+        '<details aria-label="Conformal risk control"><summary>Conformal risk stratification</summary>'
+        '<dl style="overflow-wrap:anywhere">'
+        + "".join(f"<dt>{escape(k)}</dt><dd>{escape(v)}</dd>" for k, v in crc_rows)
+        + '</dl><p class="secnote">Thresholds partition active findings by nonconformity score '
+        'across calibrated rule strata; runtime reachability is not verified.</p></details>'
+        if crc_rows else ""
+    )
     project_summary_count = 4 if len(project_rows) > 3 and project_rows[3][0] == "CISA KEV threat context" else 3
     project_checks_html = (
         '<section aria-label="Project checks"><h2 class="sechead">Project checks</h2>'
@@ -644,7 +654,7 @@ def render_report(result: dict, project_name: str = "your app") -> str:
 {tier_note}
 {status_note}
 {acceptance_note}
-{project_checks_html}
+{project_checks_html}{conformal_html}
 <section>{cats}</section>
 {body}
 {coverage_note}
