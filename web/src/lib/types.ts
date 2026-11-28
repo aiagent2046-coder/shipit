@@ -92,6 +92,7 @@ export interface ScanManifest {
   // Validated at the presentation boundary for older/malformed stored reports.
   project_checks?: unknown;
   security_agent?: unknown;
+  conformal_risk?: unknown;
   sca_cve?: unknown;
   dependency_cve?: unknown;
   dependency_snapshot?: unknown;

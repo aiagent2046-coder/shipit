@@ -130,3 +130,54 @@ def summarize_conformal_risk(findings: list[Any]) -> dict[str, Any]:
         "zones": counts,
         "by_stratum": by_stratum,
     }
+
+
+def normalize_conformal_risk(raw: object) -> dict[str, Any] | None:
+    """Validate persisted `scan_manifest.conformal_risk` at presentation boundaries."""
+    if not isinstance(raw, dict):
+        return None
+    version = raw.get("version")
+    alpha_fix = raw.get("alpha_fix")
+    alpha_review = raw.get("alpha_review")
+    zones = raw.get("zones")
+    if not isinstance(version, str) or not version:
+        return None
+    if not isinstance(alpha_fix, (int, float)) or isinstance(alpha_fix, bool):
+        return None
+    if not isinstance(alpha_review, (int, float)) or isinstance(alpha_review, bool):
+        return None
+    if not isinstance(zones, dict):
+        return None
+
+    clean_zones: dict[str, int] = {}
+    for key in (ZONE_AUTO_FIX, ZONE_HUMAN_REVIEW, ZONE_DAMPED_ADVISORY):
+        val = zones.get(key)
+        if not isinstance(val, int) or isinstance(val, bool) or val < 0:
+            return None
+        clean_zones[key] = val
+
+    raw_strata = raw.get("by_stratum")
+    clean_strata: dict[str, dict[str, int]] = {}
+    if isinstance(raw_strata, dict):
+        for s_name in sorted(raw_strata):
+            bucket = raw_strata[s_name]
+            if not isinstance(s_name, str) or not isinstance(bucket, dict):
+                continue
+            s_counts: dict[str, int] = {}
+            valid_bucket = True
+            for key in (ZONE_AUTO_FIX, ZONE_HUMAN_REVIEW, ZONE_DAMPED_ADVISORY):
+                b_val = bucket.get(key, 0)
+                if not isinstance(b_val, int) or isinstance(b_val, bool) or b_val < 0:
+                    valid_bucket = False
+                    break
+                s_counts[key] = b_val
+            if valid_bucket:
+                clean_strata[s_name] = s_counts
+
+    return {
+        "version": version,
+        "alpha_fix": float(alpha_fix),
+        "alpha_review": float(alpha_review),
+        "zones": clean_zones,
+        "by_stratum": clean_strata,
+    }

@@ -49,7 +49,7 @@ from app.scan.llm_scan import RUBRICS
 from app.scan.reporting.check_failure_scoring import failed_check_categories
 from app.scan.reporting.manifest import SCA_LIMITATIONS, sca_limitations, sca_manifest_fields
 from app.scan.reporting.project_checks import dependency_checks
-from app.scan.reporting.scoring import score_findings
+from app.scan.reporting.scoring import conformal_summary_for_records, score_findings
 from app.scan.supply.threat_context import build_threat_context, context_is_current
 
 INVENTORY_VERSION = 1
@@ -261,6 +261,8 @@ def refreshed_score(stored_score: dict, findings: list[dict], stats: dict,
         manifest["project_checks"] = {**manifest["project_checks"],
                                       "dependencies": dependency_checks(stats, count),
                                       "threat_context": build_threat_context(findings)}
+    if "conformal_risk" in manifest:
+        manifest["conformal_risk"] = conformal_summary_for_records(findings)
     manifest["limitations"] = [reason for reason in manifest.get("limitations", [])
                                if reason not in SCA_LIMITATIONS] + sca_limitations(stats)
     refreshed = {**stored_score,

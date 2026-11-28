@@ -48,6 +48,7 @@ def _dependencies(data: bytes, catalog: dict | None) -> dict | None:
 
 def _result(data: bytes, static: dict, dependencies: dict | None = None, *,
             threat_catalog: dict | None = None, threat_as_of: str | None = None) -> dict:
+    findings = [*static["findings"], *(dependencies["findings"] if dependencies else [])]
     manifest = scan_manifest(
         data, AUDIT_ENGINE_VERSION, static,
         {"skipped_reason": "llm_not_run_browser"}, None,
@@ -55,11 +56,11 @@ def _result(data: bytes, static: dict, dependencies: dict | None = None, *,
         dependency_findings=len(dependencies["findings"]) if dependencies else 0,
         dependency_records=dependencies["findings"] if dependencies else [],
         threat_catalog=threat_catalog, threat_as_of=threat_as_of,
+        findings=findings,
     )
     # Matching uses a preloaded public snapshot; no package query leaves the worker.
     dependency_coverage = dependencies["coverage"] if dependencies else None
     dependency_ran = dependency_coverage and dependency_coverage.get("status") != "unavailable"
-    findings = [*static["findings"], *(dependencies["findings"] if dependencies else [])]
     limitations = list(dict.fromkeys([
         *manifest["limitations"], *static.get("limitations", []),
         *([] if dependency_ran else ["dependency_check_not_run"]),

@@ -10,6 +10,7 @@ from app.scan.core.rule_coverage import normalize_rule_coverage
 from app.scan.reporting.check_failures import normalize_check_failures
 from app.scan.reporting.project_checks import project_checks
 from app.scan.reporting.rejection_diagnostics import acceptance_summary, diagnostics_manifest
+from app.scan.reporting.scoring import conformal_summary_for_records
 from app.scan.reporting.security_agent import agent_record
 from app.scan.supply.cve_evidence import normalize_cve_summary
 
@@ -82,7 +83,8 @@ def _file_counts(coverage: object) -> dict | None:
 def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
                   failure_kind: str | None, sca: object = None, *,
                   dependency_findings: int | None = None, dependency_records: list[dict] | None = None,
-                  threat_catalog: dict | None = None, threat_as_of: str | None = None) -> dict:
+                  threat_catalog: dict | None = None, threat_as_of: str | None = None,
+                  findings: list[dict] | None = None) -> dict:
     """Recorded inputs, execution facts and what was NOT examined.
 
     `sca` is the dependency stage's stats when it ran, or its reason for not
@@ -150,6 +152,9 @@ def scan_manifest(data: bytes, engine: str, static: dict, llm: object,
         "secrets_coverage": _file_counts(static.get("secrets_coverage")),
         "rule_coverage": normalize_rule_coverage(static.get("rule_coverage")),
         "security_agent": agent_record(static.get("security_agent")),
+        **({"conformal_risk": conformal_summary_for_records(
+            findings if findings is not None else static["findings"]
+        )} if (findings is not None or isinstance(static.get("findings"), list)) else {}),
         "source_facts": static.get("source_facts"),
         "model": stats.get("model"),
         "model_calls": stats.get("calls", 0),

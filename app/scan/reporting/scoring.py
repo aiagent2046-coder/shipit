@@ -676,3 +676,14 @@ def compute_conformal_summary(findings: list[ScoredFinding]) -> dict:
         and not (f.rule_id == "no-dockerfile" and f.context == "deployment_inventory")
     ]
     return summarize_conformal_risk(active)
+
+
+def conformal_summary_for_records(findings: list[ScoredFinding | dict]) -> dict:
+    """Compute three-zone Conformal Risk Control summary over findings or persisted dicts."""
+    typed = [
+        item if isinstance(item, ScoredFinding)
+        else ScoredFinding(**{k: item[k] for k in _SCORED_FIELDS if k in item})
+        for item in findings
+        if isinstance(item, (ScoredFinding, dict))
+    ]
+    return compute_conformal_summary(typed)

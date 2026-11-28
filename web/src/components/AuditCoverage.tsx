@@ -2,6 +2,7 @@ import type { Finding, Score } from "@/lib/types";
 import { coverageRows, manifestRows, modelAcceptanceNotice, modelStatusNotice, nonModelStatusNotices, observationSummary, reviewContributionRows } from "@/lib/evidence";
 import { ProjectChecks } from "./ProjectChecks";
 import { PatternReview } from "./PatternReview";
+import { ConformalRisk } from "./ConformalRisk";
 
 export function AuditCoverage({ score, findings }: { score: Score; findings: Finding[] }) {
   const notice = modelStatusNotice(score);
@@ -45,6 +46,7 @@ export function AuditCoverage({ score, findings }: { score: Score; findings: Fin
         ))}
       </dl>
       <PatternReview value={score.scan_manifest?.security_agent} />
+      <ConformalRisk value={score.scan_manifest?.conformal_risk} />
       <details className="mt-4 text-sm">
         <summary>Scan record</summary>
         <dl className="mt-2 space-y-2 break-all">

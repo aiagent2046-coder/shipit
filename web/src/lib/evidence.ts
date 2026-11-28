@@ -333,7 +333,7 @@ export function coverageRows(score: Score, findings: Finding[]): [string, string
     // (reads and writes), and a repository whose Python routes are only writes
     // would otherwise read as "Not checked" while a route check did run.
     if (name === "Auth" && skipped.has(name) &&
-        ["auth_read_consistency", "auth_write_consistency"].some(
+        ["auth_read_consistency", "auth_write_consistency", "cfg_guard_bypass", "ts_cfg_guard_bypass"].some(
           (key) => score.scan_manifest?.static_checks.includes(key))) {
       label = "Local Python route check ran — broader auth not checked";
     }
@@ -722,6 +722,89 @@ function rejectionDiagnosticRows(score: Score): [string, string][] {
   return rows;
 }
 
+export interface ConformalZoneCounts {
+  auto_fix_eligible: number;
+  human_review: number;
+  damped_advisory: number;
+}
+
+export interface ConformalRiskRecord {
+  version: string;
+  alpha_fix: number;
+  alpha_review: number;
+  zones: ConformalZoneCounts;
+  by_stratum: Record<string, ConformalZoneCounts>;
+}
+
+function isNonNegativeInt(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0;
+}
+
+export function normalizeConformalRisk(raw: unknown): ConformalRiskRecord | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.version !== "string" || !r.version) return null;
+  if (typeof r.alpha_fix !== "number" || !Number.isFinite(r.alpha_fix)) return null;
+  if (typeof r.alpha_review !== "number" || !Number.isFinite(r.alpha_review)) return null;
+  if (!r.zones || typeof r.zones !== "object") return null;
+  const z = r.zones as Record<string, unknown>;
+  if (
+    !isNonNegativeInt(z.auto_fix_eligible) ||
+    !isNonNegativeInt(z.human_review) ||
+    !isNonNegativeInt(z.damped_advisory)
+  ) {
+    return null;
+  }
+  const by_stratum: Record<string, ConformalZoneCounts> = {};
+  if (r.by_stratum && typeof r.by_stratum === "object") {
+    for (const key of Object.keys(r.by_stratum as Record<string, unknown>).sort()) {
+      const b = (r.by_stratum as Record<string, unknown>)[key];
+      if (!b || typeof b !== "object") continue;
+      const bc = b as Record<string, unknown>;
+      const a = bc.auto_fix_eligible ?? 0;
+      const h = bc.human_review ?? 0;
+      const d = bc.damped_advisory ?? 0;
+      if (isNonNegativeInt(a) && isNonNegativeInt(h) && isNonNegativeInt(d)) {
+        by_stratum[key] = { auto_fix_eligible: a, human_review: h, damped_advisory: d };
+      }
+    }
+  }
+  return {
+    version: r.version,
+    alpha_fix: r.alpha_fix,
+    alpha_review: r.alpha_review,
+    zones: {
+      auto_fix_eligible: z.auto_fix_eligible,
+      human_review: z.human_review,
+      damped_advisory: z.damped_advisory,
+    },
+    by_stratum,
+  };
+}
+
+export function conformalRiskRows(raw: unknown): [string, string][] {
+  const rec = normalizeConformalRisk(raw);
+  if (!rec) return [];
+  const { zones } = rec;
+  const rows: [string, string][] = [
+    [
+      "Conformal risk calibration",
+      `${rec.version} (alpha_fix=${rec.alpha_fix}, alpha_review=${rec.alpha_review})`,
+    ],
+    [
+      "Conformal risk zones",
+      `auto_fix_eligible: ${zones.auto_fix_eligible}; human_review: ${zones.human_review}; damped_advisory: ${zones.damped_advisory}`,
+    ],
+  ];
+  for (const [stratum, counts] of Object.entries(rec.by_stratum)) {
+    rows.push([
+      `Conformal stratum: ${stratum}`,
+      `auto_fix_eligible: ${counts.auto_fix_eligible}; human_review: ${counts.human_review}; damped_advisory: ${counts.damped_advisory}`,
+    ]);
+  }
+  return rows;
+}
+
 export function manifestRows(score: Score): [string, string][] {
   const m = score.scan_manifest;
   if (!m) return [["Scan record", "Not recorded for this older audit"]];
@@ -739,6 +822,7 @@ export function manifestRows(score: Score): [string, string][] {
     ["Model responses", String(m.model_calls)],
     ["Review areas applied", m.rubrics_completed.join(", ") || "None"],
     ...(patternReview(m.security_agent)?.rows.slice(0, 2) ?? []),
+    ...conformalRiskRows(m.conformal_risk),
     ["Files eligible for model review", String(m.llm_candidate_files ?? "Not recorded")],
     ["Unique files submitted to model", String(m.llm_submitted_files ?? "Not recorded")],
     ["Eligible files not submitted", String(m.llm_files_not_submitted ?? "Not recorded")],
