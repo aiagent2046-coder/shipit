@@ -1,0 +1,11 @@
+{
+  "description": "Webhook handler verifies HMAC/signature on the primary branch before updating payment state, but a legacy fallback branch reaches the mutating UPDATE without traversing verify_signature.",
+  "expect": [
+    {
+      "rule_id": "python-cfg-partial-guard-bypass",
+      "file_endswith": "app/webhooks.py",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

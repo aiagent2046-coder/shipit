@@ -1,0 +1,11 @@
+import hmac
+
+
+def verify_signature(order_id: int, sig: str) -> bool:
+    return hmac.compare_digest(str(order_id), sig)
+
+
+def refund_handler(actor, order_id: int, billing):
+    if not verify_signature(order_id, actor.sig):
+        raise PermissionError("invalid signature")
+    billing.issue_refund(order_id)

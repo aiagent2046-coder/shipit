@@ -360,6 +360,7 @@ def test_coverage_distinguishes_skipped_partial_and_legacy():
     ["auth_read_consistency"],
     ["auth_write_consistency"],
     ["auth_read_consistency", "auth_write_consistency"],
+    ["cfg_guard_bypass"],
 ])
 def test_local_route_coverage_does_not_claim_broader_authorization(checks):
     from app.pipeline.report.evidence import coverage_rows

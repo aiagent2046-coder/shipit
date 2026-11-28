@@ -1,0 +1,11 @@
+{
+  "description": "Authorization guard check_admin aborts on False inside a try block, but catching RuntimeError and falling through reaches delete_project along an unguarded exception edge.",
+  "expect": [
+    {
+      "rule_id": "python-cfg-partial-guard-bypass",
+      "file_endswith": "app/projects.py",
+      "count": 1
+    }
+  ],
+  "forbid": []
+}

@@ -1,0 +1,7 @@
+{
+  "description": "verify_signature dominates issue_refund because the false branch raises unconditionally; zero unguarded paths exist in G \\ E+(Gamma).",
+  "expect": [],
+  "forbid": [
+    "python-cfg-partial-guard-bypass"
+  ]
+}

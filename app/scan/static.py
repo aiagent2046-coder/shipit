@@ -16,6 +16,7 @@ from app.scan.core.rule_coverage import RULE_COVERAGE_KEYS
 from app.scan.core.secrets import scan_secrets
 from app.scan.detectors_app.data.auth_read import scan_auth_read
 from app.scan.detectors_app.data.auth_write import scan_auth_write
+from app.scan.detectors_app.graph_guards.bypass_detector import scan_guard_bypass
 from app.scan.detectors_app.data.rls import scan_rls
 from app.scan.detectors_app.data.schema_drift import scan_schema_drift
 from app.scan.detectors_app.data.service_role import scan_service_role
@@ -332,6 +333,16 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                 line=w.line, explanation=w.explanation, fix_hint=w.fix_hint,
             ))
 
+    fileobj.seek(0)
+    with attempt("cfg_guard_bypass"):
+        for g in list(scan_guard_bypass(fileobj)):
+            findings.append(ScoredFinding(
+                rule_id=g.rule_id, title=g.title, severity=g.severity,
+                confidence=g.confidence, category=g.category, file=g.file,
+                line=g.line, explanation=g.explanation, fix_hint=g.fix_hint,
+                claim_evidence=g.claim_evidence or static_claim_evidence(),
+            ))
+
     # The first static producer for Frontend. Wired on a number measured in
     # this repository (DRYDOCK_LENS_PLAN.md): 11 of 12 mounted apps in the
     # audited corpus ship no error boundary above their routes, the hits on
@@ -438,6 +449,7 @@ def run_static_scan(fileobj: BinaryIO, *, allow_missing_native: bool = False, sy
                      "tls_verification": SCOPE["tls_verification"],
                      "auth_read_consistency": SCOPE["auth_read_consistency"],
                      "auth_write_consistency": SCOPE["auth_write_consistency"],
+                     "cfg_guard_bypass": SCOPE["cfg_guard_bypass"],
                      "outbound_url": SCOPE["outbound_url"],
                      "open_redirect": SCOPE["open_redirect"],
                      "unsafe_deserialization": SCOPE["unsafe_deserialization"],

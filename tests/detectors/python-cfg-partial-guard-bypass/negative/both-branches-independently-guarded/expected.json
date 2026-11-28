@@ -1,0 +1,7 @@
+{
+  "description": "Every branch reaching delete_account enforces either an ownership check or require_admin, leaving no unguarded control-flow path.",
+  "expect": [],
+  "forbid": [
+    "python-cfg-partial-guard-bypass"
+  ]
+}
