@@ -1,0 +1,13 @@
+from fastapi import APIRouter, Request
+from app.db.queries import fetch_sorted_orders
+
+router = APIRouter()
+
+def extract_sort_clause(request: Request) -> str:
+    raw = request.query_params.get("sort")
+    return raw.strip()
+
+@router.get("/orders")
+def list_orders(request: Request, db):
+    clause = extract_sort_clause(request)
+    return fetch_sorted_orders(db, clause)

@@ -1,17 +1,5 @@
-"""Partial Guard Bypass detector using CFG reachability, Lengauer-Tarjan, and Min-Cut.
-
-Mathematical invariant:
-A function exhibits a Partial Guard Bypass for guard class k iff:
-1. Developer guard intent is explicitly present inside the same function: at least
-   one path from entry to a privileged sink traverses a positive guard edge e+(g)
-   in E+(Gamma_k); AND
-2. In the unguarded subgraph G \\ E+(Gamma_k) (with abort/raise exits excluded),
-   at least one privileged sink t in T remains reachable from entry along a path
-   pi_bypass.
-
-When both hold, the shortest bypass path pi_bypass* is emitted as witness_path,
-the dominator NCA is computed via Lengauer-Tarjan, and the minimum weighted
-vertex cut in G \\ E+(Gamma_k) is emitted as optimal_cut for Fix Pack placement.
+"""Partial Guard Bypass detector using CFG reachability, Lengauer-Tarjan, Min-Cut,
+and inter-procedural Tarjan SCC guard/sink summaries.
 """
 
 from __future__ import annotations
@@ -25,6 +13,12 @@ import zipfile
 from app.scan.core.checks import CheckFinding
 from app.scan.core.file_scope import is_dependency_path, is_generated_path
 from app.scan.core.secrets import is_non_production_path
+from app.scan.detectors_app.graph_guards.call_summaries import (
+    ParsedFunctionUnit,
+    RepositoryCallIndex,
+    build_repository_summaries,
+    resolve_callee_id,
+)
 from app.scan.detectors_app.graph_guards.cfg_builder import (
     CFGBuildLimitError,
     ControlFlowGraph,
@@ -72,7 +66,6 @@ def _can_reach_clean_exit(
     cfg: ControlFlowGraph,
     sink_blocks: set[int],
 ) -> set[int]:
-    """Return blocks that can reach normal_exit_id without passing through any sink block."""
     rev: dict[int, list[int]] = {bid: [] for bid in cfg.blocks}
     for edge in cfg.edges:
         if edge.src not in sink_blocks:
@@ -93,13 +86,16 @@ def _can_reach_clean_exit(
 def analyze_function_bypass(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
     rel_file: str,
+    *,
+    unit: ParsedFunctionUnit | None = None,
+    call_index: RepositoryCallIndex | None = None,
 ) -> list[CheckFinding]:
     try:
         cfg = build_function_cfg(func)
     except CFGBuildLimitError:
         return []
 
-    sink_info: dict[int, tuple[str, int]] = {}
+    sink_info: dict[int, tuple[str, int, tuple[str, ...]]] = {}
     standalone_guards: dict[str, set[tuple[int, int]]] = {"authz": set(), "signature": set()}
     branch_guards: dict[str, set[tuple[int, int, str]]] = {"authz": set(), "signature": set()}
 
@@ -109,14 +105,47 @@ def analyze_function_bypass(
         guard_cls_in_block: str | None = None
         for stmt in block.statements:
             s_cls = classify_standalone_guard_call(stmt)
+            if (
+                s_cls is None
+                and unit is not None
+                and call_index is not None
+                and isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Call)
+            ):
+                cid = resolve_callee_id(
+                    stmt.value, unit, call_index.units, call_index.by_unique_tail
+                )
+                if cid and cid in call_index.summaries:
+                    for g_c in ("signature", "authz"):
+                        if g_c in call_index.summaries[cid].must_guards:
+                            s_cls = g_c
+                            break
             if s_cls is not None:
                 guard_cls_in_block = s_cls
-            sink = find_privileged_sink(stmt)
-            if sink is not None and bid not in sink_info:
-                # If a standalone guard appeared earlier in the exact same linear basic block,
-                # this sink is already guarded within the block!
-                if guard_cls_in_block is None:
-                    sink_info[bid] = sink
+
+            if bid not in sink_info and guard_cls_in_block is None:
+                sink = find_privileged_sink(stmt)
+                if sink is not None:
+                    sink_info[bid] = (sink[0], sink[1], ())
+                elif unit is not None and call_index is not None:
+                    for sub in ast.walk(stmt):
+                        if isinstance(sub, ast.Call):
+                            cid = resolve_callee_id(
+                                sub, unit, call_index.units, call_index.by_unique_tail
+                            )
+                            if (
+                                cid
+                                and cid in call_index.summaries
+                                and call_index.summaries[cid].unguarded_sinks
+                            ):
+                                d_sink = call_index.summaries[cid].unguarded_sinks[0]
+                                call_ln = getattr(sub, "lineno", getattr(stmt, "lineno", 1))
+                                sink_info[bid] = (
+                                    d_sink.sink_label,
+                                    call_ln,
+                                    d_sink.callee_chain,
+                                )
+                                break
 
         if guard_cls_in_block is not None:
             for edge in cfg.succ.get(bid, ()):
@@ -151,8 +180,6 @@ def analyze_function_bypass(
         if not pos_branch and not pos_standalone:
             continue
 
-        # Check that at least one guarded edge can actually reach a privileged sink
-        # (proving intra-procedural guard intent for state mutation).
         guarded_targets_exist = False
         for _, dst, _ in pos_branch:
             if _shortest_path(dst, reachable_sinks, full_adj) is not None:
@@ -166,7 +193,6 @@ def analyze_function_bypass(
         if not guarded_targets_exist:
             continue
 
-        # Build unguarded graph G \ E+(Gamma_k)
         unguarded_adj: dict[int, list[int]] = {bid: [] for bid in cfg.blocks}
         for edge in cfg.edges:
             if edge.dst == cfg.abort_exit_id:
@@ -181,7 +207,6 @@ def analyze_function_bypass(
         if witness is None:
             continue
 
-        # Identify all sinks reachable without passing through E+(Gamma_k)
         vuln_sinks = {
             s_bid for s_bid in reachable_sinks
             if _shortest_path(cfg.entry_id, {s_bid}, unguarded_adj) is not None
@@ -205,7 +230,7 @@ def analyze_function_bypass(
         nca_block = dom_tree.nearest_common_dominator(vuln_sinks)
 
         sink_bid = witness[-1]
-        sink_label, sink_line = sink_info[sink_bid]
+        sink_label, sink_line, delegated_chain = sink_info[sink_bid]
         witness_lines = [
             cfg.blocks[b].start_line
             for b in witness
@@ -224,9 +249,14 @@ def analyze_function_bypass(
         nca_line = cfg.blocks[nca_block].start_line if nca_block is not None else None
         guard_noun = "signature verification" if g_cls == "signature" else "authorization check"
 
+        via_note = (
+            f" (delegated via `{' -> '.join(delegated_chain)}`)"
+            if delegated_chain
+            else ""
+        )
         explanation = (
             f"In `{func.name}`, at least one execution path enforces a {guard_noun}, "
-            f"but control-flow path lines {dedup_lines} reaches `{sink_label}` at line "
+            f"but control-flow path lines {dedup_lines} reaches `{sink_label}`{via_note} at line "
             f"{sink_line} without traversing that guard. External middleware, framework "
             f"dependencies and runtime reachability outside `{func.name}` were not verified."
         )
@@ -235,6 +265,18 @@ def analyze_function_bypass(
             f"Enforce the {guard_noun} on every path before `{sink_label}` (for example at "
             f"minimum-cut {cut_hint}) or abort execution when the check fails."
         )
+
+        evidence_payload: dict[str, object] = {
+            "source_type": "static_cfg_dominator",
+            "guard_class": g_cls,
+            "function": func.name,
+            "sink": sink_label,
+            "witness_lines": dedup_lines,
+            "optimal_cut_lines": cut_lines,
+            "dominator_nca_line": nca_line,
+        }
+        if delegated_chain:
+            evidence_payload["delegated_callee_chain"] = list(delegated_chain)
 
         finding = CheckFinding(
             rule_id=RULE_ID,
@@ -246,15 +288,7 @@ def analyze_function_bypass(
             line=sink_line,
             explanation=explanation,
             fix_hint=fix_hint,
-            claim_evidence={
-                "source_type": "static_cfg_dominator",
-                "guard_class": g_cls,
-                "function": func.name,
-                "sink": sink_label,
-                "witness_lines": dedup_lines,
-                "optimal_cut_lines": cut_lines,
-                "dominator_nca_line": nca_line,
-            },
+            claim_evidence=evidence_payload,
         )
         results.append(finding)
         break
@@ -262,13 +296,12 @@ def analyze_function_bypass(
     return results
 
 
-def scan_guard_bypass(fileobj: BinaryIO) -> list[CheckFinding]:
-    """Scan Python files in a repository archive for intra-procedural guard bypasses."""
-    findings: list[CheckFinding] = []
+def _collect_parsed_python_files(fileobj: BinaryIO) -> list[tuple[str, ast.Module]]:
+    parsed: list[tuple[str, ast.Module]] = []
     files_scanned = 0
     with zipfile.ZipFile(fileobj) as archive:
         for info in archive.infolist():
-            if info.is_dir() or len(findings) >= MAX_FINDINGS or files_scanned >= MAX_FILES_SCANNED:
+            if info.is_dir() or files_scanned >= MAX_FILES_SCANNED:
                 continue
             path = info.filename
             if stat.S_ISLNK(info.external_attr >> 16):
@@ -286,11 +319,28 @@ def scan_guard_bypass(fileobj: BinaryIO) -> list[CheckFinding]:
                 tree = ast.parse(source, filename=path)
             except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
                 continue
+            parsed.append((path, tree))
+    return parsed
 
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    for hit in analyze_function_bypass(node, path):
-                        findings.append(hit)
-                        if len(findings) >= MAX_FINDINGS:
-                            return findings
+
+def scan_guard_bypass(fileobj: BinaryIO) -> list[CheckFinding]:
+    """Scan Python files in an archive for intra- and inter-procedural guard bypasses."""
+    parsed = _collect_parsed_python_files(fileobj)
+    if not parsed:
+        return []
+    call_index = build_repository_summaries(parsed)
+
+    findings: list[CheckFinding] = []
+    unit_by_node_id = {id(u.node): u for u in call_index.units.values()}
+
+    for path, tree in parsed:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                unit = unit_by_node_id.get(id(node))
+                for hit in analyze_function_bypass(
+                    node, path, unit=unit, call_index=call_index
+                ):
+                    findings.append(hit)
+                    if len(findings) >= MAX_FINDINGS:
+                        return findings
     return findings

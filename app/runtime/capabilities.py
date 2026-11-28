@@ -441,6 +441,19 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Functions with no recognized guard, external middleware, router-level dependencies and "
         "runtime reachability are not verified.",
     ),
+    Capability(
+        "interproc_taint_flow",
+        "Inter-procedural untrusted request input flowing across helper/service "
+        "calls to an injection or deserialization sink",
+        ("python-interprocedural-taint-flow",),
+        "At most 600 Python files up to 512 KiB each and 2,500 summarized functions/methods, "
+        "with at most 50 findings and call-chain depth up to 5 hops. Recognized test, fixture, "
+        "dependency and generated paths are excluded. Computes Tarjan strongly-connected-component "
+        "summaries of parameter-to-return and parameter-to-sink data flow to report request inputs "
+        "reaching string-built SQL execution, shell=True command execution or unsafe deserialization "
+        "across helper or service boundaries without scalar coercion or allowlist checks. Dynamic "
+        "dispatch, reflection, external middleware and runtime reachability are not verified.",
+    ),
 )
 
 # The checks the static stage reports running, in stable report order.

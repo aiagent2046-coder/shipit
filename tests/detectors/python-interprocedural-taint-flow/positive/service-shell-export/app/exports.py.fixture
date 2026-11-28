@@ -1,0 +1,14 @@
+import subprocess
+from fastapi import APIRouter, Request
+
+router = APIRouter()
+
+def run_archive_tool(target_name: str) -> None:
+    cmd = f"tar -czf /tmp/out.tgz {target_name}"
+    subprocess.run(cmd, shell=True, check=True)
+
+@router.post("/export")
+def trigger_export(request: Request):
+    folder = request.query_params.get("folder")
+    run_archive_tool(folder)
+    return {"ok": True}

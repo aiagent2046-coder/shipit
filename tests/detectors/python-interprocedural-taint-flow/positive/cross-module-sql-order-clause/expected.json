@@ -1,0 +1,11 @@
+{
+  "description": "Query parameter extracted in a route helper flows across modules into an f-string ORDER BY SQL execution.",
+  "expect": [
+    {
+      "rule_id": "python-interprocedural-taint-flow",
+      "file": "app/db/queries.py",
+      "line": 3
+    }
+  ],
+  "forbid": []
+}

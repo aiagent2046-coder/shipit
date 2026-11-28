@@ -60,6 +60,7 @@ WIRED_SCANNERS = (
     "scan_guard_bypass",
     "scan_http_success",
     "scan_insecure_randomness",
+    "scan_interproc_taint",
     "scan_llm_browser_client",
     "scan_open_redirect",
     "scan_outbound_url",
@@ -106,6 +107,7 @@ EMITTED_RULE_IDS = (
     "path-traversal-file-sink",
     "private-key-block",
     "python-cfg-partial-guard-bypass",
+    "python-interprocedural-taint-flow",
     "python-open-redirect-unvalidated-url",
     "python-outbound-request-unvalidated-url",
     "python-route-read-auth-consistency",
@@ -132,7 +134,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-11-27-1"
+ENGINE_VERSION_FOR_THAT_SET = "2026-11-28-1"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:
