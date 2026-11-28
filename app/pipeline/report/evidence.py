@@ -605,7 +605,10 @@ def coverage_rows(score: dict, findings: list[dict]) -> list[tuple[str, str]]:
         # check ran, and broader authorization did not.
         if name == "Auth" and name in skipped and any(
                 key in score.get("scan_manifest", {}).get("static_checks", [])
-                for key in ("auth_read_consistency", "auth_write_consistency", "cfg_guard_bypass")):
+                for key in (
+                    "auth_read_consistency", "auth_write_consistency",
+                    "cfg_guard_bypass", "ts_cfg_guard_bypass",
+                )):
             label = "Local Python route check ran — broader auth not checked"
         if name in score.get("incomplete_static_categories", []):
             label = "Incomplete — static check failed"

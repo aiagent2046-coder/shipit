@@ -16,6 +16,7 @@ CHECK_CATEGORIES = {
     'ci_deploy_source': {'Deploy'}, 'service_role': {'Auth'},
     'auth_read_consistency': {'Auth'}, 'auth_write_consistency': {'Auth'}, 'cfg_guard_bypass': {'Auth'},
     'interproc_taint_flow': {'Security'},
+    'ts_cfg_guard_bypass': {'Auth'},
     'error_boundary': {'Frontend'}, 'http_success': {'Frontend'},
 }
 

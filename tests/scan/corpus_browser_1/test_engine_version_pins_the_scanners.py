@@ -72,6 +72,7 @@ WIRED_SCANNERS = (
     "scan_sql_injection",
     "scan_sql_injection_js",
     "scan_tls_verification",
+    "scan_ts_guard_bypass",
     "scan_unsafe_deserialization",
     "scan_unsafe_xml_parse",
     "scan_xss",
@@ -120,6 +121,7 @@ EMITTED_RULE_IDS = (
     "supabase-demo-key",
     "telegram-bot-token",
     "tls-verification-disabled",
+    "ts-cfg-partial-guard-bypass",
     "unsafe-deserialization",
     "unsafe-xml-parse",
     "xss-unsafe-html-injection",
@@ -134,7 +136,7 @@ DAMPING_CONTEXTS = (
 
 # The version that was current when all three sets above last matched.
 # Changing any of them without changing this is the whole defect.
-ENGINE_VERSION_FOR_THAT_SET = "2026-11-28-1"
+ENGINE_VERSION_FOR_THAT_SET = "2026-11-28-2"
 
 
 def _called_scanners(monkeypatch) -> tuple[str, ...]:

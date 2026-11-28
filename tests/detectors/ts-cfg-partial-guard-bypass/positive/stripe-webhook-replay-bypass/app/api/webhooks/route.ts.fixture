@@ -1,0 +1,14 @@
+import { NextResponse } from "next/server";
+import { stripe } from "@/lib/stripe";
+
+export async function POST(req: Request) {
+  const rawBody = await req.text();
+  const sig = req.headers.get("stripe-signature");
+  const isReplay = req.headers.get("x-internal-replay") === "1";
+  if (!isReplay) {
+    stripe.webhooks.constructEvent(rawBody, sig!, process.env.STRIPE_WEBHOOK_SECRET!);
+  }
+  const payload = JSON.parse(rawBody);
+  await stripe.refunds.create({ payment_intent: payload.pi });
+  return NextResponse.json({ ok: true });
+}

@@ -1,0 +1,11 @@
+{
+  "description": "Next.js App Router DELETE handler checks getServerSession() only when !forcePurge, leaving an unguarded path to prisma.project.delete.",
+  "expect": [
+    {
+      "rule_id": "ts-cfg-partial-guard-bypass",
+      "file": "app/api/projects/route.ts",
+      "line": 13
+    }
+  ],
+  "forbid": []
+}

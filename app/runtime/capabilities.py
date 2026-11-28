@@ -454,6 +454,18 @@ CAPABILITIES: tuple[Capability, ...] = (
         "across helper or service boundaries without scalar coercion or allowlist checks. Dynamic "
         "dispatch, reflection, external middleware and runtime reachability are not verified.",
     ),
+    Capability(
+        "ts_cfg_guard_bypass",
+        "TypeScript/JavaScript control-flow branch bypassing an in-handler auth or webhook guard",
+        ("ts-cfg-partial-guard-bypass",),
+        "At most 600 TypeScript or JavaScript files up to 512 KiB each and handlers within "
+        "16,000 tokens and 512 control-flow basic blocks, with at most 50 findings. Recognized "
+        "test, fixture, build, declaration, dependency and generated paths are excluded. Reports "
+        "Next.js, Express, Fastify or Hono handlers and functions that enforce a recognized "
+        "session, ownership or webhook-signature check along at least one path to a privileged "
+        "ORM, SQL or payment mutation while leaving an unguarded path to a privileged mutation "
+        "in the same function. External middleware and runtime reachability are not verified.",
+    ),
 )
 
 # The checks the static stage reports running, in stable report order.

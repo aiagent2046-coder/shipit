@@ -1,0 +1,7 @@
+{
+  "description": "Early NextResponse 401 return strictly dominates prisma.project.delete across all control-flow paths.",
+  "expect": [],
+  "forbid": [
+    "ts-cfg-partial-guard-bypass"
+  ]
+}

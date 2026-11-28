@@ -1,0 +1,7 @@
+{
+  "description": "URLSearchParams.delete() mutates in-memory query state rather than a database or payment sink and must never be flagged.",
+  "expect": [],
+  "forbid": [
+    "ts-cfg-partial-guard-bypass"
+  ]
+}
